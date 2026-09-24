@@ -2243,3 +2243,18 @@ def test_delete_registered_application_returns_conflict_for_active_instances(
 
     assert response.status_code == 409
     assert response.json()["code"] == "RegisteredApplicationHasRunningInstances"
+
+
+def test_catalog_accepts_the_frontend_sort_key(registered_applications_admin_client):
+    with patch(
+        "c2ai.api.registered_applications.crud_registered_application."
+        "list_registered_applications",
+        new_callable=AsyncMock,
+        return_value=MagicMock(items=[], total=0),
+    ) as list_mock:
+        response = registered_applications_admin_client.get(
+            "/api/registered-applications",
+            params={"sort_by": "created_at", "sort_order": "desc"},
+        )
+    assert response.status_code == 200
+    assert list_mock.await_args.kwargs["sort_by"] == "created_at"

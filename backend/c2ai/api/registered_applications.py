@@ -410,7 +410,7 @@ async def list_registered_applications(
     application_type: ApplicationType | None = Query(default=None),
     application_status: ApplicationStatus | None = Query(default=None, alias="status"),
     tier: int | None = Query(default=None, ge=1, le=4),
-    sort_by: Literal["name", "type", "instances", "tiers", "created"] = Query(
+    sort_by: Literal["name", "type", "instances", "tiers", "created", "created_at"] = Query(
         default="name"
     ),
     sort_order: Literal["asc", "desc"] = Query(default="asc"),
