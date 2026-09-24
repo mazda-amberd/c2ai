@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, constr
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, constr
 
 
 class UserBase(BaseModel):
@@ -25,7 +25,12 @@ class UserBase(BaseModel):
     identifier: constr(min_length=1)
     first_name: constr(min_length=1)
     last_name: constr(min_length=1)
-    metadata_: dict[str, Any] = Field(default_factory=dict)
+    # From an ORM user this is ``User.public_metadata``: profile metadata plus
+    # ``user_type`` ("Admin" | "User") taken from the users.user_type column.
+    metadata_: dict[str, Any] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices("public_metadata", "metadata_"),
+    )
     created_by: constr(min_length=1)
     updated_by: str | None = None
     model_config = ConfigDict(from_attributes=True)

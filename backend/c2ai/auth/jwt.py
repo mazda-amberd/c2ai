@@ -15,6 +15,7 @@ import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 import jwt as pyjwt
 from fastapi import Depends
@@ -31,7 +32,7 @@ from c2ai.core.exceptions import (
     MissingToken,
     TokenExpired,
 )
-from c2ai.crud.user import get_user_by_identifier
+from c2ai.crud.user import Viewer, get_user_by_identifier
 from c2ai.db.session import get_db_session
 
 logger = logging.getLogger(__name__)
@@ -111,19 +112,27 @@ class AthenaTokenUser(BaseModel):
     tz_location: str | None = None
     created: str | None = None
     expired: str | None = None
+    # Filled from the database on every request, never from the token.
+    user_id: UUID | None = Field(default=None, exclude=True)
+    is_superuser: bool = Field(default=False, exclude=True)
 
     @property
     def is_admin(self) -> bool:
         return metadata_is_admin(self.metadata)
 
+    @property
+    def viewer(self) -> Viewer:
+        return Viewer(user_id=self.user_id, is_superuser=self.is_superuser)
+
 
 def metadata_is_admin(metadata: Mapping[str, Any] | None) -> bool:
-    """Admin rights come from ``user_type`` (or the legacy ``role``) being Admin."""
+    """Whether API-shaped metadata says Admin.
 
-    meta = metadata or {}
-    user_type = str(meta.get("user_type") or "").strip().lower()
-    role = str(meta.get("role") or "").strip().lower()
-    return user_type == "admin" or role == "admin"
+    On authenticated requests the metadata is ``User.public_metadata``, whose
+    ``user_type`` comes from the ``users.user_type`` column.
+    """
+
+    return str((metadata or {}).get("user_type") or "").strip().lower() == "admin"
 
 
 def decode_jwt(token: str, *, algorithms: list[str] | None = None) -> AthenaTokenUser:
@@ -155,6 +164,8 @@ def decode_jwt(token: str, *, algorithms: list[str] | None = None) -> AthenaToke
         if datetime.now(UTC) >= expires_at:
             raise TokenExpired()
 
+    decoded.pop("user_id", None)
+    decoded.pop("is_superuser", None)
     return AthenaTokenUser.model_validate(decoded)
 
 
@@ -173,8 +184,14 @@ async def _resolve_current_user(request: Request, db: AsyncSession) -> AthenaTok
     user = await get_user_by_identifier(db, claims.identifier)
     if user is None:
         raise InvalidToken("The account for this token no longer exists")
-    # Authorization decisions use the stored metadata, not the token snapshot.
-    return claims.model_copy(update={"metadata": dict(user.metadata_ or {})})
+    # Authorization decisions use the stored account, not the token snapshot.
+    return claims.model_copy(
+        update={
+            "metadata": user.public_metadata,
+            "user_id": user.id,
+            "is_superuser": bool(user.is_superuser),
+        }
+    )
 
 
 async def get_current_user_token(

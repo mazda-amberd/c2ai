@@ -1,8 +1,8 @@
 """User administration endpoints.
 
-Visibility rule (unchanged from Athena): the bootstrap ``admin`` account sees
-every user; any other administrator sees only the users they created plus
-themselves.
+Visibility: a superuser (the bootstrap ``admin``) sees every user; any other
+administrator sees the users they created plus themselves. Admin rights are
+the ``users.user_type`` column, exposed to the UI as ``metadata.user_type``.
 """
 
 from __future__ import annotations
@@ -24,6 +24,7 @@ from c2ai.core.exceptions import (
 )
 from c2ai.crud import user as crud_user
 from c2ai.db.session import get_db_session
+from c2ai.models.user import ADMIN, parse_user_type
 from c2ai.schemas import user as schemas_user
 from c2ai.utils.password import generate_password
 from c2ai.utils.validators import validate_identifier, validate_password
@@ -32,11 +33,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/users", tags=["Users"])
 
-_USER_TYPES = ("admin", "user")
-
-
-def _norm_user_type(value: object) -> str:
-    return str(value or "").strip().lower()
+_USER_TYPE_ERROR = "metadata_.user_type must be either 'Admin' or 'User'"
 
 
 @router.get(
@@ -54,16 +51,12 @@ async def read_users(
     """List visible users, or return one when ``user_name`` is given."""
 
     if user_name:
-        user = await crud_user.get_user_by_identifier(
-            db, user_name, curr_user_ident=admin.identifier
-        )
+        user = await crud_user.get_user_by_identifier(db, user_name, viewer=admin.viewer)
         if not user:
             raise UserNotFound(user_name)
         return schemas_user.UserOut.model_validate(user)
 
-    users = await crud_user.get_users(
-        db, start=start, limit=limit, curr_user_ident=admin.identifier
-    )
+    users = await crud_user.get_users(db, start=start, limit=limit, viewer=admin.viewer)
     if not users:
         raise NoUsersFound()
     return [schemas_user.UserOut.model_validate(user) for user in users]
@@ -85,8 +78,8 @@ async def create_user(
     if not ok:
         raise ValidationFailed(error)
     metadata = dict(payload.metadata_ or {})
-    if _norm_user_type(metadata.get("user_type")) not in _USER_TYPES:
-        raise ValidationFailed("metadata_.user_type must be either 'Admin' or 'User'")
+    if parse_user_type(metadata.get("user_type")) is None:
+        raise ValidationFailed(_USER_TYPE_ERROR)
     if await crud_user.get_user_by_identifier(db, identifier):
         raise DuplicateUser(identifier)
 
@@ -104,6 +97,7 @@ async def create_user(
             "last_name": payload.last_name,
             "metadata_": metadata,
             "created_by": admin.identifier,
+            "created_by_id": admin.user_id,
         },
     )
     logger.info("User '%s' created by '%s'.", identifier, admin.identifier)
@@ -126,9 +120,7 @@ async def update_existing_user(
 ):
     """Update names or metadata of a user (passwords use their own endpoints)."""
 
-    target = await crud_user.get_user_by_identifier(
-        db, user_name, curr_user_ident=admin.identifier
-    )
+    target = await crud_user.get_user_by_identifier(db, user_name, viewer=admin.viewer)
     if not target:
         raise UserNotFound(user_name)
 
@@ -136,19 +128,15 @@ async def update_existing_user(
     updates["updated_by"] = admin.identifier
     incoming_meta = updates.get("metadata_")
     if isinstance(incoming_meta, dict) and "user_type" in incoming_meta:
-        next_type = _norm_user_type(incoming_meta.get("user_type"))
-        if next_type not in _USER_TYPES:
-            raise ValidationFailed("metadata_.user_type must be either 'Admin' or 'User'")
-        current_type = _norm_user_type((target.metadata_ or {}).get("user_type"))
-        if current_type == "admin" and next_type != "admin":
-            if await crud_user.get_admin_users_count(db) <= 1:
+        next_type = parse_user_type(incoming_meta.get("user_type"))
+        if next_type is None:
+            raise ValidationFailed(_USER_TYPE_ERROR)
+        if target.user_type == ADMIN and next_type != ADMIN:
+            admins = await crud_user.lock_admin_ids(db)
+            if len(admins) <= 1:
                 raise CannotUpdateLastAdminToUser()
 
-    updated = await crud_user.update_user(
-        db, target_user=target, updates=updates, curr_user_ident=admin.identifier
-    )
-    if not updated:
-        raise UserNotFound(user_name)
+    updated = await crud_user.update_user(db, target, updates)
     return {
         "message": f"User '{updated.identifier}' was successfully updated.",
         "user": schemas_user.UserOut.model_validate(updated),
@@ -203,9 +191,7 @@ async def reset_user_password(
 ):
     """Issue a new one-time password for a user (POST; GET kept for old clients)."""
 
-    user = await crud_user.get_user_by_identifier(
-        db, user_name, curr_user_ident=admin.identifier
-    )
+    user = await crud_user.get_user_by_identifier(db, user_name, viewer=admin.viewer)
     if not user:
         raise UserNotFound(user_name)
     new_password = generate_password()
@@ -235,13 +221,12 @@ async def delete_existing_user(
 ) -> Response:
     """Delete a user, refusing to remove the last administrator."""
 
-    user = await crud_user.get_user_by_identifier(
-        db, user_name, curr_user_ident=admin.identifier
-    )
+    user = await crud_user.get_user_by_identifier(db, user_name, viewer=admin.viewer)
     if not user:
         raise UserNotFound(user_name)
-    if _norm_user_type((user.metadata_ or {}).get("user_type")) == "admin":
-        if await crud_user.get_admin_users_count(db) <= 1:
+    if user.user_type == ADMIN:
+        admins = await crud_user.lock_admin_ids(db)
+        if len(admins) <= 1:
             raise CannotDeleteLastAdminUser()
     if not await crud_user.delete_user(db, user):
         raise FailedToDelete(user_name)

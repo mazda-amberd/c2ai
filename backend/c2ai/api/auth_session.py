@@ -92,7 +92,7 @@ async def login(
             "identifier": user.identifier,
             "service": "athena",
             "email": None,
-            "metadata": dict(user.metadata_ or {}),
+            "metadata": user.public_metadata,
             "tz_location": "UTC",
         },
         expires_in=timedelta(seconds=ttl_seconds),

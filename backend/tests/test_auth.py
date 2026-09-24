@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 import jwt as pyjwt
 import pytest
@@ -26,11 +27,14 @@ _LOGIN_LOOKUP = "c2ai.api.auth_session.get_user_by_identifier"
 
 def _user(identifier: str = "alice", user_type: str = "Admin", password: str = "S3cret!pw") -> User:
     return User(
+        id=uuid4(),
         identifier=identifier,
         password=PasswordHasher().hash(password),
         first_name="Alice",
         last_name="Admin",
-        metadata_={"user_type": user_type, "role": "Executive", "needs_password_reset": False},
+        user_type=user_type.lower(),
+        is_superuser=False,
+        metadata_={"role": "Executive", "needs_password_reset": False},
         created_by="system",
     )
 

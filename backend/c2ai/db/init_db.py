@@ -61,8 +61,9 @@ def seed_admin_user() -> None:
             cursor.execute(
                 """
                 INSERT INTO users
-                    (identifier, password, first_name, last_name, metadata, created_by)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                    (identifier, password, first_name, last_name, user_type,
+                     is_superuser, metadata, created_by)
+                VALUES (%s, %s, %s, %s, 'admin', true, %s, %s)
                 ON CONFLICT (identifier) DO NOTHING
                 """,
                 (
@@ -72,7 +73,6 @@ def seed_admin_user() -> None:
                     "Admin",
                     Json(
                         {
-                            "user_type": "Admin",
                             "role": "Executive",
                             "needs_password_reset": True,
                         }

@@ -39,8 +39,12 @@ def pending_migrations(applied: set[str]) -> list[Path]:
     return [path for path in sorted(MIGRATIONS_DIR.glob("*.sql")) if path.stem not in applied]
 
 
-def run_migrations(stamp: bool = False) -> int:
-    """Apply (or stamp) pending migrations; return how many were processed."""
+def run_migrations(stamp: bool = False, *, until: str | None = None) -> int:
+    """Apply (or stamp) pending migrations; return how many were processed.
+
+    ``until`` stops after the migration whose name starts with it (e.g.
+    ``"0020"``), which lets tests seed data in an older schema.
+    """
 
     conn = psycopg2.connect(**psycopg2_connect_kwargs(sync_database_url()))
     conn.autocommit = False
@@ -54,6 +58,8 @@ def run_migrations(stamp: bool = False) -> int:
             applied = {row[0] for row in cur.fetchall()}
 
         pending = pending_migrations(applied)
+        if until is not None:
+            pending = [path for path in pending if path.stem[: len(until)] <= until]
         if not pending:
             logger.info("All migrations already applied.")
             return 0
