@@ -1,0 +1,292 @@
+{
+  "metrics": [
+    {
+      "id": "desired_replicas",
+      "label": "Desired Replicas",
+      "expr": [
+        "sum(kube_deployment_spec_replicas{namespace=~\"$namespace\", deployment=~\"$deployment\"} * on(namespace, deployment) group_left(label_app, label_tier) kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})"
+      ]
+    },
+    {
+      "id": "available_replicas",
+      "label": "Available Replicas",
+      "expr": [
+        "sum(kube_deployment_status_replicas_available{namespace=~\"$namespace\", deployment=~\"$deployment\"} * on(namespace, deployment) group_left(label_app, label_tier) kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})"
+      ]
+    },
+    {
+      "id": "cpu_usage",
+      "label": "CPU Usage",
+      "expr": [
+        "sum(sum by (namespace, deployment) (",
+        "  rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\", container!=\"\", image!=\"\"}[5m])",
+        "  * on(namespace, pod) group_left(replicaset)",
+        "  label_replace(kube_pod_owner{namespace=~\"$namespace\", owner_kind=\"ReplicaSet\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\")",
+        "  * on(namespace, replicaset) group_left(deployment)",
+        "  label_replace(kube_replicaset_owner{namespace=~\"$namespace\", owner_kind=\"Deployment\"}, \"deployment\", \"$1\", \"owner_name\", \"(.*)\")",
+        ") and on(namespace, deployment) kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})"
+      ]
+    },
+    {
+      "id": "memory_usage",
+      "label": "Memory Usage",
+      "unit": "GiB",
+      "value_divisor": 1073741824,
+      "expr": [
+        "sum(sum by (namespace, deployment) (",
+        "  container_memory_working_set_bytes{namespace=~\"$namespace\", container!=\"\", image!=\"\"}",
+        "  * on(namespace, pod) group_left(replicaset)",
+        "  label_replace(kube_pod_owner{namespace=~\"$namespace\", owner_kind=\"ReplicaSet\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\")",
+        "  * on(namespace, replicaset) group_left(deployment)",
+        "  label_replace(kube_replicaset_owner{namespace=~\"$namespace\", owner_kind=\"Deployment\"}, \"deployment\", \"$1\", \"owner_name\", \"(.*)\")",
+        ") and on(namespace, deployment) kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})"
+      ]
+    },
+    {
+      "id": "network_in",
+      "label": "Network In",
+      "expr": [
+        "sum(sum by (namespace, deployment) (",
+        "  rate(container_network_receive_bytes_total{namespace=~\"$namespace\"}[5m])",
+        "  * on(namespace, pod) group_left(replicaset)",
+        "  label_replace(kube_pod_owner{namespace=~\"$namespace\", owner_kind=\"ReplicaSet\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\")",
+        "  * on(namespace, replicaset) group_left(deployment)",
+        "  label_replace(kube_replicaset_owner{namespace=~\"$namespace\", owner_kind=\"Deployment\"}, \"deployment\", \"$1\", \"owner_name\", \"(.*)\")",
+        ") and on(namespace, deployment) kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})"
+      ]
+    },
+    {
+      "id": "network_out",
+      "label": "Network Out",
+      "expr": [
+        "sum(sum by (namespace, deployment) (",
+        "  rate(container_network_transmit_bytes_total{namespace=~\"$namespace\"}[5m])",
+        "  * on(namespace, pod) group_left(replicaset)",
+        "  label_replace(kube_pod_owner{namespace=~\"$namespace\", owner_kind=\"ReplicaSet\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\")",
+        "  * on(namespace, replicaset) group_left(deployment)",
+        "  label_replace(kube_replicaset_owner{namespace=~\"$namespace\", owner_kind=\"Deployment\"}, \"deployment\", \"$1\", \"owner_name\", \"(.*)\")",
+        ") and on(namespace, deployment) kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})"
+      ]
+    },
+    {
+      "id": "restarts",
+      "label": "Restarts",
+      "expr": [
+        "sum(sum by (namespace, deployment) (",
+        "  kube_pod_container_status_restarts_total{namespace=~\"$namespace\"}",
+        "  * on(namespace, pod) group_left(replicaset)",
+        "  label_replace(kube_pod_owner{namespace=~\"$namespace\", owner_kind=\"ReplicaSet\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\")",
+        "  * on(namespace, replicaset) group_left(deployment)",
+        "  label_replace(kube_replicaset_owner{namespace=~\"$namespace\", owner_kind=\"Deployment\"}, \"deployment\", \"$1\", \"owner_name\", \"(.*)\")",
+        ") and on(namespace, deployment) kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})"
+      ]
+    },
+    {
+      "id": "ready_pods",
+      "label": "Ready Pods",
+      "expr": [
+        "sum(sum by (namespace, deployment) (",
+        "  kube_pod_status_ready{namespace=~\"$namespace\", condition=\"true\"}",
+        "  * on(namespace, pod) group_left(replicaset)",
+        "  label_replace(kube_pod_owner{namespace=~\"$namespace\", owner_kind=\"ReplicaSet\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\")",
+        "  * on(namespace, replicaset) group_left(deployment)",
+        "  label_replace(kube_replicaset_owner{namespace=~\"$namespace\", owner_kind=\"Deployment\"}, \"deployment\", \"$1\", \"owner_name\", \"(.*)\")",
+        ") and on(namespace, deployment) kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})"
+      ]
+    },
+    {
+      "id": "cpu_by_deployment",
+      "label": "CPU by Deployment",
+      "expr": [
+        "sum by (namespace, deployment) (",
+        "  rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\", container!=\"\", image!=\"\"}[5m])",
+        "  * on(namespace, pod) group_left(replicaset)",
+        "  label_replace(kube_pod_owner{namespace=~\"$namespace\", owner_kind=\"ReplicaSet\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\")",
+        "  * on(namespace, replicaset) group_left(deployment)",
+        "  label_replace(kube_replicaset_owner{namespace=~\"$namespace\", owner_kind=\"Deployment\"}, \"deployment\", \"$1\", \"owner_name\", \"(.*)\")",
+        ") and on(namespace, deployment) kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"}"
+      ]
+    },
+    {
+      "id": "memory_by_deployment",
+      "label": "Memory by Deployment",
+      "unit": "GiB",
+      "value_divisor": 1073741824,
+      "expr": [
+        "sum by (namespace, deployment) (",
+        "  container_memory_working_set_bytes{namespace=~\"$namespace\", container!=\"\", image!=\"\"}",
+        "  * on(namespace, pod) group_left(replicaset)",
+        "  label_replace(kube_pod_owner{namespace=~\"$namespace\", owner_kind=\"ReplicaSet\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\")",
+        "  * on(namespace, replicaset) group_left(deployment)",
+        "  label_replace(kube_replicaset_owner{namespace=~\"$namespace\", owner_kind=\"Deployment\"}, \"deployment\", \"$1\", \"owner_name\", \"(.*)\")",
+        ") and on(namespace, deployment) kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"}"
+      ]
+    },
+    {
+      "id": "network_traffic_by_deployment",
+      "label": "Network Traffic by Deployment",
+      "expr": [
+        "sum by (namespace, deployment) (",
+        "  rate(container_network_receive_bytes_total{namespace=~\"$namespace\"}[5m])",
+        "  * on(namespace, pod) group_left(replicaset)",
+        "  label_replace(kube_pod_owner{namespace=~\"$namespace\", owner_kind=\"ReplicaSet\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\")",
+        "  * on(namespace, replicaset) group_left(deployment)",
+        "  label_replace(kube_replicaset_owner{namespace=~\"$namespace\", owner_kind=\"Deployment\"}, \"deployment\", \"$1\", \"owner_name\", \"(.*)\")",
+        ") and on(namespace, deployment) kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"}"
+      ]
+    },
+    {
+      "id": "restarts_by_deployment",
+      "label": "Restarts by Deployment",
+      "expr": [
+        "sum by (namespace, deployment) (",
+        "  kube_pod_container_status_restarts_total{namespace=~\"$namespace\"}",
+        "  * on(namespace, pod) group_left(replicaset)",
+        "  label_replace(kube_pod_owner{namespace=~\"$namespace\", owner_kind=\"ReplicaSet\"}, \"replicaset\", \"$1\", \"owner_name\", \"(.*)\")",
+        "  * on(namespace, replicaset) group_left(deployment)",
+        "  label_replace(kube_replicaset_owner{namespace=~\"$namespace\", owner_kind=\"Deployment\"}, \"deployment\", \"$1\", \"owner_name\", \"(.*)\")",
+        ") and on(namespace, deployment) kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"}"
+      ]
+    },
+    {
+      "id": "tier_gpu_utilization_ray",
+      "label": "Tier GPU Utilization (Ray)",
+      "expr": [
+        "sum(avg by (label_tier) (",
+        "  label_replace(avg_over_time(ray_node_gpus_utilization{ray_io_cluster=~\"${ray_cluster:regex}\"}[5m]), \"label_tier\", \"tier1\", \"ray_io_cluster\", \"qwen-5254d\")",
+        "  or label_replace(avg_over_time(ray_node_gpus_utilization{ray_io_cluster=~\"${ray_cluster:regex}\"}[5m]), \"label_tier\", \"tier2\", \"ray_io_cluster\", \"qwen-pq9sc\")",
+        "  or label_replace(avg_over_time(ray_node_gpus_utilization{ray_io_cluster=~\"${ray_cluster:regex}\"}[5m]), \"label_tier\", \"tier3\", \"ray_io_cluster\", \"qwen-l8dnl\")",
+        "))"
+      ]
+    },
+    {
+      "id": "estimated_gpu_used_selected_apps",
+      "label": "Estimated GPU Used by Selected Apps",
+      "expr": [
+        "sum((sum by (namespace, label_tier) (",
+        "  sum by (namespace) (rate(llm_total_tokens_total{namespace=~\"$namespace\"}[5m]))",
+        "  * on(namespace) group_left(label_tier) max by (namespace, label_tier) (kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})",
+        ") / on(label_tier) group_left(namespace) clamp_min(sum by (label_tier) (sum by (namespace, label_tier) (",
+        "  sum by (namespace) (rate(llm_total_tokens_total{namespace=~\"$namespace\"}[5m]))",
+        "  * on(namespace) group_left(label_tier) max by (namespace, label_tier) (kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})",
+        ")), 0.000001)) * on(label_tier) group_left(namespace) (avg by (label_tier) (",
+        "  label_replace(avg_over_time(ray_node_gpus_utilization{ray_io_cluster=\"qwen-5254d\"}[5m]), \"label_tier\", \"tier1\", \"ray_io_cluster\", \".*\")",
+        "  or label_replace(avg_over_time(ray_node_gpus_utilization{ray_io_cluster=\"qwen-pq9sc\"}[5m]), \"label_tier\", \"tier2\", \"ray_io_cluster\", \".*\")",
+        "  or label_replace(avg_over_time(ray_node_gpus_utilization{ray_io_cluster=\"qwen-l8dnl\"}[5m]), \"label_tier\", \"tier3\", \"ray_io_cluster\", \".*\")",
+        ")))"
+      ]
+    },
+    {
+      "id": "llm_requests_per_second",
+      "label": "LLM Requests / s",
+      "expr": [
+        "sum(rate(llm_requests_total{namespace=~\"$namespace\"}[5m]))"
+      ]
+    },
+    {
+      "id": "llm_total_tokens_per_second",
+      "label": "LLM Total Tokens / s",
+      "expr": [
+        "sum(rate(llm_total_tokens_total{namespace=~\"$namespace\"}[5m]))"
+      ]
+    },
+    {
+      "id": "estimated_gpu_utilization_by_application",
+      "label": "Estimated GPU Utilization by Application",
+      "expr": [
+        "(sum by (namespace, label_tier) (",
+        "  sum by (namespace) (rate(llm_total_tokens_total{namespace=~\"$namespace\"}[5m]))",
+        "  * on(namespace) group_left(label_tier) max by (namespace, label_tier) (kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})",
+        ") / on(label_tier) group_left(namespace) clamp_min(sum by (label_tier) (sum by (namespace, label_tier) (",
+        "  sum by (namespace) (rate(llm_total_tokens_total[5m]))",
+        "  * on(namespace) group_left(label_tier) max by (namespace, label_tier) (kube_deployment_labels{label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})",
+        ")), 0.000001))",
+        "* on(label_tier) group_left(namespace) avg by (label_tier) (",
+        "  label_replace(avg_over_time(ray_node_gpus_utilization{ray_io_cluster=~\"${ray_cluster:regex}\"}[5m]), \"label_tier\", \"tier1\", \"ray_io_cluster\", \"qwen-5254d\")",
+        "  or label_replace(avg_over_time(ray_node_gpus_utilization{ray_io_cluster=~\"${ray_cluster:regex}\"}[5m]), \"label_tier\", \"tier2\", \"ray_io_cluster\", \"qwen-pq9sc\")",
+        "  or label_replace(avg_over_time(ray_node_gpus_utilization{ray_io_cluster=~\"${ray_cluster:regex}\"}[5m]), \"label_tier\", \"tier3\", \"ray_io_cluster\", \"qwen-l8dnl\")",
+        ")"
+      ]
+    },
+    {
+      "id": "estimated_gpu_share_by_application",
+      "label": "Estimated GPU Share by Application",
+      "expr": [
+        "100 * (sum by (namespace, label_tier) (",
+        "  sum by (namespace) (rate(llm_total_tokens_total{namespace=~\"$namespace\"}[5m]))",
+        "  * on(namespace) group_left(label_tier) max by (namespace, label_tier) (kube_deployment_labels{namespace=~\"$namespace\", label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})",
+        ") / on(label_tier) group_left(namespace) clamp_min(sum by (label_tier) (sum by (namespace, label_tier) (",
+        "  sum by (namespace) (rate(llm_total_tokens_total[5m]))",
+        "  * on(namespace) group_left(label_tier) max by (namespace, label_tier) (kube_deployment_labels{label_app=~\"$app\", label_tier=~\"$tier\", deployment=~\"$deployment\"})",
+        ")), 0.000001))"
+      ]
+    },
+    {
+      "id": "llm_token_rate_by_application",
+      "label": "LLM Token Rate by Application",
+      "expr": [
+        "sum by (namespace) (rate(llm_total_tokens_total{namespace=~\"$namespace\"}[5m]))"
+      ]
+    },
+    {
+      "id": "tier_gpu_utilization_by_tier_namespace_ray",
+      "label": "Tier GPU Utilization by Tier Namespace (Ray)",
+      "expr": [
+        "avg by (label_tier) (",
+        "  label_replace(avg_over_time(ray_node_gpus_utilization{ray_io_cluster=~\"${ray_cluster:regex}\"}[5m]), \"label_tier\", \"tier1\", \"ray_io_cluster\", \"qwen-5254d\")",
+        "  or label_replace(avg_over_time(ray_node_gpus_utilization{ray_io_cluster=~\"${ray_cluster:regex}\"}[5m]), \"label_tier\", \"tier2\", \"ray_io_cluster\", \"qwen-pq9sc\")",
+        "  or label_replace(avg_over_time(ray_node_gpus_utilization{ray_io_cluster=~\"${ray_cluster:regex}\"}[5m]), \"label_tier\", \"tier3\", \"ray_io_cluster\", \"qwen-l8dnl\")",
+        ")"
+      ]
+    },
+    {
+      "id": "llm_requests_rate_by_application",
+      "label": "LLM Requests Rate by Application",
+      "expr": [
+        "sum by (namespace) (rate(llm_requests_total{namespace=~\"$namespace\"}[5m]))"
+      ]
+    },
+    {
+      "id": "llm_input_tokens_rate_by_application",
+      "label": "LLM Input Tokens Rate by Application",
+      "expr": [
+        "sum by (namespace) (rate(llm_input_tokens_total{namespace=~\"$namespace\"}[5m]))"
+      ]
+    },
+    {
+      "id": "llm_output_tokens_rate_by_application",
+      "label": "LLM Output Tokens Rate by Application",
+      "expr": [
+        "sum by (namespace) (rate(llm_output_tokens_total{namespace=~\"$namespace\"}[5m]))"
+      ]
+    },
+    {
+      "id": "llm_total_tokens_rate_by_application",
+      "label": "LLM Total Tokens Rate by Application",
+      "expr": [
+        "sum by (namespace) (rate(llm_total_tokens_total{namespace=~\"$namespace\"}[5m]))"
+      ]
+    },
+    {
+      "id": "llm_duration_rate_by_application",
+      "label": "LLM Duration Rate by Application",
+      "expr": [
+        "rate(llm_duration_seconds_sum{namespace=~\"$namespace\"}[5m])"
+      ]
+    },
+    {
+      "id": "llm_input_tokens_per_call_by_application",
+      "label": "LLM Input Tokens per Call by Application",
+      "expr": [
+        "avg_over_time(llm_input_tokens_per_call_sum{namespace=~\"$namespace\"}[5m])"
+      ]
+    },
+    {
+      "id": "llm_output_tokens_per_call_by_application",
+      "label": "LLM Output Tokens per Call by Application",
+      "expr": [
+        "avg_over_time(llm_output_tokens_per_call_sum{namespace=~\"$namespace\"}[5m])"
+      ]
+    }
+  ]
+}

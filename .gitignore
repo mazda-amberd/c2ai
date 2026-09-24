@@ -1,0 +1,41 @@
+# OS / editors
+.DS_Store
+.vscode/
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/usage.statistics.xml
+.idea/shelf/
+.idea/dictionaries/
+.idea/httpRequests/
+.idea/dataSources*
+.idea/sqldialects.xml
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Frontend
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+*.log
+
+# Local database backups may contain sensitive application data
+backend/db/backups/
