@@ -2,7 +2,9 @@
 
 import pytest
 
-from c2ai.services.registered_application_deployment import resolve_tier_llm_endpoint
+from c2ai.deployments.configuration import (
+    resolve_tier_llm_endpoint,
+)
 
 
 @pytest.mark.parametrize(

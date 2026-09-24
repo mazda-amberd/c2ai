@@ -19,11 +19,7 @@ from c2ai.core.exceptions import (
     DuplicateRegisteredApplication,
     RegisteredApplicationHasRunningInstances,
 )
-from c2ai.crud.registered_application import (
-    ContainerApplicationSecretPage,
-    ContainerRegistryRuntime,
-    RegisteredApplicationCatalogPage,
-    RegisteredApplicationCatalogRecord,
+from c2ai.deployments.repository import (
     RegisteredApplicationDeploymentPage,
 )
 from c2ai.models.registered_application import (
@@ -37,6 +33,16 @@ from c2ai.models.registered_application import (
     GitHubApplicationConfiguration,
     RegisteredApplication,
     RegisteredApplicationVersion,
+)
+from c2ai.registration.credentials import (
+    ContainerRegistryRuntime,
+)
+from c2ai.registration.repository import (
+    RegisteredApplicationCatalogPage,
+    RegisteredApplicationCatalogRecord,
+)
+from c2ai.registration.secrets import (
+    ContainerApplicationSecretPage,
 )
 
 
@@ -301,7 +307,7 @@ def _no_managed_secrets():
     """Container deploys look up managed secrets; none exist unless a test says so."""
 
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.secrets."
         "list_active_container_application_secrets",
         new_callable=AsyncMock,
         return_value=[],
@@ -331,7 +337,7 @@ def container_secret_admin_client(registered_applications_admin_client):
     )
     provider.delete_secret = AsyncMock()
     with patch(
-        "c2ai.api.registered_applications._get_container_secret_provider",
+        "c2ai.api.registered_applications.clients.container_secret_provider",
         return_value=provider,
     ):
         yield registered_applications_admin_client, provider
@@ -508,13 +514,13 @@ def test_create_container_secret_writes_value_to_provider_but_never_returns_it(
 
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.secrets."
             "prepare_container_application_secret_create",
             new_callable=AsyncMock,
             return_value=secret,
         ) as prepare_mock,
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.secrets."
             "complete_container_application_secret_write",
             new_callable=AsyncMock,
             return_value=secret,
@@ -547,7 +553,7 @@ def test_list_update_and_delete_container_secret_metadata(
     secret = _managed_secret()
     page = ContainerApplicationSecretPage(items=[secret], total=1)
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.secrets."
         "list_container_application_secrets",
         new_callable=AsyncMock,
         return_value=page,
@@ -566,13 +572,13 @@ def test_list_update_and_delete_container_secret_metadata(
     updated_secret.secret_reference = "vault://athena/chat-service/rotated"
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.secrets."
             "prepare_container_application_secret_update",
             new_callable=AsyncMock,
             return_value=updated_secret,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.secrets."
             "complete_container_application_secret_write",
             new_callable=AsyncMock,
             return_value=updated_secret,
@@ -594,13 +600,13 @@ def test_list_update_and_delete_container_secret_metadata(
 
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.secrets."
             "prepare_container_application_secret_delete",
             new_callable=AsyncMock,
             return_value=updated_secret,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.secrets."
             "complete_container_application_secret_delete",
             new_callable=AsyncMock,
         ) as complete_delete,
@@ -623,7 +629,7 @@ def test_github_application_rejects_managed_secret_endpoint(
 ):
     client, provider = container_secret_admin_client
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.secrets."
         "prepare_container_application_secret_create",
         new_callable=AsyncMock,
         side_effect=ContainerSecretsNotSupported(),
@@ -664,7 +670,7 @@ def test_register_github_application_returns_created_template(
     registered_applications_admin_client,
 ):
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "create_github_registered_application",
         new_callable=AsyncMock,
         return_value=_persisted_version(),
@@ -713,13 +719,13 @@ def test_deploy_registered_application_dispatches_and_returns_instance(
     }
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.repository."
             "get_current_registered_application_version",
             new_callable=AsyncMock,
             return_value=version,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "create_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
@@ -731,7 +737,7 @@ def test_deploy_registered_application_dispatches_and_returns_instance(
             return_value={"trigger_method": "workflow_dispatch"},
         ) as dispatch_mock,
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "complete_registered_application_dispatch",
             new_callable=AsyncMock,
             return_value=instance,
@@ -795,13 +801,13 @@ def test_deploy_registered_application_names_the_instance_the_workflow_creates(
     )
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.repository."
             "get_current_registered_application_version",
             new_callable=AsyncMock,
             return_value=version,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "create_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
@@ -813,7 +819,7 @@ def test_deploy_registered_application_names_the_instance_the_workflow_creates(
             return_value={"trigger_method": "workflow_dispatch"},
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "complete_registered_application_dispatch",
             new_callable=AsyncMock,
             return_value=instance,
@@ -853,13 +859,13 @@ def test_deploy_registered_application_falls_back_to_a_generated_instance_name(
     )
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.repository."
             "get_current_registered_application_version",
             new_callable=AsyncMock,
             return_value=version,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "create_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
@@ -871,7 +877,7 @@ def test_deploy_registered_application_falls_back_to_a_generated_instance_name(
             return_value={"trigger_method": "workflow_dispatch"},
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "complete_registered_application_dispatch",
             new_callable=AsyncMock,
             return_value=instance,
@@ -903,13 +909,13 @@ def test_deploy_registered_application_reports_pipeline_failure(
     )
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.repository."
             "get_current_registered_application_version",
             new_callable=AsyncMock,
             return_value=version,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "create_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
@@ -921,7 +927,7 @@ def test_deploy_registered_application_reports_pipeline_failure(
             side_effect=RuntimeError("GitHub is unavailable"),
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "complete_registered_application_dispatch",
             new_callable=AsyncMock,
         ) as complete_mock,
@@ -1006,13 +1012,13 @@ def test_deploy_registered_container_uses_path_tier_and_stored_template(
     )
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.repository."
             "get_current_registered_application_version",
             new_callable=AsyncMock,
             return_value=version,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.credentials."
             "resolve_container_registry_credentials",
             new_callable=AsyncMock,
             return_value=ContainerRegistryRuntime(
@@ -1021,17 +1027,17 @@ def test_deploy_registered_container_uses_path_tier_and_stored_template(
             ),
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.credentials."
             "resolve_llm_api_token",
             new_callable=AsyncMock,
             return_value="write-only-llm-token",
         ),
         patch(
-            "c2ai.api.registered_applications._get_container_registry_client",
+            "c2ai.api.registered_applications.clients.container_registry_client",
             return_value=registry_client,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "create_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
@@ -1043,7 +1049,7 @@ def test_deploy_registered_container_uses_path_tier_and_stored_template(
             return_value={"pipeline": "container"},
         ) as dispatch_mock,
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "complete_registered_application_dispatch",
             new_callable=AsyncMock,
             return_value=instance,
@@ -1089,13 +1095,13 @@ def test_deploy_registered_container_rejects_an_unknown_registry_tag(
     )
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.repository."
             "get_current_registered_application_version",
             new_callable=AsyncMock,
             return_value=version,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.credentials."
             "resolve_container_registry_credentials",
             new_callable=AsyncMock,
             return_value=ContainerRegistryRuntime(
@@ -1104,17 +1110,17 @@ def test_deploy_registered_container_rejects_an_unknown_registry_tag(
             ),
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.credentials."
             "resolve_llm_api_token",
             new_callable=AsyncMock,
             return_value="write-only-llm-token",
         ),
         patch(
-            "c2ai.api.registered_applications._get_container_registry_client",
+            "c2ai.api.registered_applications.clients.container_registry_client",
             return_value=registry_client,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "create_registered_application_deployment",
             new_callable=AsyncMock,
         ) as create_mock,
@@ -1134,7 +1140,7 @@ def test_container_deployment_endpoint_rejects_github_templates(
 ):
     version = _persisted_version()
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "get_current_registered_application_version",
         new_callable=AsyncMock,
         return_value=version,
@@ -1153,7 +1159,7 @@ def test_generic_deployment_endpoint_rejects_container_templates(
 ):
     version = _persisted_container_version()
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "get_current_registered_application_version",
         new_callable=AsyncMock,
         return_value=version,
@@ -1176,7 +1182,7 @@ def test_list_and_get_registered_deployment_history(
 ):
     instance = _tracked_instance(_persisted_version())
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.deployments.repository."
         "list_registered_application_deployments",
         new_callable=AsyncMock,
         return_value=RegisteredApplicationDeploymentPage(
@@ -1196,7 +1202,7 @@ def test_list_and_get_registered_deployment_history(
     assert list_mock.await_args.kwargs["instance"] == "amberd-acme-prod"
 
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -1224,7 +1230,7 @@ def test_progress_callback_requires_shared_token_and_returns_updated_history(
         assert response.status_code == 401
 
         with patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "update_registered_application_deployment_progress",
             new_callable=AsyncMock,
             return_value=instance,
@@ -1251,7 +1257,7 @@ def test_rollback_redispatches_stored_configuration(
     instance.rollback_count = 1
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "prepare_registered_application_rollback",
             new_callable=AsyncMock,
             return_value=instance,
@@ -1263,7 +1269,7 @@ def test_rollback_redispatches_stored_configuration(
             return_value={"trigger_method": "workflow_dispatch"},
         ) as dispatch_mock,
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "complete_registered_application_dispatch",
             new_callable=AsyncMock,
             return_value=instance,
@@ -1300,13 +1306,13 @@ def test_upgrade_container_deployment_validates_tag_and_dispatches(
 
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "get_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.credentials."
             "resolve_container_registry_credentials",
             new_callable=AsyncMock,
             return_value=ContainerRegistryRuntime(
@@ -1315,23 +1321,23 @@ def test_upgrade_container_deployment_validates_tag_and_dispatches(
             ),
         ),
         patch(
-            "c2ai.api.registered_applications._get_container_registry_client",
+            "c2ai.api.registered_applications.clients.container_registry_client",
             return_value=registry_client,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "prepare_registered_application_upgrade",
             new_callable=AsyncMock,
             side_effect=prepare_upgrade,
         ) as prepare_mock,
         patch(
-            "c2ai.api.registered_applications."
+            "c2ai.api.registered_applications.deployments."
             "dispatch_registered_application_upgrade",
             new_callable=AsyncMock,
             return_value={"pipeline": "container-upgrade"},
         ) as dispatch_mock,
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "complete_registered_application_upgrade_dispatch",
             new_callable=AsyncMock,
             return_value=instance,
@@ -1378,13 +1384,13 @@ def test_upgrade_github_deployment_uses_same_endpoint_without_registry_lookup(
 
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "get_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.credentials."
             "resolve_container_registry_credentials",
             new_callable=AsyncMock,
             return_value=ContainerRegistryRuntime(
@@ -1393,23 +1399,23 @@ def test_upgrade_github_deployment_uses_same_endpoint_without_registry_lookup(
             ),
         ),
         patch(
-            "c2ai.api.registered_applications._get_container_registry_client",
+            "c2ai.api.registered_applications.clients.container_registry_client",
             return_value=registry_client,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "prepare_registered_application_upgrade",
             new_callable=AsyncMock,
             side_effect=prepare_upgrade,
         ),
         patch(
-            "c2ai.api.registered_applications."
+            "c2ai.api.registered_applications.deployments."
             "dispatch_registered_application_upgrade",
             new_callable=AsyncMock,
             return_value={"pipeline": "github-upgrade"},
         ) as dispatch_mock,
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "complete_registered_application_upgrade_dispatch",
             new_callable=AsyncMock,
             return_value=instance,
@@ -1445,25 +1451,25 @@ def test_upgrade_failed_github_deployment_restarts_its_workflow(
 
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "get_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "prepare_registered_application_upgrade",
             new_callable=AsyncMock,
             side_effect=prepare_upgrade,
         ),
         patch(
-            "c2ai.api.registered_applications."
+            "c2ai.api.registered_applications.deployments."
             "dispatch_registered_application_upgrade",
             new_callable=AsyncMock,
             return_value={"pipeline": "github-upgrade"},
         ) as dispatch_mock,
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "complete_registered_application_upgrade_dispatch",
             new_callable=AsyncMock,
             return_value=instance,
@@ -1488,13 +1494,13 @@ def test_upgrade_container_deployment_reports_missing_tag(
     )
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "get_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.credentials."
             "resolve_container_registry_credentials",
             new_callable=AsyncMock,
             return_value=ContainerRegistryRuntime(
@@ -1503,11 +1509,11 @@ def test_upgrade_container_deployment_reports_missing_tag(
             ),
         ),
         patch(
-            "c2ai.api.registered_applications._get_container_registry_client",
+            "c2ai.api.registered_applications.clients.container_registry_client",
             return_value=registry_client,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "prepare_registered_application_upgrade",
             new_callable=AsyncMock,
         ) as prepare_mock,
@@ -1532,7 +1538,7 @@ def test_upgrade_deployment_rejects_unsupported_type_and_active_state(
     )
     unsupported_instance.application.application_type = "unsupported"
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=unsupported_instance,
@@ -1547,7 +1553,7 @@ def test_upgrade_deployment_rejects_unsupported_type_and_active_state(
     container_instance = _upgradeable_container_instance()
     container_instance.status = "updating"
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=container_instance,
@@ -1580,13 +1586,13 @@ def test_upgrade_container_deployment_rolls_back_when_dispatch_fails(
 
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "get_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.credentials."
             "resolve_container_registry_credentials",
             new_callable=AsyncMock,
             return_value=ContainerRegistryRuntime(
@@ -1595,23 +1601,23 @@ def test_upgrade_container_deployment_rolls_back_when_dispatch_fails(
             ),
         ),
         patch(
-            "c2ai.api.registered_applications._get_container_registry_client",
+            "c2ai.api.registered_applications.clients.container_registry_client",
             return_value=registry_client,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "prepare_registered_application_upgrade",
             new_callable=AsyncMock,
             side_effect=prepare_upgrade,
         ),
         patch(
-            "c2ai.api.registered_applications."
+            "c2ai.api.registered_applications.deployments."
             "dispatch_registered_application_upgrade",
             new_callable=AsyncMock,
             side_effect=RuntimeError("pipeline unavailable"),
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "complete_registered_application_upgrade_dispatch",
             new_callable=AsyncMock,
         ) as complete_mock,
@@ -1638,25 +1644,25 @@ def test_terminate_container_deployment_confirms_and_dispatches_cleanup(
 
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "get_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "prepare_registered_application_termination",
             new_callable=AsyncMock,
             side_effect=prepare_termination,
         ) as prepare_mock,
         patch(
-            "c2ai.api.registered_applications."
+            "c2ai.api.registered_applications.deployments."
             "dispatch_registered_application_termination",
             new_callable=AsyncMock,
             return_value={"pipeline": "container-termination"},
         ) as dispatch_mock,
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "complete_registered_application_termination_dispatch",
             new_callable=AsyncMock,
             return_value=instance,
@@ -1690,25 +1696,25 @@ def test_terminate_github_deployment_uses_same_confirmation_and_endpoint(
 
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "get_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "prepare_registered_application_termination",
             new_callable=AsyncMock,
             side_effect=prepare_termination,
         ),
         patch(
-            "c2ai.api.registered_applications."
+            "c2ai.api.registered_applications.deployments."
             "dispatch_registered_application_termination",
             new_callable=AsyncMock,
             return_value={"pipeline": "github-termination"},
         ) as dispatch_mock,
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "complete_registered_application_termination_dispatch",
             new_callable=AsyncMock,
             return_value=instance,
@@ -1733,13 +1739,13 @@ def test_terminate_container_deployment_requires_exact_confirmation(
     instance = _upgradeable_container_instance()
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "get_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "prepare_registered_application_termination",
             new_callable=AsyncMock,
         ) as prepare_mock,
@@ -1764,7 +1770,7 @@ def test_terminate_deployment_rejects_unsupported_type_and_active_state(
     )
     unsupported_instance.application.application_type = "unsupported"
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=unsupported_instance,
@@ -1779,7 +1785,7 @@ def test_terminate_deployment_rejects_unsupported_type_and_active_state(
     container_instance = _upgradeable_container_instance()
     container_instance.status = "terminating"
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=container_instance,
@@ -1803,25 +1809,25 @@ def test_terminate_container_deployment_rolls_back_when_dispatch_fails(
 
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "get_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "prepare_registered_application_termination",
             new_callable=AsyncMock,
             side_effect=prepare_termination,
         ),
         patch(
-            "c2ai.api.registered_applications."
+            "c2ai.api.registered_applications.deployments."
             "dispatch_registered_application_termination",
             new_callable=AsyncMock,
             side_effect=RuntimeError("pipeline unavailable"),
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.deployments.repository."
             "complete_registered_application_termination_dispatch",
             new_callable=AsyncMock,
         ) as complete_mock,
@@ -1840,7 +1846,7 @@ def test_register_github_application_returns_conflict_for_duplicate_name(
     registered_applications_admin_client,
 ):
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "create_github_registered_application",
         new_callable=AsyncMock,
         side_effect=DuplicateRegisteredApplication("example-chatbot"),
@@ -1861,7 +1867,7 @@ def test_register_github_application_validates_before_persistence(
     invalid_body["github"]["workflow_file_path"] = "deploy.yml"
 
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "create_github_registered_application",
         new_callable=AsyncMock,
     ) as create_mock:
@@ -1878,7 +1884,7 @@ def test_register_container_application_returns_created_template(
     registered_applications_admin_client,
 ):
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "create_container_registered_application",
         new_callable=AsyncMock,
         return_value=_persisted_container_version(),
@@ -1913,7 +1919,7 @@ def test_register_container_application_returns_conflict_for_duplicate_name(
     registered_applications_admin_client,
 ):
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "create_container_registered_application",
         new_callable=AsyncMock,
         side_effect=DuplicateRegisteredApplication("chat-service"),
@@ -1934,7 +1940,7 @@ def test_register_container_application_validates_before_persistence(
     invalid_body["container"]["port"] = 70000
 
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "create_container_registered_application",
         new_callable=AsyncMock,
     ) as create_mock:
@@ -1956,9 +1962,9 @@ def test_github_tags_use_code_repository_or_workflow_fallback(
     version.github_configuration.code_repository = code_repository
     runtime = MagicMock(token="private-token", api_base_url="https://github.example/api/v3")
     with (
-        patch("c2ai.api.registered_applications.crud_registered_application.get_current_registered_application_version", new_callable=AsyncMock, return_value=version),
-        patch("c2ai.api.registered_applications.crud_github_connection.resolve_github_connection", new_callable=AsyncMock, return_value=runtime),
-        patch("c2ai.api.registered_applications.GitHubActionsClient") as client_class,
+        patch("c2ai.registration.repository.get_current_registered_application_version", new_callable=AsyncMock, return_value=version),
+        patch("c2ai.crud.github_connection.resolve_github_connection", new_callable=AsyncMock, return_value=runtime),
+        patch("c2ai.api.registered_applications.catalog.GitHubActionsClient") as client_class,
     ):
         client_class.return_value.list_repository_branches = AsyncMock(return_value=branches)
         client_class.return_value.list_repository_tags = AsyncMock(return_value=tags)
@@ -1978,9 +1984,9 @@ def test_github_tags_access_error_is_not_reported_as_empty_tags(registered_appli
     version = _persisted_version()
     error = httpx.HTTPStatusError("private upstream detail", request=httpx.Request("GET", "https://api.github.com"), response=httpx.Response(404))
     with (
-        patch("c2ai.api.registered_applications.crud_registered_application.get_current_registered_application_version", new_callable=AsyncMock, return_value=version),
-        patch("c2ai.api.registered_applications.crud_github_connection.resolve_github_connection", new_callable=AsyncMock, return_value=None),
-        patch("c2ai.api.registered_applications.GitHubActionsClient") as client_class,
+        patch("c2ai.registration.repository.get_current_registered_application_version", new_callable=AsyncMock, return_value=version),
+        patch("c2ai.crud.github_connection.resolve_github_connection", new_callable=AsyncMock, return_value=None),
+        patch("c2ai.api.registered_applications.catalog.GitHubActionsClient") as client_class,
     ):
         client_class.return_value.list_repository_branches = AsyncMock(side_effect=error)
         response = registered_applications_admin_client.get(f"/api/registered-applications/{version.application.id}/github-tags")
@@ -2018,17 +2024,17 @@ def test_list_container_image_tags_returns_deployment_ready_references(
     )
     with (
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.repository."
             "get_current_registered_application_version",
             new_callable=AsyncMock,
             return_value=version,
         ),
         patch(
-            "c2ai.api.registered_applications._get_container_registry_client",
+            "c2ai.api.registered_applications.clients.container_registry_client",
             return_value=registry_client,
         ),
         patch(
-            "c2ai.api.registered_applications.crud_registered_application."
+            "c2ai.registration.credentials."
             "resolve_container_registry_credentials",
             new_callable=AsyncMock,
             return_value=ContainerRegistryRuntime(
@@ -2073,7 +2079,7 @@ def test_list_container_image_tags_rejects_github_application(
 ):
     version = _persisted_version()
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "get_current_registered_application_version",
         new_callable=AsyncMock,
         return_value=version,
@@ -2091,7 +2097,7 @@ def test_list_container_image_tags_returns_not_found(
 ):
     application_id = "ffffffff-0000-0000-0000-000000000012"
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "get_current_registered_application_version",
         new_callable=AsyncMock,
         return_value=None,
@@ -2120,7 +2126,7 @@ def test_list_registered_applications_returns_catalog_page(
         total=1,
     )
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "list_registered_applications",
         new_callable=AsyncMock,
         return_value=page,
@@ -2159,7 +2165,7 @@ def test_list_registered_applications_validates_tier_before_query(
     registered_applications_admin_client,
 ):
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "list_registered_applications",
         new_callable=AsyncMock,
     ) as list_mock:
@@ -2177,7 +2183,7 @@ def test_get_registered_application_returns_current_version(
 ):
     version = _persisted_version()
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "get_current_registered_application_version",
         new_callable=AsyncMock,
         return_value=version,
@@ -2196,7 +2202,7 @@ def test_get_registered_application_returns_not_found(
 ):
     application_id = "ffffffff-0000-0000-0000-000000000010"
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "get_current_registered_application_version",
         new_callable=AsyncMock,
         return_value=None,
@@ -2214,7 +2220,7 @@ def test_delete_registered_application_returns_no_content(
 ):
     application_id = "aaaaaaaa-0000-0000-0000-000000000020"
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "delete_registered_application",
         new_callable=AsyncMock,
     ) as delete_mock:
@@ -2232,7 +2238,7 @@ def test_delete_registered_application_returns_conflict_for_active_instances(
 ):
     application_id = "bbbbbbbb-0000-0000-0000-000000000020"
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "delete_registered_application",
         new_callable=AsyncMock,
         side_effect=RegisteredApplicationHasRunningInstances("chat-service", 2),
@@ -2247,7 +2253,7 @@ def test_delete_registered_application_returns_conflict_for_active_instances(
 
 def test_catalog_accepts_the_frontend_sort_key(registered_applications_admin_client):
     with patch(
-        "c2ai.api.registered_applications.crud_registered_application."
+        "c2ai.registration.repository."
         "list_registered_applications",
         new_callable=AsyncMock,
         return_value=MagicMock(items=[], total=0),

@@ -18,21 +18,25 @@ from c2ai.core.exceptions import (
     RegisteredApplicationNotFound,
     ServiceUnavailableError,
 )
-from c2ai.crud.registered_application import (
-    complete_container_application_secret_write,
+from c2ai.models.registered_application import (
+    ContainerApplicationSecret,
+    RegisteredApplication,
+)
+from c2ai.registration.credentials import (
+    resolve_container_registry_credentials,
+)
+from c2ai.registration.repository import (
     create_container_registered_application,
     create_github_registered_application,
     delete_registered_application,
     get_registered_application_by_name,
-    list_container_application_secrets,
     list_registered_applications,
+)
+from c2ai.registration.secrets import (
+    complete_container_application_secret_write,
+    list_container_application_secrets,
     prepare_container_application_secret_create,
     prepare_container_application_secret_delete,
-    resolve_container_registry_credentials,
-)
-from c2ai.models.registered_application import (
-    ContainerApplicationSecret,
-    RegisteredApplication,
 )
 from c2ai.schemas.registered_application import (
     ContainerApplicationSecretCreate,

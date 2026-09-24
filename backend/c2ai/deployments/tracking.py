@@ -12,14 +12,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from c2ai.clients.github_actions import GitHubActionsClient
 from c2ai.core.exceptions import ServiceUnavailableError
 from c2ai.crud import github_connection as crud_github_connection
-from c2ai.crud.registered_application import settle_operation
 from c2ai.deployments import lifecycle
-from c2ai.deployments.lifecycle import Outcome
-from c2ai.deployments.operations import active_operation, claimed_run_ids, record_dispatch
-from c2ai.models.registered_application import DeploymentInstance
-from c2ai.services.registered_application_deployment import (
+from c2ai.deployments.configuration import (
     resolve_github_workflow_subdomain,
 )
+from c2ai.deployments.lifecycle import Outcome
+from c2ai.deployments.operations import active_operation, claimed_run_ids, record_dispatch
+from c2ai.deployments.repository import (
+    settle_operation,
+)
+from c2ai.models.registered_application import DeploymentInstance
 
 logger = logging.getLogger(__name__)
 

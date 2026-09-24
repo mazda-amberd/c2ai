@@ -11,21 +11,28 @@ troubleshooting, and cost tracking. Python 3.11+, PostgreSQL 14+ (with
 backend/
   main.py                 # python main.py  -> uvicorn on APP_HOST:APP_PORT
   c2ai/
-    app.py                # create_app(): routers, CORS, error handlers, SPA
-    api/                  # HTTP routes (thin: validate, call services/crud, map)
+    app.py                # create_app(): routers, CORS, error handlers, SPA, worker
+    config.py             # Settings: every environment variable, typed, read once
+    worker.py             # python -m c2ai.worker  -> standalone job worker
+    api/                  # HTTP routes (thin: validate, call the domain, map)
+      registered_applications/  # catalog.py, deployments.py, secrets.py routers
     auth/                 # JWT + cookie helpers, auth dependencies
-    clients/              # GitHub, Grafana, container registry, secret broker
+    clients/              # GitHub, Grafana, registry, secret broker; http.py pools
+    deployments/          # the deployment domain (see "Deployment model" below)
+    registration/         # application catalog, stored credentials, managed secrets
+    jobs/                 # durable job queue: store, worker, handlers/
     constants/            # PromQL catalogues, tiers, lifecycle enums
-    core/                 # exceptions, handlers, logging, SPA serving, bg tasks
-    crud/                 # database access
+    core/                 # exceptions, handlers, logging, SPA serving
+    crud/                 # users, GitHub connections, costs, instance inventory
     db/                   # engine/session, migration runner, dev bootstrap
     llm/                  # vLLM chat model + troubleshooting prompt
     models/               # SQLAlchemy ORM models
     schemas/              # Pydantic request/response contracts
-    services/             # domain logic (deploy payloads, metrics, costs, ...)
+    services/             # metrics, logs, costs, troubleshooting reports
   migrations/NNNN_*.sql   # forward-only SQL migrations
   scripts/                # operational helpers
   tests/                  # pytest suite (no database or network needed)
+  tests/integration/      # PostgreSQL-backed tests (opt-in, see below)
 ```
 
 ## Setup
@@ -67,16 +74,50 @@ If `../frontend/dist` exists (run `npm run build` in `frontend/`), the UI is
 served from the same origin; otherwise run the Vite dev server (port 5173),
 which calls the API on port 8007.
 
+### Background jobs
+
+Troubleshooting reports, cost ingestion, deployment reconciliation and job
+cleanup run as rows in the `jobs` table, claimed by workers with
+`SELECT ... FOR UPDATE SKIP LOCKED` under a renewable lease; a job whose
+worker dies is picked up again. By default the API process runs a worker
+(`C2AI_RUN_WORKER=true`). To scale them separately, run
+
+```bash
+python -m c2ai.worker
+```
+
+on worker machines and set `C2AI_RUN_WORKER=false` on API replicas. Any
+number of API replicas and workers can share one database.
+
+| Job | When | What |
+|---|---|---|
+| `troubleshooting.report` | `POST /jobs` | Builds one report; kept 15 minutes |
+| `financial.ingest` | every `ATHENA_FINANCIAL_POLL_SECONDS` | LLM gateway cost poll |
+| `deployments.reconcile` | every minute | Applies GitHub run results; abandons dispatches that never started (30 min) |
+| `jobs.purge` | every 10 minutes | Deletes finished jobs past retention |
+
 ### Test and lint
 
 ```bash
-pytest                          # ~670 tests, fully mocked
+pytest                          # unit tests, fully mocked, no database
 ruff check c2ai tests scripts main.py
+```
+
+The PostgreSQL tests (migrations, job queue, deployments end to end, users)
+create and drop their own databases on a server you point them at, for
+example the project-local one:
+
+```bash
+../scripts/local-db.sh start
+C2AI_TEST_DATABASE_URL=postgresql://c2ai@127.0.0.1:55432/postgres pytest
 ```
 
 ## Configuration
 
-Every variable, with defaults, is listed in [`.env.example`](.env.example).
+Every variable, with defaults, is listed in [`.env.example`](.env.example)
+and declared once, typed, in `c2ai/config.py`. The process environment wins
+over `backend/.env` (`C2AI_ENV_FILE` points elsewhere). A malformed value, or
+a missing `DATABASE_URL` / `ATHENA_AUTH_SECRET`, stops the API at startup.
 The ones that must be set in any real environment:
 
 | Variable | Purpose |
@@ -100,8 +141,10 @@ different lifetime but never more than `ATHENA_TOKEN_MAX_TTL_SECONDS`
 Every authenticated request re-reads the user from the database, so deleting
 a user or removing admin rights takes effect immediately. Endpoints return
 **401** when the session is missing/invalid (the UI signs out) and **403**
-when a signed-in user lacks admin rights. Admin rights come from the stored
-`metadata.user_type == "Admin"`.
+when a signed-in user lacks admin rights. Admin rights are the
+`users.user_type` column (`admin` | `user`), reported to the UI as
+`metadata.user_type` (`Admin` | `User`); the last administrator cannot be
+demoted or deleted.
 
 | Method | Path | Access |
 |---|---|---|
@@ -111,8 +154,8 @@ when a signed-in user lacks admin rights. Admin rights come from the stored
 | `PATCH` | `/users/update_password` | signed in (own password) |
 | `POST` | `/users/reset_password/{user}` | admin |
 
-The bootstrap `admin` account sees every user; other admins see the users
-they created.
+Superusers (`users.is_superuser`, the bootstrap `admin`) see every user;
+other admins see the users they created (`users.created_by_id`).
 
 ## Registered applications (PRD: Registration & Deployment, EPICs 3-8)
 
@@ -174,7 +217,29 @@ step and status `failed` plus `failure_reason`; completion with step
 keep status `updating` until they complete. When a callback never arrives,
 the GitHub run's final conclusion is applied instead.
 
-## Legacy ADA pipeline
+## Deployment model
+
+Every application — ADA included — is a registered application, and every
+deployed instance is a `deployment_instances` row. `c2ai/deployments/`:
+
+* `lifecycle.py` — the state machine. Operations (deploy, upgrade, rollback,
+  move-tier, terminate) `begin` from an allowed status and `settle` on their
+  outcome; nothing else changes an instance's status.
+* `operations.py` — the operation log (`pipeline_runs`): one row per
+  operation, linked to its instance, with its GitHub run and conclusion. A
+  unique index allows one open operation per subdomain, so concurrent
+  requests get **409** instead of two pipelines racing.
+* `pipelines.py` / `dispatch.py` — dispatch the right workflow with the right
+  credentials. GitHub returns the run id with the dispatch; when a server
+  does not, correlation skips runs already linked to another operation.
+* `tracking.py` / `status.py` — GitHub progress and the `/api/pipeline/*`
+  projection; `deployments.reconcile` settles operations nobody is polling.
+* `ada.py` — ADA is a seeded GitHub Workflow application (id
+  `ada00000-0000-4000-8000-000000000001`, repository/ref from settings); the
+  tier pages' `/api/deploy*` routes map onto it. An instance that runs in the
+  cluster but was never deployed through C2AI is adopted on first use.
+
+## Tier-page deployment API (ADA)
 
 | Method | Path | Description |
 |---|---|---|
@@ -183,8 +248,9 @@ the GitHub run's final conclusion is applied instead.
 | `POST` | `/api/pipeline/cancel` | Cancel your own run |
 | `GET` | `/api/github/branches`, `/api/github/tags` | Refs in `GITHUB_REPO_OWNER/<repo>` |
 
-One operation runs per subdomain at a time. If GitHub rejects a dispatch the
-run is released immediately, so it does not block the subdomain.
+One operation runs per subdomain at a time, whichever API started it. If
+GitHub rejects a dispatch nothing is recorded, so it does not block the
+subdomain. `/api/pipeline/*` and cancel cover registered deployments too.
 
 ## Metrics, logs, troubleshooting
 
@@ -198,7 +264,8 @@ run is released immediately, so it does not block the subdomain.
   forward paging, and live tail (`tail=true`).
 * `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/report.pdf` — AI
   troubleshooting report (logs + Kubernetes events + selected PromQL), owned
-  by the requesting user, kept 15 minutes.
+  by the requesting user, kept 15 minutes; a durable job, so any replica can
+  answer the poll and a restart does not lose it.
 
 Cluster model: workloads are Kubernetes Deployments labelled with
 `label_tier`; GPU comes from `ray_node_gpus_utilization`. Tier label regexes,
@@ -213,8 +280,8 @@ one tier, filterable by date range, cost type (`public_api`, `private_llm`,
 `both`), and namespace. Values are decimal strings in USD and are never
 recalculated with newer rates.
 
-An in-process scheduler (`ATHENA_FINANCIAL_INGESTION_ENABLED`, every
-`ATHENA_FINANCIAL_POLL_SECONDS`) reads the LLM gateway counters from
+The periodic `financial.ingest` job (`ATHENA_FINANCIAL_INGESTION_ENABLED`,
+every `ATHENA_FINANCIAL_POLL_SECONDS`) reads the LLM gateway counters from
 Prometheus for the exact interval since its checkpoint, attributing each call
 to a namespace through the caller pod IP:
 
@@ -224,5 +291,6 @@ to a namespace through the caller pod IP:
   model's published per-million rates (`financial_rates`, seeded by
   migrations 0017/0019). Usage of an unpriced model is logged and skipped.
 
-A PostgreSQL advisory lock ensures one replica ingests at a time. Rates are
+The job queue runs one ingestion at a time and a PostgreSQL advisory lock
+guards it as well. Rates are
 effective-dated: to change a price, close the current row and insert a new one.

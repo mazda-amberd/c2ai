@@ -7,6 +7,18 @@ from uuid import UUID
 import pytest
 
 from c2ai.core.exceptions import UnprocessableEntityError
+from c2ai.deployments.configuration import (
+    build_container_deployment_configuration,
+    build_deployment_configuration,
+    default_github_instance_name,
+    resolve_github_deployment_instance_name,
+)
+from c2ai.deployments.pipelines import (
+    build_container_pipeline_payload,
+    dispatch_registered_application_deployment,
+    dispatch_registered_application_termination,
+    dispatch_registered_application_upgrade,
+)
 from c2ai.models.registered_application import (
     ApplicationLLMConfiguration,
     ApplicationParameterDefinition,
@@ -18,16 +30,6 @@ from c2ai.models.registered_application import (
 from c2ai.schemas.registered_application import (
     ContainerRegisteredApplicationDeploymentCreate,
     RegisteredApplicationDeploymentCreate,
-)
-from c2ai.services.registered_application_deployment import (
-    build_container_deployment_configuration,
-    build_container_pipeline_payload,
-    build_deployment_configuration,
-    default_github_instance_name,
-    dispatch_registered_application_deployment,
-    dispatch_registered_application_termination,
-    dispatch_registered_application_upgrade,
-    resolve_github_deployment_instance_name,
 )
 
 
@@ -366,7 +368,7 @@ async def test_dispatches_stored_github_workflow_configuration(tier):
         ),
     )
     with patch(
-        "c2ai.services.registered_application_deployment.GitHubActionsClient"
+        "c2ai.deployments.pipelines.GitHubActionsClient"
     ) as client_class:
         client = client_class.return_value
         client.trigger_workflow = AsyncMock(
@@ -423,7 +425,7 @@ async def test_workflow_dispatch_omits_empty_secret_and_internal_metadata_inputs
         ),
     )
     with patch(
-        "c2ai.services.registered_application_deployment.GitHubActionsClient"
+        "c2ai.deployments.pipelines.GitHubActionsClient"
     ) as client_class:
         client = client_class.return_value
         client.trigger_workflow = AsyncMock(
@@ -464,7 +466,7 @@ async def test_slack_user_default_is_scoped_to_configured_repository_owners():
         triggered_by="admin",
     )
     with patch(
-        "c2ai.services.registered_application_deployment.GitHubActionsClient"
+        "c2ai.deployments.pipelines.GitHubActionsClient"
     ) as client_class:
         client = client_class.return_value
         client.trigger_workflow = AsyncMock(
@@ -508,7 +510,7 @@ async def test_registered_slack_user_parameter_is_filled_from_the_caller():
     assert configuration["parameters"]["slack_user"] == "release-bot"
 
     with patch(
-        "c2ai.services.registered_application_deployment.GitHubActionsClient"
+        "c2ai.deployments.pipelines.GitHubActionsClient"
     ) as client_class:
         client = client_class.return_value
         client.trigger_workflow = AsyncMock(
@@ -562,7 +564,7 @@ async def test_dispatches_registered_repository_event():
         ),
     )
     with patch(
-        "c2ai.services.registered_application_deployment.GitHubActionsClient"
+        "c2ai.deployments.pipelines.GitHubActionsClient"
     ) as client_class:
         client = client_class.return_value
         client.trigger_repository_dispatch = AsyncMock(
@@ -609,7 +611,7 @@ async def test_dispatches_container_configuration_to_pipeline():
             },
         ),
         patch(
-            "c2ai.services.registered_application_deployment.GitHubActionsClient"
+            "c2ai.deployments.pipelines.GitHubActionsClient"
         ) as client_class,
     ):
         client = client_class.return_value
@@ -752,7 +754,7 @@ async def test_dispatches_container_upgrade_to_designated_pipeline():
             },
         ),
         patch(
-            "c2ai.services.registered_application_deployment.GitHubActionsClient"
+            "c2ai.deployments.pipelines.GitHubActionsClient"
         ) as client_class,
     ):
         client = client_class.return_value
@@ -800,7 +802,7 @@ async def test_container_upgrade_defaults_to_amberd_devops_workflow():
             clear=True,
         ),
         patch(
-            "c2ai.services.registered_application_deployment.GitHubActionsClient"
+            "c2ai.deployments.pipelines.GitHubActionsClient"
         ) as client_class,
     ):
         client = client_class.return_value
@@ -830,7 +832,7 @@ def _devops_client_patch():
     """Patch the devops GitHubActionsClient; trigger_workflow echoes its workflow."""
 
     patcher = patch(
-        "c2ai.services.registered_application_deployment.GitHubActionsClient"
+        "c2ai.deployments.pipelines.GitHubActionsClient"
     )
     client_class = patcher.start()
     client = client_class.return_value
@@ -964,7 +966,7 @@ async def test_dispatches_container_termination_with_dns_configuration():
             },
         ),
         patch(
-            "c2ai.services.registered_application_deployment.GitHubActionsClient"
+            "c2ai.deployments.pipelines.GitHubActionsClient"
         ) as client_class,
     ):
         client = client_class.return_value
@@ -1007,7 +1009,7 @@ async def test_container_termination_defaults_to_amberd_devops_workflow():
             clear=True,
         ),
         patch(
-            "c2ai.services.registered_application_deployment.GitHubActionsClient"
+            "c2ai.deployments.pipelines.GitHubActionsClient"
         ) as client_class,
     ):
         client = client_class.return_value
@@ -1055,7 +1057,7 @@ async def test_dispatches_github_termination_to_predefined_amberd_workflow():
 
 
 def test_container_env_vars_carry_llm_settings_without_any_parameters():
-    from c2ai.services.registered_application_deployment import (
+    from c2ai.deployments.pipelines import (
         build_container_pipeline_payload,
     )
 
@@ -1090,7 +1092,7 @@ def test_container_env_vars_carry_llm_settings_without_any_parameters():
 
 
 def test_rollback_of_an_old_snapshot_sends_only_lowercase_llm_keys():
-    from c2ai.services.registered_application_deployment import (
+    from c2ai.deployments.pipelines import (
         build_container_pipeline_payload,
     )
 

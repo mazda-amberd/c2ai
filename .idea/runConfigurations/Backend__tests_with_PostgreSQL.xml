@@ -1,0 +1,22 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Backend: tests with PostgreSQL" type="tests" factoryName="py.test">
+    <module name="C2AI" />
+    <option name="ENV_FILES" value="" />
+    <option name="INTERPRETER_OPTIONS" value="" />
+    <option name="PARENT_ENVS" value="true" />
+    <envs>
+      <env name="C2AI_TEST_DATABASE_URL" value="postgresql://c2ai@127.0.0.1:55432/postgres" />
+    </envs>
+    <option name="SDK_HOME" value="$PROJECT_DIR$/backend/.venv/bin/python" />
+    <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/backend" />
+    <option name="IS_MODULE_SDK" value="false" />
+    <option name="ADD_CONTENT_ROOTS" value="true" />
+    <option name="ADD_SOURCE_ROOTS" value="true" />
+    <option name="_new_keywords" value="&quot;&quot;" />
+    <option name="_new_parameters" value="&quot;&quot;" />
+    <option name="_new_additionalArguments" value="&quot;-q&quot;" />
+    <option name="_new_target" value="&quot;$PROJECT_DIR$/backend/tests&quot;" />
+    <option name="_new_targetType" value="&quot;PATH&quot;" />
+    <method v="2" />
+  </configuration>
+</component>

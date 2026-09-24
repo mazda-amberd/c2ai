@@ -33,10 +33,21 @@ from c2ai.core.exceptions import (
     ServiceUnavailableError,
     UnprocessableEntityError,
 )
-from c2ai.crud import registered_application as crud
-from c2ai.deployments import lifecycle, operations
+from c2ai.deployments import lifecycle, operations, repository as instances
+from c2ai.deployments.configuration import (
+    build_deployment_configuration,
+)
 from c2ai.deployments.dispatch import dispatch_deployment
 from c2ai.deployments.lifecycle import Outcome
+from c2ai.deployments.pipelines import (
+    dispatch_registered_application_move_tier,
+    dispatch_registered_application_termination,
+    dispatch_registered_application_upgrade,
+)
+from c2ai.deployments.tracking import (
+    client_for_reference,
+    get_registered_deployment_workflow_progress,
+)
 from c2ai.models.application_instance import ApplicationInstance
 from c2ai.models.pipeline_run import PipelineRun
 from c2ai.models.registered_application import (
@@ -45,18 +56,9 @@ from c2ai.models.registered_application import (
     GitHubApplicationConfiguration,
     RegisteredApplicationVersion,
 )
+from c2ai.registration import repository as applications
 from c2ai.schemas.deployment import DeployRequest
 from c2ai.schemas.registered_application import RegisteredApplicationDeploymentCreate
-from c2ai.services.github_workflow_progress import (
-    client_for_reference,
-    get_registered_deployment_workflow_progress,
-)
-from c2ai.services.registered_application_deployment import (
-    build_deployment_configuration,
-    dispatch_registered_application_move_tier,
-    dispatch_registered_application_termination,
-    dispatch_registered_application_upgrade,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +77,7 @@ _INVENTORY_STALE_AFTER = timedelta(minutes=10)
 async def ada_version(db: AsyncSession) -> RegisteredApplicationVersion:
     """ADA's current version, with its GitHub settings synced from configuration."""
 
-    version = await crud.get_current_registered_application_version(db, ADA_APPLICATION_ID)
+    version = await applications.get_current_registered_application_version(db, ADA_APPLICATION_ID)
     if version is None or version.github_configuration is None:
         raise ServiceUnavailableError(
             "The ADA application is not registered. Run `python -m c2ai.db.migrate`."
@@ -159,7 +161,7 @@ async def live_instance(db: AsyncSession, subdomain: str) -> DeploymentInstance 
     instance_id = result.scalar_one_or_none()
     if instance_id is None:
         return None
-    return await crud.get_registered_application_deployment(db, instance_id)
+    return await instances.get_registered_application_deployment(db, instance_id)
 
 
 async def _inventory_entry(db: AsyncSession, subdomain: str) -> ApplicationInstance | None:
@@ -239,7 +241,7 @@ async def _adopt(
     db.add(instance)
     await db.commit()
     logger.info("Adopted cluster instance %s as an ADA deployment", subdomain)
-    return await crud.get_registered_application_deployment(db, instance.id)
+    return await instances.get_registered_application_deployment(db, instance.id)
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +300,7 @@ async def deploy(db: AsyncSession, body: DeployRequest, user: AthenaTokenUser) -
         triggered_by=_slack_user(user),
     )
     configuration["domain"] = body.domain
-    instance = await crud.create_registered_application_deployment(
+    instance = await instances.create_registered_application_deployment(
         db,
         version,
         instance_name=subdomain,
@@ -319,7 +321,7 @@ async def deploy(db: AsyncSession, body: DeployRequest, user: AthenaTokenUser) -
         ),
         "deployment",
     )
-    instance = await crud.complete_registered_application_dispatch(
+    instance = await instances.complete_registered_application_dispatch(
         db, instance, {**reference, "subdomain": subdomain}
     )
     return await _operation_row(db, instance)
@@ -332,7 +334,7 @@ async def update(
         db, body.subdomain, tier=body.tier, operation="update", user=user
     )
     await ensure_ref_exists(body.branch)
-    instance = await crud.prepare_registered_application_upgrade(
+    instance = await instances.prepare_registered_application_upgrade(
         db,
         instance.id,
         target_version=body.branch,
@@ -352,7 +354,7 @@ async def update(
         ),
         "update",
     )
-    instance = await crud.complete_registered_application_upgrade_dispatch(db, instance, reference)
+    instance = await instances.complete_registered_application_upgrade_dispatch(db, instance, reference)
     return await _operation_row(db, instance)
 
 
@@ -362,7 +364,7 @@ async def move_tier(
     instance = await instance_for_operation(
         db, subdomain, tier=None, operation="move-tier", user=user
     )
-    instance = await crud.prepare_registered_application_move_tier(
+    instance = await instances.prepare_registered_application_move_tier(
         db, instance.id, target_tier=tier, triggered_by=user.identifier
     )
     reference = await _dispatch_or_rollback(
@@ -377,7 +379,7 @@ async def move_tier(
         ),
         "move-to-tier",
     )
-    instance = await crud.complete_operation_dispatch(
+    instance = await instances.complete_operation_dispatch(
         db, instance, reference, event_message=f"Move to Tier {tier} pipeline dispatched."
     )
     return await _operation_row(db, instance)
@@ -387,7 +389,7 @@ async def terminate(db: AsyncSession, subdomain: str, user: AthenaTokenUser) -> 
     instance = await instance_for_operation(
         db, subdomain, tier=None, operation="terminate", user=user
     )
-    instance = await crud.prepare_registered_application_termination(
+    instance = await instances.prepare_registered_application_termination(
         db, instance.id, triggered_by=user.identifier
     )
     reference = await _dispatch_or_rollback(
@@ -402,7 +404,7 @@ async def terminate(db: AsyncSession, subdomain: str, user: AthenaTokenUser) -> 
         ),
         "termination",
     )
-    instance = await crud.complete_registered_application_termination_dispatch(
+    instance = await instances.complete_registered_application_termination_dispatch(
         db, instance, reference
     )
     return await _operation_row(db, instance)
@@ -425,7 +427,7 @@ async def cancel(db: AsyncSession, operation_id: str, user: AthenaTokenUser) -> 
     if run.triggered_by != user.identifier:
         raise ForbiddenError("You can only cancel runs that you started.")
     instance = (
-        await crud.get_registered_application_deployment(
+        await instances.get_registered_application_deployment(
             db, run.deployment_instance_id, for_update=True
         )
         if run.deployment_instance_id
@@ -450,7 +452,7 @@ async def cancel(db: AsyncSession, operation_id: str, user: AthenaTokenUser) -> 
             raise ServiceUnavailableError(
                 f"GitHub refused to cancel run {run.run_id}."
             ) from error
-        await crud.settle_operation(
+        await instances.settle_operation(
             db,
             instance,
             Outcome.CANCELLED,

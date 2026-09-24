@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from c2ai.services.github_workflow_progress import (
+from c2ai.deployments.tracking import (
     get_registered_deployment_workflow_progress,
 )
 from tests.helpers import mock_db
@@ -67,7 +67,7 @@ async def test_completed_termination_syncs_status_and_exposes_nested_steps():
     client.get_workflow_progress = AsyncMock(return_value=progress)
 
     with patch(
-        "c2ai.services.github_workflow_progress.GitHubActionsClient",
+        "c2ai.deployments.tracking.GitHubActionsClient",
         return_value=client,
     ):
         returned_progress, error = await get_registered_deployment_workflow_progress(
@@ -134,7 +134,7 @@ async def test_failed_job_sets_failed_state_and_specific_reason():
     client.get_workflow_progress = AsyncMock(return_value=progress)
 
     with patch(
-        "c2ai.services.github_workflow_progress.GitHubActionsClient",
+        "c2ai.deployments.tracking.GitHubActionsClient",
         return_value=client,
     ):
         _, error = await get_registered_deployment_workflow_progress(db, instance)

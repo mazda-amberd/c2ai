@@ -18,7 +18,7 @@ from c2ai.core.exceptions import (
     DeploymentUpgradeNotSupported,
     DuplicateDeploymentSubdomain,
 )
-from c2ai.crud.registered_application import (
+from c2ai.deployments.repository import (
     complete_registered_application_dispatch,
     complete_registered_application_termination_dispatch,
     complete_registered_application_upgrade_dispatch,
@@ -157,7 +157,7 @@ async def test_progress_update_persists_stage_and_event():
         message="Namespace tier2 created.",
     )
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -180,7 +180,7 @@ async def test_progress_update_is_idempotent_and_rejects_backward_steps():
     db = _db()
     instance = _instance(current_step="waiting_for_rollout")
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -217,7 +217,7 @@ async def test_failed_progress_records_reason_and_completion_time():
         failure_reason="Deployment did not become ready within 10 minutes.",
     )
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -237,7 +237,7 @@ async def test_rollback_reopens_failed_instance_without_erasing_history():
     instance.failure_reason = "Rollout failed"
     prior_event_count = len(instance.events)
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -262,7 +262,7 @@ async def test_rollback_rejects_an_active_deployment():
     db = _db()
     instance = _instance(status="deploying")
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -284,7 +284,7 @@ async def test_prepare_container_upgrade_changes_only_image_tag_and_preserves_hi
     previous_configuration = deepcopy(instance.configuration)
     previous_event_count = len(instance.events)
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -332,7 +332,7 @@ async def test_upgrade_rejects_same_version_unsupported_type_and_active_state():
     db = _db()
     instance = _container_instance()
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -382,7 +382,7 @@ async def test_prepare_github_upgrade_stores_version_without_changing_workflow_c
     }
     previous_configuration = deepcopy(instance.configuration)
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -428,7 +428,7 @@ async def test_prepare_github_upgrade_retries_failed_instance_with_same_version(
         },
     }
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -454,7 +454,7 @@ async def test_upgrade_progress_keeps_updating_status_and_does_not_reconfigure_d
     instance.current_step = "validating_configuration"
     instance.configuration["container"]["image_tag"] = "2.0.0"
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -492,7 +492,7 @@ async def test_failed_upgrade_records_reason_without_marking_dns_failed():
     instance = _container_instance(status="updating")
     instance.current_step = "waiting_for_rollout"
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -522,7 +522,7 @@ async def test_prepare_container_termination_preserves_configuration_and_history
     previous_configuration = deepcopy(instance.configuration)
     previous_event_count = len(instance.events)
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -565,7 +565,7 @@ async def test_termination_rejects_unsupported_type_and_active_operation():
     db = _db()
     instance = _container_instance()
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -594,7 +594,7 @@ async def test_termination_progress_deletes_dns_and_records_terminated_time():
     instance = _container_instance(status="terminating")
     instance.current_step = "validating_configuration"
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -645,7 +645,7 @@ async def test_failed_termination_records_failure_and_dns_state():
     instance.current_step = "configuring_dns"
     instance.dns_status = "deleting"
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -679,7 +679,7 @@ async def test_github_termination_completes_without_dns_stage():
         },
     }
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -722,7 +722,7 @@ async def test_container_dns_progress_becomes_active_on_completion():
     instance.hostname = "release-prod.amberd.ai"
     instance.dns_status = "pending"
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -757,7 +757,7 @@ async def test_github_deployment_rejects_dns_progress():
     db = _db()
     instance = _instance(current_step="verifying_deployment")
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,
@@ -781,7 +781,7 @@ async def test_container_deployment_cannot_complete_before_dns_stage():
     instance.hostname = "release-prod.amberd.ai"
     instance.dns_status = "pending"
     with patch(
-        "c2ai.crud.registered_application."
+        "c2ai.deployments.repository."
         "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=instance,

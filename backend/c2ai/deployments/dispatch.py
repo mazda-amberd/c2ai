@@ -9,12 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from c2ai.constants.registered_application import ApplicationType
 from c2ai.crud import (
     github_connection as crud_github_connection,
-    registered_application as crud_registered_application,
 )
-from c2ai.models.registered_application import RegisteredApplicationVersion
-from c2ai.services.registered_application_deployment import (
+from c2ai.deployments.pipelines import (
     dispatch_registered_application_deployment,
 )
+from c2ai.models.registered_application import RegisteredApplicationVersion
+from c2ai.registration import credentials
 
 
 async def dispatch_deployment(
@@ -46,13 +46,13 @@ async def dispatch_deployment(
     else:
         template = version.container_configuration
         if template is not None and template.registry_password_encrypted is not None:
-            registry = await crud_registered_application.resolve_container_registry_credentials(
+            registry = await credentials.resolve_container_registry_credentials(
                 db, version.id
             )
             if registry is not None:
                 options["registry_username"] = registry.username
                 options["registry_token"] = registry.password
-        options["llm_api_token"] = await crud_registered_application.resolve_llm_api_token(
+        options["llm_api_token"] = await credentials.resolve_llm_api_token(
             db, version.id
         )
     return await dispatch_registered_application_deployment(

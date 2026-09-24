@@ -12,18 +12,22 @@ from uuid import UUID
 import pytest
 
 from c2ai.core.exceptions import DeploymentAlreadyAtVersion
-from c2ai.crud.registered_application import (
-    ContainerRegistryRuntime,
+from c2ai.deployments.configuration import (
+    build_container_deployment_configuration,
+    configured_version,
+)
+from c2ai.deployments.pipelines import (
+    build_container_pipeline_payload,
+)
+from c2ai.deployments.repository import (
     prepare_registered_application_rollback,
     prepare_registered_application_upgrade,
 )
 from c2ai.models.registered_application import ContainerApplicationSecret
-from c2ai.schemas.registered_application import ContainerRegisteredApplicationDeploymentCreate
-from c2ai.services.registered_application_deployment import (
-    build_container_deployment_configuration,
-    build_container_pipeline_payload,
-    configured_version,
+from c2ai.registration.credentials import (
+    ContainerRegistryRuntime,
 )
+from c2ai.schemas.registered_application import ContainerRegisteredApplicationDeploymentCreate
 from tests.test_api_registered_applications import (
     _persisted_container_version,
     _upgradeable_container_instance,
@@ -32,8 +36,8 @@ from tests.test_api_registered_applications import (
 )
 from tests.test_registered_application_tracking import _container_instance, _db
 
-_CRUD = "c2ai.crud.registered_application.get_registered_application_deployment"
-_API = "c2ai.api.registered_applications"
+_CRUD = "c2ai.deployments.repository.get_registered_application_deployment"
+_API = "c2ai.api.registered_applications.deployments"
 
 
 def _secret(name: str, env: str, reference: str | None) -> ContainerApplicationSecret:
@@ -124,7 +128,7 @@ class TestRollback:
         instance.rollback_count = 1
         with (
             patch(
-                f"{_API}.crud_registered_application.prepare_registered_application_rollback",
+                "c2ai.deployments.repository.prepare_registered_application_rollback",
                 new_callable=AsyncMock,
                 return_value=instance,
             ),
@@ -137,7 +141,7 @@ class TestRollback:
                 "c2ai.deployments.dispatch.dispatch_registered_application_deployment", new_callable=AsyncMock
             ) as deploy_mock,
             patch(
-                f"{_API}.crud_registered_application.complete_registered_application_upgrade_dispatch",
+                "c2ai.deployments.repository.complete_registered_application_upgrade_dispatch",
                 new_callable=AsyncMock,
                 return_value=instance,
             ) as complete_mock,
@@ -161,17 +165,17 @@ class TestRollback:
         instance.rollback_count = 1
         with (
             patch(
-                f"{_API}.crud_registered_application.prepare_registered_application_rollback",
+                "c2ai.deployments.repository.prepare_registered_application_rollback",
                 new_callable=AsyncMock,
                 return_value=instance,
             ),
             patch(
-                f"{_API}.crud_registered_application.resolve_container_registry_credentials",
+                "c2ai.registration.credentials.resolve_container_registry_credentials",
                 new_callable=AsyncMock,
                 return_value=ContainerRegistryRuntime(username="amberd", password="reg-pass"),
             ),
             patch(
-                f"{_API}.crud_registered_application.resolve_llm_api_token",
+                "c2ai.registration.credentials.resolve_llm_api_token",
                 new_callable=AsyncMock,
                 return_value="llm-token",
             ),
@@ -181,7 +185,7 @@ class TestRollback:
                 return_value={"pipeline": "container"},
             ) as deploy_mock,
             patch(
-                f"{_API}.crud_registered_application.complete_registered_application_dispatch",
+                "c2ai.deployments.repository.complete_registered_application_dispatch",
                 new_callable=AsyncMock,
                 return_value=instance,
             ),
@@ -205,12 +209,12 @@ class TestRollback:
         runtime = SimpleNamespace(token="gh-token", api_base_url="https://ghe.example/api/v3")
         with (
             patch(
-                f"{_API}.crud_registered_application.prepare_registered_application_rollback",
+                "c2ai.deployments.repository.prepare_registered_application_rollback",
                 new_callable=AsyncMock,
                 return_value=instance,
             ),
             patch(
-                f"{_API}.crud_github_connection.resolve_github_connection",
+                "c2ai.crud.github_connection.resolve_github_connection",
                 new_callable=AsyncMock,
                 return_value=runtime,
             ),
@@ -220,7 +224,7 @@ class TestRollback:
                 return_value={"trigger_method": "workflow_dispatch"},
             ) as deploy_mock,
             patch(
-                f"{_API}.crud_registered_application.complete_registered_application_dispatch",
+                "c2ai.deployments.repository.complete_registered_application_dispatch",
                 new_callable=AsyncMock,
                 return_value=instance,
             ),

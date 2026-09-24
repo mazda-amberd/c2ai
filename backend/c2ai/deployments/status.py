@@ -20,13 +20,15 @@ from sqlalchemy.orm import selectinload
 
 from c2ai.constants.registered_application import DeploymentInstanceStatus
 from c2ai.deployments import operations
+from c2ai.deployments.configuration import (
+    configured_version,
+)
+from c2ai.deployments.tracking import (
+    get_registered_deployment_workflow_progress,
+)
 from c2ai.models.pipeline_run import PipelineRun
 from c2ai.models.registered_application import DeploymentInstance
 from c2ai.schemas.deployment import PipelineStatusOut
-from c2ai.services.github_workflow_progress import (
-    get_registered_deployment_workflow_progress,
-)
-from c2ai.services.registered_application_deployment import configured_version
 
 TERMINAL_VISIBILITY_WINDOW = timedelta(minutes=5)
 # Every open client polls /api/pipeline/active; cache each operation's GitHub

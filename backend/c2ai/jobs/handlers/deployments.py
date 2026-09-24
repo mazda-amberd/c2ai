@@ -15,14 +15,14 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 
 from c2ai.constants.registered_application import DeploymentStep
-from c2ai.crud import registered_application as crud
 from c2ai.db.session import AsyncSessionLocal
+from c2ai.deployments import repository as instances
 from c2ai.deployments.lifecycle import Outcome
-from c2ai.jobs.worker import JobContext, Schedule, job_handler, register_schedule
-from c2ai.models.pipeline_run import PipelineRun
-from c2ai.services.github_workflow_progress import (
+from c2ai.deployments.tracking import (
     get_registered_deployment_workflow_progress,
 )
+from c2ai.jobs.worker import JobContext, Schedule, job_handler, register_schedule
+from c2ai.models.pipeline_run import PipelineRun
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ async def reconcile_open_operations(session_factory=AsyncSessionLocal) -> dict:
     for _run_id, instance_id, dispatched_at in open_rows:
         checked += 1
         async with session_factory() as db:
-            instance = await crud.get_registered_application_deployment(
+            instance = await instances.get_registered_application_deployment(
                 db, instance_id, for_update=True
             )
             if instance is None:
@@ -60,7 +60,7 @@ async def reconcile_open_operations(session_factory=AsyncSessionLocal) -> dict:
             progressed = instance.current_step != DeploymentStep.VALIDATING_CONFIGURATION.value
             stale = dispatched_at is not None and now - dispatched_at > ABANDON_AFTER
             if not has_run and not progressed and stale:
-                await crud.settle_operation(
+                await instances.settle_operation(
                     db,
                     instance,
                     Outcome.ABANDONED,
