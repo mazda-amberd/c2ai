@@ -228,8 +228,9 @@ class TestGrafanaClient:
             assert "Tier 2" in tiers
             assert "Tier 3" in tiers
             assert "Tier 1" in gpu_totals
-            # fetch_grafana_data called for CPU, MEMORY, CPU_TOTAL (3 calls)
-            assert mock_fetch.call_count == 3
+            # fetch_grafana_data called for CPU and MEMORY only; the unused
+            # CPU_TOTAL series is no longer queried on every poll.
+            assert mock_fetch.call_count == 2
             mock_gpu_app.assert_awaited_once()
             mock_gpu_tier.assert_awaited_once()
 

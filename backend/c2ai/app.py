@@ -19,7 +19,6 @@ from c2ai.api.metrics import router as metrics_v2_router
 from c2ai.api.registered_applications import router as registered_applications_router
 from c2ai.api.troubleshooting import router as troubleshooting_router
 from c2ai.api.users import router as users_router
-from c2ai.auth.jwt import router as auth_router
 from c2ai.core.background import cancel_background_tasks
 from c2ai.core.exception_handlers import attach_exception_handlers
 from c2ai.core.frontend import setup_frontend_serving
@@ -67,7 +66,6 @@ def create_app(*, serve_frontend: bool = True) -> FastAPI:
         grafana_router,
         github_connections_router,
         auth_session_router,
-        auth_router,
         users_router,
         deployments_router,
         logs_router,

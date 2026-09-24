@@ -34,10 +34,7 @@ from c2ai.schemas.grafana import (
 )
 from c2ai.app import app
 from c2ai.auth.jwt import AthenaTokenUser, get_access_token, get_current_user_token
-from c2ai.core.exception_handlers import attach_exception_handlers
 
-# Match production `main.py`: handlers convert AppException / validation to JSON.
-attach_exception_handlers(app)
 
 _FAKE_USER = AthenaTokenUser(identifier="test-user", service="athena")
 

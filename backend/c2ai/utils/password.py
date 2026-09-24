@@ -10,12 +10,9 @@ import secrets
 import string
 from random import SystemRandom
 
-from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
 
 from c2ai.core.exceptions import PasswordValidationFailed
 
-ph = PasswordHasher()
 
 
 def generate_password() -> str:
@@ -73,21 +70,3 @@ def generate_password() -> str:
     tail = required + rest
     SystemRandom().shuffle(tail)
     return prefix + "".join(tail)
-
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """
-    Verify a plain-text password against its Argon2 hash.
-
-    Args:
-        plain_password: The password provided by the user.
-        hashed_password: The Argon2 hash stored in the database.
-
-    Returns:
-        True if the password matches, False otherwise.
-    """
-    try:
-        ph.verify(hashed_password, plain_password)
-        return True
-    except VerifyMismatchError:
-        return False

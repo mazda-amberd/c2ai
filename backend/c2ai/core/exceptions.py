@@ -651,5 +651,9 @@ def InvalidTokenExpirationFormat(
 
 
 def AdminPrivilegesRequired(detail: str = "Admin privileges required") -> AppException:
-    """Factory for a 401 admin privileges required error."""
-    return UnauthorizedError(detail=detail, code="AdminPrivilegesRequired")
+    """Factory for a 403 error: authenticated, but not an administrator.
+
+    This must not be 401 — the UI treats 401 as "session ended" and signs the
+    user out.
+    """
+    return ForbiddenError(detail=detail, code="AdminPrivilegesRequired")

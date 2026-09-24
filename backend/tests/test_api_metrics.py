@@ -25,7 +25,7 @@ class TestHealthEndpoint:
 class TestMetricsEndpoint:
     """Tests for the /api/metrics endpoint."""
 
-    def test_get_metrics_success(self, test_client):
+    def test_get_metrics_success(self, deploy_auth_client):
         """Test successful metrics retrieval — response includes tiers and tier_gpu_totals."""
         mock_tiers = {
             "Tier 1": [
@@ -61,7 +61,7 @@ class TestMetricsEndpoint:
             mock_client.get_all_metrics.return_value = (mock_tiers, mock_gpu_totals)
             mock_get_client.return_value = mock_client
 
-            response = test_client.get("/api/metrics")
+            response = deploy_auth_client.get("/api/metrics")
 
             mock_persist.assert_awaited_once()
 
@@ -77,7 +77,7 @@ class TestMetricsEndpoint:
             assert data["tiers"]["Tier 1"][0]["version"] == "26.02.abc1234"
             assert abs(data["tier_gpu_totals"]["Tier 1"] - 8.9) < 0.01
 
-    def test_get_metrics_with_tier_filter(self, test_client):
+    def test_get_metrics_with_tier_filter(self, deploy_auth_client):
         """Test metrics retrieval with tier filter."""
         mock_tiers = {
             "Tier 2": [
@@ -110,12 +110,12 @@ class TestMetricsEndpoint:
             mock_client.get_all_metrics.return_value = (mock_tiers, mock_gpu_totals)
             mock_get_client.return_value = mock_client
 
-            response = test_client.get("/api/metrics?tier=2")
+            response = deploy_auth_client.get("/api/metrics?tier=2")
 
             assert response.status_code == 200
             mock_client.get_all_metrics.assert_called_once_with(tier=2)
 
-    def test_get_metrics_version_lookup_failure_is_non_fatal(self, test_client):
+    def test_get_metrics_version_lookup_failure_is_non_fatal(self, deploy_auth_client):
         """A failed per-instance version lookup should not fail the full metrics response."""
         mock_tiers = {
             "Tier 1": [
@@ -167,26 +167,26 @@ class TestMetricsEndpoint:
             )
             mock_get_client.return_value = mock_client
 
-            response = test_client.get("/api/metrics")
+            response = deploy_auth_client.get("/api/metrics")
 
             assert response.status_code == 200
             data = response.json()
             assert data["tiers"]["Tier 1"][0]["version"] == "26.02.abc1234"
             assert data["tiers"]["Tier 1"][1]["version"] is None
 
-    def test_get_metrics_invalid_tier(self, test_client):
+    def test_get_metrics_invalid_tier(self, deploy_auth_client):
         """Test that invalid tier values are rejected."""
-        response = test_client.get("/api/metrics?tier=5")
+        response = deploy_auth_client.get("/api/metrics?tier=5")
         
         assert response.status_code == 422  # Validation error
 
-    def test_get_metrics_tier_zero(self, test_client):
+    def test_get_metrics_tier_zero(self, deploy_auth_client):
         """Test that tier=0 is rejected."""
-        response = test_client.get("/api/metrics?tier=0")
+        response = deploy_auth_client.get("/api/metrics?tier=0")
         
         assert response.status_code == 422  # Validation error
 
-    def test_get_metrics_error_handling(self, test_client):
+    def test_get_metrics_error_handling(self, deploy_auth_client):
         """Test error handling when Grafana API fails."""
         with (
             patch("c2ai.api.grafana.get_grafana_client") as mock_get_client,
@@ -199,14 +199,14 @@ class TestMetricsEndpoint:
             mock_client.get_all_metrics.side_effect = Exception("Connection failed")
             mock_get_client.return_value = mock_client
 
-            response = test_client.get("/api/metrics")
+            response = deploy_auth_client.get("/api/metrics")
 
             assert response.status_code == 500
             data = response.json()
             assert "detail" in data
             assert data["detail"]["error"] == "Grafana request failed"
 
-    def test_tier_gpu_totals_null_for_tier4(self, test_client):
+    def test_tier_gpu_totals_null_for_tier4(self, deploy_auth_client):
         """Tier 4 has no GPU — tier_gpu_totals entry is null in JSON."""
         mock_tiers = {"Tier 1": [], "Tier 2": [], "Tier 3": [], "Tier 4": None}
         mock_gpu_totals = {"Tier 1": 0.0, "Tier 2": 0.0, "Tier 3": 0.0, "Tier 4": None}
@@ -222,7 +222,7 @@ class TestMetricsEndpoint:
             mock_client.get_all_metrics.return_value = (mock_tiers, mock_gpu_totals)
             mock_get_client.return_value = mock_client
 
-            response = test_client.get("/api/metrics")
+            response = deploy_auth_client.get("/api/metrics")
 
             assert response.status_code == 200
             data = response.json()

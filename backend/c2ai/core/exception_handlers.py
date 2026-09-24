@@ -9,7 +9,8 @@ All validation errors are handled by a single unified function.
 import logging
 from typing import Any
 
-from fastapi import FastAPI, Request, HTTPException as FastAPIHTTPException
+from fastapi import FastAPI, Request
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError as PydanticValidationError
@@ -48,7 +49,7 @@ async def app_exception_handler(request: Request, exc: AppException):
     return JSONResponse(status_code=exc.status_code, content=_json_error(exc.detail, exc.code))
 
 
-async def http_exception_handler(request: Request, exc: FastAPIHTTPException):
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     """
     Handles FastAPI HTTPException errors.
 
@@ -61,7 +62,11 @@ async def http_exception_handler(request: Request, exc: FastAPIHTTPException):
     """
     code = getattr(exc, "code", f"HTTP_{exc.status_code}")
     logger.warning("HTTPException: %s %s", exc.status_code, exc.detail)
-    return JSONResponse(status_code=exc.status_code, content=_json_error(exc.detail, code))
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=_json_error(exc.detail, code),
+        headers=getattr(exc, "headers", None),
+    )
 
 
 def _normalize_validation_errors(exc: Any):
@@ -120,7 +125,8 @@ def attach_exception_handlers(app: FastAPI):
         app: The FastAPI application instance.
     """
     app.add_exception_handler(AppException, app_exception_handler)
-    app.add_exception_handler(FastAPIHTTPException, http_exception_handler)
+    # Starlette's base class also covers routing 404/405s, not just FastAPI raises.
+    app.add_exception_handler(StarletteHTTPException, http_exception_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(PydanticValidationError, validation_error_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)

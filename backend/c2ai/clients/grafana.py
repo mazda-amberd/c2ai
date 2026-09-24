@@ -828,7 +828,7 @@ class GrafanaClient:
         cpu_data: GrafanaResponse,
         memory_data: GrafanaResponse,
         gpu_data: GrafanaResponse,
-        cpu_total_data: GrafanaResponse,
+        cpu_total_data: Optional[GrafanaResponse] = None,
         gpu_per_app_data: Optional[GrafanaResponse] = None,
     ) -> tuple[dict[str, Optional[list[Instance]]], dict[str, Optional[float]]]:
         """
@@ -846,7 +846,7 @@ class GrafanaClient:
             cpu_data:          Grafana response — CPU cores/sec per deployment.
             memory_data:       Grafana response — memory GB per deployment.
             gpu_data:          Tier-total GPU response (ref A) — ``label_tier`` → value.
-            cpu_total_data:    Unused; kept for API compatibility.
+            cpu_total_data:    Ignored; accepted for backwards compatibility.
             gpu_per_app_data:  Optional — panel 18 per-namespace GPU attribution.
 
         Returns:
@@ -966,10 +966,9 @@ class GrafanaClient:
         """
         Fetch all metrics from Grafana in parallel and return combined data.
 
-        Fetches five Grafana requests concurrently:
+        Fetches four Grafana requests concurrently:
           - CPU, Memory (refIds A/B/C per tier)
           - Tier-total GPU: single query (``label_tier`` dimension), ref A
-          - CPU total
           - Per-app GPU: panel 18 (ref A)
 
         Args:
@@ -980,22 +979,15 @@ class GrafanaClient:
               tiers:      tier name → list of Instance objects.
               gpu_totals: tier name → tier-wide GPU percentage.
         """
-        (
-            cpu_data,
-            memory_data,
-            gpu_tier_data,
-            cpu_total_data,
-            gpu_per_app_data,
-        ) = await asyncio.gather(
+        cpu_data, memory_data, gpu_tier_data, gpu_per_app_data = await asyncio.gather(
             self.fetch_grafana_data(MetricType.CPU),
             self.fetch_grafana_data(MetricType.MEMORY),
             self.fetch_gpu_tier_totals(),
-            self.fetch_grafana_data(MetricType.CPU_TOTAL),
             self.fetch_gpu_per_app_data(),
         )
 
         tiers, gpu_totals = self.combine_metrics(
-            cpu_data, memory_data, gpu_tier_data, cpu_total_data, gpu_per_app_data
+            cpu_data, memory_data, gpu_tier_data, gpu_per_app_data=gpu_per_app_data
         )
 
         if tier is not None and 1 <= tier <= 3:
