@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import asyncio
+from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,20 +24,29 @@ from c2ai.config import check_startup_settings, get_settings
 from c2ai.core.background import cancel_background_tasks
 from c2ai.core.exception_handlers import attach_exception_handlers
 from c2ai.core.frontend import setup_frontend_serving
-from c2ai.services.financial_ingestion_runner import (
-    start_financial_ingestion_scheduler,
-    stop_financial_ingestion_scheduler,
-)
+from c2ai.jobs import Worker, get_job_store
+from c2ai.jobs.worker import set_in_process_worker
 
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     check_startup_settings()
-    scheduler_task, scheduler_stop = start_financial_ingestion_scheduler()
+    settings = get_settings()
+    worker_task = None
+    stop = asyncio.Event()
+    if settings.run_worker:
+        worker = Worker(get_job_store(), poll_seconds=settings.worker_poll_seconds)
+        set_in_process_worker(worker)
+        worker_task = asyncio.create_task(worker.run(stop), name="c2ai-job-worker")
     try:
         yield
     finally:
-        await stop_financial_ingestion_scheduler(scheduler_task, scheduler_stop)
+        stop.set()
+        if worker_task is not None:
+            worker_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await worker_task
+            set_in_process_worker(None)
         await cancel_background_tasks()
         await close_http_clients()
 

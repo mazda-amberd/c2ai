@@ -1,6 +1,5 @@
 """Tests for advisory-locked gateway polling orchestration."""
 
-import asyncio
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -11,9 +10,7 @@ import pytest
 from c2ai.services.financial_ingestion_runner import (
     FinancialIngestionRunResult,
     financial_ingestion_advisory_lock,
-    financial_ingestion_loop,
     run_gateway_cost_ingestion_once,
-    start_financial_ingestion_scheduler,
 )
 from c2ai.services.gateway_cost_ingestion import GatewayCostIngestionResult
 
@@ -179,47 +176,3 @@ async def test_grafana_failure_propagates_and_releases_lock():
         )
 
     assert released is True
-
-
-def test_scheduler_can_be_disabled(monkeypatch):
-    monkeypatch.setenv("ATHENA_FINANCIAL_INGESTION_ENABLED", "false")
-
-    assert start_financial_ingestion_scheduler() == (None, None)
-
-
-@pytest.mark.asyncio
-async def test_scheduler_retries_after_a_failed_run(monkeypatch):
-    stop_event = asyncio.Event()
-    attempts = 0
-
-    async def scheduled_run():
-        nonlocal attempts
-        attempts += 1
-        if attempts == 1:
-            raise RuntimeError("temporary gateway failure")
-        stop_event.set()
-        return FinancialIngestionRunResult(
-            lock_acquired=True,
-            period_start=START,
-            period_end=END,
-        )
-
-    async def immediate_timeout(waitable, *, timeout):
-        del timeout
-        waitable.close()
-        raise TimeoutError
-
-    monkeypatch.setenv("ATHENA_FINANCIAL_POLL_SECONDS", "1")
-    with (
-        patch(
-            "c2ai.services.financial_ingestion_runner.run_gateway_cost_ingestion_once",
-            side_effect=scheduled_run,
-        ),
-        patch(
-            "c2ai.services.financial_ingestion_runner.asyncio.wait_for",
-            side_effect=immediate_timeout,
-        ),
-    ):
-        await financial_ingestion_loop(stop_event)
-
-    assert attempts == 2

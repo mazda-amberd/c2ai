@@ -1,11 +1,10 @@
-"""Operational runner for advisory-locked Grafana LLM cost ingestion."""
+"""One advisory-locked Grafana LLM cost poll (scheduled as the ``financial.ingest`` job)."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -14,7 +13,6 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from c2ai.clients.grafana import GrafanaClient
-from c2ai.config import get_settings
 from c2ai.db.session import AsyncSessionLocal, engine
 from c2ai.services.gateway_cost_ingestion import ingest_gateway_costs
 
@@ -40,11 +38,6 @@ class FinancialIngestionRunResult:
     attributed_public_tokens: Decimal = Decimal("0")
     unmapped_namespaces: tuple[str, ...] = ()
     unpriced_models: tuple[str, ...] = ()
-
-
-def financial_ingestion_enabled() -> bool:
-    """Whether the in-process gateway polling scheduler should run."""
-    return get_settings().financial_ingestion_enabled
 
 
 @asynccontextmanager
@@ -97,76 +90,3 @@ async def run_gateway_cost_ingestion_once(
             unmapped_namespaces=ingestion.unmapped_namespaces,
             unpriced_models=ingestion.unpriced_models,
         )
-
-
-async def financial_ingestion_loop(stop_event: asyncio.Event) -> None:
-    """Poll immediately and then at the configured interval."""
-    poll_seconds = get_settings().financial_poll_seconds
-    while not stop_event.is_set():
-        try:
-            result = await run_gateway_cost_ingestion_once()
-            if not result.lock_acquired:
-                logger.info(
-                    "Financial ingestion skipped: another replica holds the lock"
-                )
-            elif result.baseline_created:
-                logger.info(
-                    "Financial ingestion stored the initial LLM gateway baseline at %s",
-                    result.period_end.isoformat() if result.period_end else "unknown",
-                )
-            else:
-                logger.info(
-                    "Financial ingestion completed: private_records=%s "
-                    "public_records=%s "
-                    "observed_duration_seconds=%s attributed_duration_seconds=%s "
-                    "attributed_public_tokens=%s period=%s..%s",
-                    result.records_processed,
-                    result.public_records_processed,
-                    result.observed_duration_seconds,
-                    result.attributed_duration_seconds,
-                    result.attributed_public_tokens,
-                    result.period_start.isoformat()
-                    if result.period_start
-                    else "unknown",
-                    result.period_end.isoformat() if result.period_end else "unknown",
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception(
-                "Financial ingestion failed; stored costs were left intact"
-            )
-
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=poll_seconds)
-        except asyncio.TimeoutError:  # the poll interval elapsed; poll again
-            continue
-
-
-def start_financial_ingestion_scheduler() -> tuple[
-    asyncio.Task | None, asyncio.Event | None
-]:
-    """Start gateway polling when enabled by configuration."""
-    if not financial_ingestion_enabled():
-        logger.info("Financial ingestion scheduler is disabled")
-        return None, None
-    stop_event = asyncio.Event()
-    task = asyncio.create_task(
-        financial_ingestion_loop(stop_event),
-        name="athena-financial-ingestion",
-    )
-    return task, stop_event
-
-
-async def stop_financial_ingestion_scheduler(
-    task: asyncio.Task | None,
-    stop_event: asyncio.Event | None,
-) -> None:
-    """Signal and cancel the scheduler without delaying application shutdown."""
-    if task is None:
-        return
-    if stop_event is not None:
-        stop_event.set()
-    task.cancel()
-    with suppress(asyncio.CancelledError):
-        await task

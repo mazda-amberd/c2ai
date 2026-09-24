@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime, timedelta
+from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -11,11 +12,13 @@ from langchain_core.messages import AIMessage
 from c2ai.api import troubleshooting as api
 from c2ai.app import app
 from c2ai.auth.jwt import AthenaTokenUser
+from c2ai.jobs import MemoryJobStore, Worker, get_job_notifier, get_job_store
 from c2ai.schemas.troubleshooting import (
     TroubleshootingEvent,
     TroubleshootingMetric,
     TroubleshootingMetricQuery,
 )
+from c2ai.services import troubleshooting_report as reports
 from c2ai.services.troubleshooting_metrics import (
     load_configured_metric_queries,
     unavailable_metrics,
@@ -27,6 +30,22 @@ def _default_troubleshooting_window():
     app.dependency_overrides[api.get_troubleshooting_window_hours] = lambda: 4
     yield
     app.dependency_overrides.pop(api.get_troubleshooting_window_hours, None)
+
+
+@pytest.fixture(autouse=True)
+def job_store():
+    """Jobs go to an in-memory queue and run right after each request."""
+
+    store = MemoryJobStore()
+
+    async def run_queued_jobs():
+        await Worker(store, schedules=[]).run_once()
+
+    app.dependency_overrides[get_job_store] = lambda: store
+    app.dependency_overrides[get_job_notifier] = lambda: run_queued_jobs
+    yield store
+    app.dependency_overrides.pop(get_job_store, None)
+    app.dependency_overrides.pop(get_job_notifier, None)
 
 
 def _event(
@@ -186,18 +205,34 @@ class GroundedFakeLLM:
         )
 
 
+_provider_patches: list = []
+
+
 def _override_dependencies(data_provider: FakeDataProvider, llm_provider):
-    app.dependency_overrides[api.get_troubleshooting_data_provider] = (
-        lambda: data_provider
-    )
-    app.dependency_overrides[api.get_troubleshooting_llm_provider] = (
-        lambda: llm_provider
-    )
+    # The /report endpoint resolves providers through FastAPI; the job worker
+    # calls the same hooks directly.
+    app.dependency_overrides[reports.troubleshooting_data_provider] = lambda: data_provider
+    app.dependency_overrides[reports.troubleshooting_llm_provider] = lambda: llm_provider
+    for name, value in (
+        ("troubleshooting_data_provider", data_provider),
+        ("troubleshooting_llm_provider", llm_provider),
+    ):
+        patcher = patch.object(reports, name, lambda value=value: value)
+        patcher.start()
+        _provider_patches.append(patcher)
 
 
 def _clear_dependencies():
-    app.dependency_overrides.pop(api.get_troubleshooting_data_provider, None)
-    app.dependency_overrides.pop(api.get_troubleshooting_llm_provider, None)
+    app.dependency_overrides.pop(reports.troubleshooting_data_provider, None)
+    app.dependency_overrides.pop(reports.troubleshooting_llm_provider, None)
+    while _provider_patches:
+        _provider_patches.pop().stop()
+
+
+@pytest.fixture(autouse=True)
+def _reset_providers():
+    yield
+    _clear_dependencies()
 
 
 class TestTroubleshootingReport:
@@ -210,7 +245,7 @@ class TestTroubleshootingReport:
 
     def test_returns_grounded_batch_report(self, deploy_auth_client, monkeypatch):
         fixed_now = datetime(2026, 8, 19, 8, 0, tzinfo=UTC)
-        monkeypatch.setattr(api, "_utcnow", lambda: fixed_now)
+        monkeypatch.setattr(reports, "_utcnow", lambda: fixed_now)
         events = [
             _event(
                 1,
@@ -453,12 +488,6 @@ class TestTroubleshootingReport:
 
 
 class TestTroubleshootingJobs:
-    def setup_method(self):
-        api._job_store.clear()
-
-    def teardown_method(self):
-        api._job_store.clear()
-
     def test_creates_job_and_returns_completed_batch_on_poll(
         self,
         deploy_auth_client,
@@ -634,7 +663,10 @@ class TestTroubleshootingJobs:
         llm = GroundedFakeLLM()
         phases = []
 
-        report = await api._build_troubleshooting_report(
+        async def record(phase):
+            phases.append(phase)
+
+        report = await reports.build_troubleshooting_report(
             api.TroubleshootingReportRequest(
                 subdomain="amberd-acme-ada",
                 deployment="my-app",
@@ -642,7 +674,7 @@ class TestTroubleshootingJobs:
             data_provider,
             lambda: llm,
             4,
-            on_phase=phases.append,
+            on_phase=record,
         )
 
         assert report.summary == "The worker is repeatedly failing."
