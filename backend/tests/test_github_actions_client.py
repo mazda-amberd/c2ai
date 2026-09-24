@@ -23,7 +23,7 @@ async def test_repository_refs_are_paginated_and_authenticated(kind, count):
 
     http_client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
     client = GitHubActionsClient(repo_owner="amberd-ai", repo_name="code", github_token="test-token")
-    with patch("c2ai.clients.github_actions.httpx.AsyncClient", return_value=http_client):
+    with patch("c2ai.clients.github_actions.http_client", return_value=http_client):
         refs = await getattr(client, f"list_repository_{kind}")()
     assert refs == [f"v{i}" for i in range(count)]
     assert len(requests) == (2 if count > 100 else 1)
@@ -45,7 +45,7 @@ async def test_workflow_dispatch_uses_filename_when_registration_stores_full_pat
     )
 
     with patch(
-        "c2ai.clients.github_actions.httpx.AsyncClient",
+        "c2ai.clients.github_actions.http_client",
         return_value=http_context,
     ):
         reference = await client.trigger_workflow(
@@ -88,7 +88,7 @@ async def test_workflow_dispatch_preserves_numeric_workflow_id():
     )
 
     with patch(
-        "c2ai.clients.github_actions.httpx.AsyncClient",
+        "c2ai.clients.github_actions.http_client",
         return_value=http_context,
     ):
         reference = await client.trigger_workflow("123456", "main", {})
@@ -118,7 +118,7 @@ async def test_workflow_dispatch_captures_returned_run_details():
     )
 
     with patch(
-        "c2ai.clients.github_actions.httpx.AsyncClient",
+        "c2ai.clients.github_actions.http_client",
         return_value=http_context,
     ):
         reference = await client.trigger_workflow("deploy.yml", "main", {})

@@ -4,17 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 
 import httpx
 
+from c2ai.clients.http import http_client
+from c2ai.config import get_settings
 from c2ai.schemas.grafana import Instance
 
 logger = logging.getLogger(__name__)
 
 _VERSION_LOOKUP_TIMEOUT = 2.0
 _VERSION_LOOKUP_CONCURRENCY = 8
-_INSTANCE_DOMAIN = os.getenv("ATHENA_INSTANCE_DOMAIN", "amberd.ai")
 
 
 class InstanceVersionClient:
@@ -28,7 +28,7 @@ class InstanceVersionClient:
 
     def __init__(
         self,
-        domain: str = _INSTANCE_DOMAIN,
+        domain: str | None = None,
         timeout: float = _VERSION_LOOKUP_TIMEOUT,
     ):
         """
@@ -41,7 +41,7 @@ class InstanceVersionClient:
         Returns:
             None: This constructor does not return a value.
         """
-        self.domain = domain
+        self.domain = domain or get_settings().instance_domain
         self.timeout = timeout
 
     def build_version_url(self, subdomain: str) -> str:
@@ -117,7 +117,7 @@ async def enrich_tiers_with_versions(
     resolved_client = version_client or InstanceVersionClient()
     semaphore = asyncio.Semaphore(_VERSION_LOOKUP_CONCURRENCY)
 
-    async with httpx.AsyncClient() as http_client:
+    async with http_client() as shared_client:
         async def enrich_instance(instance: Instance) -> None:
             """
             Enrich one instance in-place with version metadata.
@@ -130,7 +130,7 @@ async def enrich_tiers_with_versions(
             """
             async with semaphore:
                 instance.version = await resolved_client.fetch_instance_version(
-                    http_client,
+                    shared_client,
                     instance.nodename,
                 )
 

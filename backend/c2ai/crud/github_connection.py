@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -11,6 +10,7 @@ from sqlalchemy import distinct, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from c2ai.config import get_settings
 from c2ai.core.exceptions import DuplicateGitHubConnection, ServiceUnavailableError
 from c2ai.models.registered_application import (
     GitHubApplicationConfiguration,
@@ -32,7 +32,7 @@ class GitHubConnectionRuntime:
 
 
 def _encryption_key() -> str:
-    key = os.getenv("ATHENA_CREDENTIAL_ENCRYPTION_KEY", "").strip()
+    key = get_settings().credential_encryption_key.strip()
     if not key:
         raise ServiceUnavailableError(
             "Credential storage is not configured. Set "

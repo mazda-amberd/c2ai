@@ -8,6 +8,7 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
+from c2ai.clients.http import get_http_client
 from c2ai.core.exceptions import ServiceUnavailableError
 from c2ai.crud.github_connection import github_api_base_url
 
@@ -55,8 +56,7 @@ async def validate_github_repository_connection(
         "X-GitHub-Api-Version": "2022-11-28",
     }
 
-    owns_client = client is None
-    github_client = client or httpx.AsyncClient(timeout=15.0, follow_redirects=True)
+    github_client = client or get_http_client(15.0, follow_redirects=True)
     try:
         response = await github_client.get(url, headers=headers)
     except httpx.RequestError as error:
@@ -68,9 +68,6 @@ async def validate_github_repository_connection(
         raise ServiceUnavailableError(
             "GitHub could not be reached to validate the connection. Try again shortly."
         ) from error
-    finally:
-        if owns_client:
-            await github_client.aclose()
 
     if response.status_code == 200:
         try:

@@ -5,11 +5,11 @@ Password generation and verification helpers.
 
 from __future__ import annotations
 
-import os
 import secrets
 import string
 from random import SystemRandom
 
+from c2ai.config import get_settings
 from c2ai.core.exceptions import PasswordValidationFailed
 
 
@@ -32,18 +32,15 @@ def generate_password() -> str:
     Raises:
         PasswordValidationFailed: If configuration is invalid.
     """
-    prefix = os.getenv("PASSWORD_PREFIX", "")
-    specials = os.getenv("PASSWORD_SPECIALS", "!@#$%^&*()_+-")
+    settings = get_settings()
+    prefix = settings.password_prefix
+    specials = settings.password_specials
     if not specials:
         raise PasswordValidationFailed(
             "PASSWORD_SPECIALS must contain at least one character"
         )
 
-    pass_len = os.getenv("PASSWORD_LENGTH", 10)
-    try:
-        length = int(pass_len)
-    except (TypeError, ValueError) as error:
-        raise PasswordValidationFailed("PASSWORD_LENGTH must be an integer") from error
+    length = settings.password_length
 
     if length <= len(prefix):
         raise PasswordValidationFailed(

@@ -3,24 +3,14 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from collections.abc import Iterable
-from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
-from c2ai.clients.github import (
-    GITHUB_REPO_NAME,
-    GITHUB_REPO_OWNER,
-    GITHUB_WORKFLOW_TERMINATE,
-    GITHUB_WORKFLOW_UPDATE,
-    dispatch_github_terminate_workflow,
-    dispatch_github_update_workflow,
-    get_devops_branch,
-)
 from c2ai.clients.github_actions import GitHubActionsClient
+from c2ai.config import get_settings
 from c2ai.constants.registered_application import ApplicationType
 from c2ai.core.exceptions import UnprocessableEntityError
 from c2ai.models.registered_application import RegisteredApplicationVersion
@@ -66,7 +56,10 @@ _CONTAINER_REGISTRY_LABELS = {
 # person. Athena fills it from the triggering user so neither registration nor
 # deployment has to ask for it.
 SLACK_USER_PARAMETER = "slack_user"
-_DEFAULT_SLACK_USER_REPO_OWNERS = "amberd-ai"
+# Amberd's predefined in-place workflows for GitHub Workflow applications.
+GITHUB_WORKFLOW_UPDATE = "ada-update.yaml"
+GITHUB_WORKFLOW_MOVE_TIER = "ada-move-to-tier.yaml"
+GITHUB_WORKFLOW_TERMINATE = "ada-terminate.yaml"
 _INSTANCE_NAME_SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
@@ -444,16 +437,11 @@ def resolve_github_deployment_instance_name(
     return resolve_github_workflow_subdomain(configuration, instance_name=fallback)
 
 
-def _slack_user_repo_owners() -> set[str]:
-    raw = os.getenv("SLACK_USER_DEFAULT_REPO_OWNERS", _DEFAULT_SLACK_USER_REPO_OWNERS)
-    return {owner.strip().lower() for owner in raw.split(",") if owner.strip()}
-
-
 def workflow_accepts_default_slack_user(repository: str) -> bool:
     """Whether this workflow repository's owner declares the slack_user input."""
 
     owner = repository.split("/", 1)[0].strip().lower()
-    return bool(owner) and owner in _slack_user_repo_owners()
+    return bool(owner) and owner in get_settings().slack_user_default_owner_set
 
 
 def resolve_github_workflow_subdomain(
@@ -497,7 +485,26 @@ def _stringify_inputs(values: dict[str, Any]) -> dict[str, str]:
 def _callback_base_url() -> str:
     """Athena's public base URL, which the pipeline posts its status back to."""
 
-    return os.getenv("ATHENA_CALLBACK_BASE_URL", "https://athena.amberd.ai").rstrip("/")
+    return get_settings().callback_base_url.rstrip("/")
+
+
+def _pipeline_client(owner_repository: str) -> GitHubActionsClient:
+    """Client for one of Amberd's pipeline repositories (``owner/name``)."""
+
+    owner, repository = owner_repository.split("/", 1)
+    return GitHubActionsClient(repo_owner=owner, repo_name=repository)
+
+
+async def dispatch_devops_workflow(workflow: str, inputs: dict[str, Any]) -> dict[str, Any]:
+    """``workflow_dispatch`` one of the ada-* workflows in the devops repository."""
+
+    settings = get_settings()
+    client = GitHubActionsClient(
+        repo_owner=settings.github_repo_owner, repo_name=settings.github_repo_name
+    )
+    return await client.trigger_workflow(
+        workflow, settings.devops_branch, _stringify_inputs(inputs)
+    )
 
 
 def _json_number(value: Any, *, default: int) -> str:
@@ -686,21 +693,11 @@ async def dispatch_registered_application_deployment(
             "ref": github.ref,
         }
 
-    owner_repository = os.getenv(
-        "CONTAINER_DEPLOYMENT_REPOSITORY",
-        "amberd-ai/devops",
-    )
-    owner, repository = owner_repository.split("/", 1)
-    workflow = os.getenv(
-        "CONTAINER_DEPLOYMENT_WORKFLOW",
-        "containerized-app-deploy.yaml",
-    )
-    ref = os.getenv("DEVOPS_BRANCH", "main")
-    event_type = os.getenv(
-        "CONTAINER_DEPLOYMENT_EVENT_TYPE",
-        "containerized-deploy",
-    )
-    client = GitHubActionsClient(repo_owner=owner, repo_name=repository)
+    settings = get_settings()
+    workflow = settings.container_deployment_workflow
+    ref = settings.devops_branch
+    event_type = settings.container_deployment_event_type
+    client = _pipeline_client(settings.container_deployment_repository)
     # The pipeline accepts both triggers, but workflow_dispatch rejects an empty
     # value for any input it declares as required — an application with no
     # persistent volume has one. repository_dispatch carries the same fields
@@ -767,26 +764,22 @@ async def _dispatch_upgrade(
 
     application_type = version.application.application_type
     if application_type == ApplicationType.GITHUB_WORKFLOW.value:
-        dispatched_at = datetime.now(UTC).isoformat()
         subdomain = resolve_github_workflow_subdomain(
             configuration,
             instance_name=instance_name,
         )
-        await dispatch_github_update_workflow(
-            correlation_id=str(deployment_id),
-            branch=target_version,
-            subdomain=subdomain,
-            triggered_by=triggered_by,
+        reference = await dispatch_devops_workflow(
+            GITHUB_WORKFLOW_UPDATE,
+            {
+                "slack_user": triggered_by,
+                "subdomain": subdomain,
+                "branch": target_version,
+                "deployment_id": str(deployment_id),
+            },
         )
         return {
-            "trigger_method": "workflow_dispatch",
+            **reference,
             "subdomain": subdomain,
-            "workflow_id": GITHUB_WORKFLOW_UPDATE,
-            "repo_owner": GITHUB_REPO_OWNER,
-            "repo_name": GITHUB_REPO_NAME,
-            "ref": get_devops_branch(),
-            "api_base_url": "https://api.github.com",
-            "dispatched_at": dispatched_at,
             "version": target_version,
             "pipeline": "github-upgrade",
             "operation": "upgrade",
@@ -797,20 +790,11 @@ async def _dispatch_upgrade(
             "Upgrade dispatch does not support this application type."
         )
 
-    owner_repository = os.getenv(
-        "CONTAINER_UPGRADE_REPOSITORY",
-        "amberd-ai/devops",
-    )
-    owner, repository = owner_repository.split("/", 1)
-    workflow = os.getenv(
-        "CONTAINER_UPGRADE_WORKFLOW",
-        "containerized-app-update.yaml",
-    )
-    ref = os.getenv("DEVOPS_BRANCH", "main")
-    client = GitHubActionsClient(repo_owner=owner, repo_name=repository)
+    settings = get_settings()
+    client = _pipeline_client(settings.container_upgrade_repository)
     reference = await client.trigger_workflow(
-        workflow,
-        ref,
+        settings.container_upgrade_workflow,
+        settings.devops_branch,
         _stringify_inputs(
             {
                 "triggered_by": triggered_by,
@@ -841,25 +825,21 @@ async def dispatch_registered_application_termination(
 
     application_type = version.application.application_type
     if application_type == ApplicationType.GITHUB_WORKFLOW.value:
-        dispatched_at = datetime.now(UTC).isoformat()
         subdomain = resolve_github_workflow_subdomain(
             configuration,
             instance_name=instance_name,
         )
-        await dispatch_github_terminate_workflow(
-            subdomain,
-            correlation_id=str(deployment_id),
-            triggered_by=triggered_by,
+        reference = await dispatch_devops_workflow(
+            GITHUB_WORKFLOW_TERMINATE,
+            {
+                "slack_user": triggered_by,
+                "subdomain": subdomain,
+                "deployment_id": str(deployment_id),
+            },
         )
         return {
-            "trigger_method": "workflow_dispatch",
+            **reference,
             "subdomain": subdomain,
-            "workflow_id": GITHUB_WORKFLOW_TERMINATE,
-            "repo_owner": GITHUB_REPO_OWNER,
-            "repo_name": GITHUB_REPO_NAME,
-            "ref": get_devops_branch(),
-            "api_base_url": "https://api.github.com",
-            "dispatched_at": dispatched_at,
             "pipeline": "github-termination",
             "operation": "terminate",
         }
@@ -869,20 +849,11 @@ async def dispatch_registered_application_termination(
             "Termination dispatch does not support this application type."
         )
 
-    owner_repository = os.getenv(
-        "CONTAINER_TERMINATION_REPOSITORY",
-        "amberd-ai/devops",
-    )
-    owner, repository = owner_repository.split("/", 1)
-    workflow = os.getenv(
-        "CONTAINER_TERMINATION_WORKFLOW",
-        "containerized-app-terminate.yaml",
-    )
-    ref = os.getenv("DEVOPS_BRANCH", "main")
-    client = GitHubActionsClient(repo_owner=owner, repo_name=repository)
+    settings = get_settings()
+    client = _pipeline_client(settings.container_termination_repository)
     reference = await client.trigger_workflow(
-        workflow,
-        ref,
+        settings.container_termination_workflow,
+        settings.devops_branch,
         _stringify_inputs(
             {
                 "triggered_by": triggered_by,

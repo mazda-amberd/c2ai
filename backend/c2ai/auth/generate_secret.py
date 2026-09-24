@@ -18,10 +18,11 @@ Notes:
 from __future__ import annotations
 
 import argparse
-import os
 import re
 import secrets
 from pathlib import Path
+
+from c2ai.config import get_settings
 
 
 def generate_secret(*, length: int = 64) -> str:
@@ -79,7 +80,7 @@ def main() -> None:
     parser.add_argument(
         "--length",
         type=int,
-        default=int(os.environ.get("ATHENA_AUTH_SECRET_LENGTH", "64")),
+        default=get_settings().auth_secret_length,
         help="Secret length (default: 64)",
     )
     # If --write is specified, update the env file in-place

@@ -6,12 +6,12 @@ import base64
 import binascii
 import hashlib
 import json
-import os
 import re
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from typing import Any
 
+from c2ai.config import get_settings
 from c2ai.schemas.logs import DeploymentLogEntryOut, LogLevelLiteral
 
 # 7-bit CSI (colors, SGR) and common OSC (window title) — strip before text-level heuristics.
@@ -190,13 +190,14 @@ def build_loki_stream_selector(
     Optional GRAFANA_LOKI_TIER_LABEL + numeric ``tier`` add a tier matcher
     (value ``tier1`` … ``tier4``) when the env var is set.
     """
-    ns_key = (os.getenv("GRAFANA_LOKI_NAMESPACE_LABEL") or "namespace").strip() or "namespace"
-    dep_key = (os.getenv("GRAFANA_LOKI_DEPLOYMENT_LABEL") or "deployment").strip() or "deployment"
+    settings = get_settings()
+    ns_key = settings.grafana_loki_namespace_label.strip() or "namespace"
+    dep_key = settings.grafana_loki_deployment_label.strip() or "deployment"
     parts = [
         f'{ns_key}="{escape_logql_label_value(namespace)}"',
         f'{dep_key}="{escape_logql_label_value(deployment)}"',
     ]
-    tier_label = (os.getenv("GRAFANA_LOKI_TIER_LABEL") or "").strip()
+    tier_label = settings.grafana_loki_tier_label.strip()
     if tier_label and tier is not None and 1 <= tier <= 4:
         tier_val = f"tier{tier}"
         parts.append(f'{tier_label}="{escape_logql_label_value(tier_val)}"')

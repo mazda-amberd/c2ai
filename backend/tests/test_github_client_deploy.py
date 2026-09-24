@@ -111,7 +111,7 @@ async def test_list_repo_branches_empty_on_connect_error(
     mock_cm.__aenter__ = AsyncMock(return_value=inner)
     mock_cm.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
+    with patch("c2ai.clients.github.http_client", return_value=mock_cm):
         out = await list_repo_branches("Inferaim", "devops")
 
     assert out == []
@@ -144,7 +144,7 @@ async def test_list_repo_tags_empty_on_connect_error(
     mock_cm.__aenter__ = AsyncMock(return_value=inner)
     mock_cm.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
+    with patch("c2ai.clients.github.http_client", return_value=mock_cm):
         out = await list_repo_tags("Inferaim", "dealership_new")
 
     assert out == []
@@ -169,7 +169,7 @@ async def test_list_repo_tags_returns_sorted_names(
     mock_cm.__aenter__ = AsyncMock(return_value=inner)
     mock_cm.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
+    with patch("c2ai.clients.github.http_client", return_value=mock_cm):
         out = await list_repo_tags("Inferaim", "dealership_new")
 
     assert out == ["v1.0.0", "v1.2.0"]
@@ -191,7 +191,7 @@ async def test_check_repo_tag_exists_returns_true_on_200(
     mock_cm.__aenter__ = AsyncMock(return_value=inner)
     mock_cm.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
+    with patch("c2ai.clients.github.http_client", return_value=mock_cm):
         result = await check_repo_tag_exists("Inferaim", "dealership_new", "v1.0.0")
 
     assert result is True
@@ -211,7 +211,7 @@ async def test_check_repo_tag_exists_returns_false_on_404(
     mock_cm.__aenter__ = AsyncMock(return_value=inner)
     mock_cm.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
+    with patch("c2ai.clients.github.http_client", return_value=mock_cm):
         result = await check_repo_tag_exists("Inferaim", "dealership_new", "no-such-tag")
 
     assert result is False
@@ -230,7 +230,7 @@ async def test_check_repo_tag_exists_returns_true_on_network_error(
     mock_cm.__aenter__ = AsyncMock(return_value=inner)
     mock_cm.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
+    with patch("c2ai.clients.github.http_client", return_value=mock_cm):
         result = await check_repo_tag_exists("Inferaim", "dealership_new", "v2.0.0")
 
     assert result is True
@@ -258,7 +258,7 @@ async def test_dispatch_terminate_posts_workflow_dispatch(
 
     inner, mock_cm = _make_mock_http_client()
 
-    with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
+    with patch("c2ai.clients.github.http_client", return_value=mock_cm):
         await dispatch_github_terminate_workflow(
             "amberd-acme-ada",
             triggered_by="alex",
@@ -282,7 +282,7 @@ async def test_dispatch_terminate_optional_correlation_id(
 
     inner, mock_cm = _make_mock_http_client()
 
-    with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
+    with patch("c2ai.clients.github.http_client", return_value=mock_cm):
         await dispatch_github_terminate_workflow(
             "amberd-x",
             correlation_id="my-uuid-123",
@@ -311,7 +311,7 @@ async def test_dispatch_terminate_raises_on_non_2xx(
 
     _inner, mock_cm = _make_mock_http_client(status_code=422)
 
-    with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
+    with patch("c2ai.clients.github.http_client", return_value=mock_cm):
         with pytest.raises(BadRequestError):
             await dispatch_github_terminate_workflow("amberd-x")
 
@@ -329,7 +329,7 @@ async def test_dispatch_deploy_sends_correct_inputs(
 
     inner, mock_cm = _make_mock_http_client()
 
-    with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
+    with patch("c2ai.clients.github.http_client", return_value=mock_cm):
         await dispatch_github_workflow(
             correlation_id="corr-uuid",
             branch="feature/x",
@@ -365,7 +365,7 @@ async def test_dispatch_update_sends_correct_inputs(
 
     inner, mock_cm = _make_mock_http_client()
 
-    with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
+    with patch("c2ai.clients.github.http_client", return_value=mock_cm):
         await dispatch_github_update_workflow(
             correlation_id="corr-uuid",
             branch="main",
@@ -398,7 +398,7 @@ async def test_dispatch_move_tier_sends_tier_string_inputs(
 
     inner, mock_cm = _make_mock_http_client()
 
-    with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
+    with patch("c2ai.clients.github.http_client", return_value=mock_cm):
         await dispatch_github_move_tier_workflow(
             correlation_id="corr-uuid",
             subdomain="amberd-acme-ada",
@@ -426,7 +426,7 @@ async def test_cancel_workflow_run_posts_cancel_endpoint(
     mock_cm.__aenter__ = AsyncMock(return_value=inner)
     mock_cm.__aexit__ = AsyncMock(return_value=None)
 
-    with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
+    with patch("c2ai.clients.github.http_client", return_value=mock_cm):
         await cancel_workflow_run(12_345)
 
     inner.post.assert_awaited_once()

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -19,6 +18,8 @@ from c2ai.api.metrics import router as metrics_v2_router
 from c2ai.api.registered_applications import router as registered_applications_router
 from c2ai.api.troubleshooting import router as troubleshooting_router
 from c2ai.api.users import router as users_router
+from c2ai.clients.http import close_http_clients
+from c2ai.config import check_startup_settings, get_settings
 from c2ai.core.background import cancel_background_tasks
 from c2ai.core.exception_handlers import attach_exception_handlers
 from c2ai.core.frontend import setup_frontend_serving
@@ -27,22 +28,17 @@ from c2ai.services.financial_ingestion_runner import (
     stop_financial_ingestion_scheduler,
 )
 
-_DEFAULT_CORS_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173"
-
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
+    check_startup_settings()
     scheduler_task, scheduler_stop = start_financial_ingestion_scheduler()
     try:
         yield
     finally:
         await stop_financial_ingestion_scheduler(scheduler_task, scheduler_stop)
         await cancel_background_tasks()
-
-
-def _cors_origins() -> list[str]:
-    raw = os.getenv("CORS_ORIGINS", _DEFAULT_CORS_ORIGINS)
-    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+        await close_http_clients()
 
 
 def create_app(*, serve_frontend: bool = True) -> FastAPI:
@@ -50,7 +46,7 @@ def create_app(*, serve_frontend: bool = True) -> FastAPI:
 
     application = FastAPI(title="C2AI Athena Service", lifespan=_lifespan)
 
-    origins = _cors_origins()
+    origins = get_settings().cors_origin_list
     if origins:
         application.add_middleware(
             CORSMiddleware,
@@ -83,4 +79,4 @@ def create_app(*, serve_frontend: bool = True) -> FastAPI:
     return application
 
 
-app = create_app(serve_frontend=os.getenv("C2AI_SERVE_FRONTEND", "true").lower() != "false")
+app = create_app(serve_frontend=get_settings().serve_frontend)

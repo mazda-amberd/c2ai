@@ -6,12 +6,12 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
 import re
 from datetime import UTC, datetime
 from typing import Any
 
 from c2ai.clients.grafana import GrafanaClient
+from c2ai.config import get_settings
 from c2ai.core.exceptions import ServiceUnavailableError
 from c2ai.schemas.troubleshooting import (
     TroubleshootingEvent,
@@ -38,9 +38,9 @@ _EVENT_SEPARATOR_RE = re.compile(r"\s+\|\s+")
 
 
 def is_grafana_troubleshooting_configured() -> bool:
+    settings = get_settings()
     return bool(
-        os.getenv("GRAFANA_API_URL", "").strip()
-        and os.getenv("GRAFANA_LOKI_DATASOURCE_UID", "").strip()
+        settings.grafana_api_url.strip() and settings.grafana_loki_datasource_uid.strip()
     )
 
 

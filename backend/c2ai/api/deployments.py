@@ -37,7 +37,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token
 from c2ai.clients.github import (
-    GITHUB_REPO_OWNER,
     GITHUB_WORKFLOW_DEPLOY,
     GITHUB_WORKFLOW_MOVE_TIER,
     GITHUB_WORKFLOW_TERMINATE,
@@ -55,6 +54,7 @@ from c2ai.clients.github import (
     list_repo_tags,
     resolve_run_id,
 )
+from c2ai.config import get_settings
 from c2ai.core.background import spawn
 from c2ai.core.exceptions import (
     ConflictError,
@@ -647,7 +647,7 @@ async def get_repo_branches(
     repo: _REPO_QUERY,
     _user: AthenaTokenUser = Depends(get_current_user_token),
 ) -> list[str]:
-    return await list_repo_branches(GITHUB_REPO_OWNER, repo)
+    return await list_repo_branches(get_settings().github_repo_owner, repo)
 
 
 @router.get(
@@ -660,4 +660,4 @@ async def get_repo_tags(
     repo: _REPO_QUERY,
     _user: AthenaTokenUser = Depends(get_current_user_token),
 ) -> list[str]:
-    return await list_repo_tags(GITHUB_REPO_OWNER, repo)
+    return await list_repo_tags(get_settings().github_repo_owner, repo)

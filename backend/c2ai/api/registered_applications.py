@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hmac
 import logging
-import os
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -20,6 +19,7 @@ from c2ai.clients.container_registry import (
 )
 from c2ai.clients.container_secret_provider import ContainerSecretProviderClient
 from c2ai.clients.github_actions import GitHubActionsClient
+from c2ai.config import get_settings
 from c2ai.constants.registered_application import (
     ApplicationStatus,
     ApplicationType,
@@ -129,7 +129,7 @@ def _require_deployment_callback_token(
 ) -> None:
     """Authenticate progress callbacks from the external deployment pipeline."""
 
-    expected_token = os.getenv("DEPLOYMENT_CALLBACK_TOKEN")
+    expected_token = get_settings().deployment_callback_token
     if not expected_token:
         raise ServiceUnavailableError(
             "Deployment progress callbacks are not configured."

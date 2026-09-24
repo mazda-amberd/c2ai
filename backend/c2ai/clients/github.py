@@ -37,18 +37,17 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 
+from c2ai.clients.http import http_client
+from c2ai.config import get_settings
 from c2ai.core.exceptions import BadRequestError, ServiceUnavailableError
 
 logger = logging.getLogger(__name__)
 
-GITHUB_REPO_OWNER = os.getenv("GITHUB_REPO_OWNER", "amberd-ai")
-GITHUB_REPO_NAME = os.getenv("GITHUB_REPO_NAME", "devops")
 GITHUB_API_BASE = "https://api.github.com"
 
 # Workflow file names in amberd-ai/devops
@@ -77,6 +76,11 @@ _GITHUB_PAT_MISSING_DETAIL = (
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+def _devops_repo() -> str:
+    settings = get_settings()
+    return f"{settings.github_repo_owner}/{settings.github_repo_name}"
+
+
 def _github_headers(pat: str) -> dict[str, str]:
     return {
         "Authorization": f"Bearer {pat}",
@@ -86,7 +90,7 @@ def _github_headers(pat: str) -> dict[str, str]:
 
 
 def _require_github_pat() -> str:
-    pat = os.getenv("GITHUB_PAT", "")
+    pat = get_settings().github_pat
     if not pat:
         raise ServiceUnavailableError(_GITHUB_PAT_MISSING_DETAIL)
     return pat
@@ -94,7 +98,7 @@ def _require_github_pat() -> str:
 
 def get_devops_branch() -> str:
     """Return the devops branch Athena dispatches against (default: main)."""
-    return os.getenv("DEVOPS_BRANCH", "main")
+    return get_settings().devops_branch
 
 
 def get_deploy_source_repo() -> tuple[str, str]:
@@ -102,8 +106,8 @@ def get_deploy_source_repo() -> tuple[str, str]:
 
     This must match the repo the frontend branch picker lists (``DEPLOY_BRANCH_REPO``).
     """
-    repo = os.getenv("DEPLOY_SOURCE_REPO", "dealership_new")
-    return GITHUB_REPO_OWNER, repo
+    settings = get_settings()
+    return settings.github_repo_owner, settings.deploy_source_repo
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +121,7 @@ async def list_repo_branches(owner: str, repo: str) -> list[str]:
     branches: list[str] = []
     page = 1
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with http_client(15) as client:
             while True:
                 response = await client.get(
                     url,
@@ -160,7 +164,7 @@ async def list_repo_tags(owner: str, repo: str) -> list[str]:
     tags: list[str] = []
     page = 1
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with http_client(15) as client:
             while True:
                 response = await client.get(
                     url,
@@ -215,7 +219,7 @@ async def check_repo_branch_exists(owner: str, repo: str, branch: str) -> bool:
     pat = _require_github_pat()
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/branches/{branch}"
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with http_client(10) as client:
             resp = await client.get(url, headers=_github_headers(pat))
         exists = resp.status_code == 200
     except httpx.RequestError:
@@ -244,7 +248,7 @@ async def check_repo_tag_exists(owner: str, repo: str, tag: str) -> bool:
     pat = _require_github_pat()
     url = f"{GITHUB_API_BASE}/repos/{owner}/{repo}/git/ref/tags/{tag}"
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with http_client(10) as client:
             resp = await client.get(url, headers=_github_headers(pat))
         exists = resp.status_code == 200
     except httpx.RequestError:
@@ -272,12 +276,12 @@ async def _post_workflow_dispatch(workflow_file: str, inputs: dict[str, str]) ->
     pat = _require_github_pat()
     ref = get_devops_branch()
     url = (
-        f"{GITHUB_API_BASE}/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+        f"{GITHUB_API_BASE}/repos/{_devops_repo()}"
         f"/actions/workflows/{workflow_file}/dispatches"
     )
     payload = {"ref": ref, "inputs": inputs}
 
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with http_client(15) as client:
         response = await client.post(url, json=payload, headers=_github_headers(pat))
 
     if response.status_code not in (200, 201, 204):
@@ -439,7 +443,7 @@ async def list_workflow_runs(
     """
     pat = _require_github_pat()
     url = (
-        f"{GITHUB_API_BASE}/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+        f"{GITHUB_API_BASE}/repos/{_devops_repo()}"
         f"/actions/workflows/{workflow_file}/runs"
     )
     params: dict[str, Any] = {"per_page": per_page}
@@ -447,7 +451,7 @@ async def list_workflow_runs(
         params["created"] = f">={created_after.strftime('%Y-%m-%dT%H:%M:%SZ')}"
 
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with http_client(15) as client:
             resp = await client.get(url, params=params, headers=_github_headers(pat))
         if resp.status_code != 200:
             logger.warning(
@@ -471,11 +475,11 @@ async def cancel_workflow_run(run_id: int) -> None:
     """
     pat = _require_github_pat()
     url = (
-        f"{GITHUB_API_BASE}/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+        f"{GITHUB_API_BASE}/repos/{_devops_repo()}"
         f"/actions/runs/{run_id}/cancel"
     )
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with http_client(15) as client:
             resp = await client.post(url, headers=_github_headers(pat))
     except httpx.RequestError as exc:
         logger.warning("cancel_workflow_run request error run_id=%s: %s", run_id, exc)
@@ -508,11 +512,11 @@ async def get_workflow_run(run_id: int) -> dict[str, Any] | None:
     """Fetch a single run by run_id."""
     pat = _require_github_pat()
     url = (
-        f"{GITHUB_API_BASE}/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+        f"{GITHUB_API_BASE}/repos/{_devops_repo()}"
         f"/actions/runs/{run_id}"
     )
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with http_client(10) as client:
             resp = await client.get(url, headers=_github_headers(pat))
         if resp.status_code == 200:
             return resp.json()
@@ -527,11 +531,11 @@ async def get_workflow_run_jobs(run_id: int) -> list[dict[str, Any]]:
     """Fetch jobs (with embedded steps) for a run."""
     pat = _require_github_pat()
     url = (
-        f"{GITHUB_API_BASE}/repos/{GITHUB_REPO_OWNER}/{GITHUB_REPO_NAME}"
+        f"{GITHUB_API_BASE}/repos/{_devops_repo()}"
         f"/actions/runs/{run_id}/jobs"
     )
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
+        async with http_client(10) as client:
             resp = await client.get(
                 url, params={"filter": "latest"}, headers=_github_headers(pat)
             )

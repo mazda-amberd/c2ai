@@ -57,7 +57,7 @@ async def test_lists_public_docker_hub_tags_as_safe_metadata():
     )
 
     with patch(
-        "c2ai.clients.container_registry.httpx.AsyncClient",
+        "c2ai.clients.container_registry.http_client",
         return_value=_http_context(http_client),
     ):
         page = await ContainerRegistryClient(
@@ -100,7 +100,7 @@ async def test_resolves_private_credential_and_uses_short_lived_bearer_token():
     )
 
     with patch(
-        "c2ai.clients.container_registry.httpx.AsyncClient",
+        "c2ai.clients.container_registry.http_client",
         return_value=_http_context(http_client),
     ):
         page = await ContainerRegistryClient(
@@ -150,7 +150,7 @@ async def test_uses_registered_username_and_password_without_credential_provider
     )
 
     with patch(
-        "c2ai.clients.container_registry.httpx.AsyncClient",
+        "c2ai.clients.container_registry.http_client",
         return_value=_http_context(http_client),
     ):
         page = await ContainerRegistryClient(
@@ -192,7 +192,7 @@ async def test_paginates_without_following_registry_supplied_next_url():
     )
 
     with patch(
-        "c2ai.clients.container_registry.httpx.AsyncClient",
+        "c2ai.clients.container_registry.http_client",
         return_value=_http_context(http_client),
     ):
         page = await ContainerRegistryClient(
@@ -246,7 +246,7 @@ async def test_get_tag_validates_one_exact_docker_hub_tag():
     )
 
     with patch(
-        "c2ai.clients.container_registry.httpx.AsyncClient",
+        "c2ai.clients.container_registry.http_client",
         return_value=_http_context(http_client),
     ):
         tag = await ContainerRegistryClient(
@@ -273,7 +273,7 @@ async def test_get_tag_maps_docker_hub_not_found_to_validation_error():
     )
 
     with patch(
-        "c2ai.clients.container_registry.httpx.AsyncClient",
+        "c2ai.clients.container_registry.http_client",
         return_value=_http_context(http_client),
     ):
         with pytest.raises(ContainerImageTagNotFound, match=r"9\.9\.9"):
@@ -331,7 +331,7 @@ async def test_lists_ecr_tags_over_the_registry_v2_api():
     )
 
     with patch(
-        "c2ai.clients.container_registry.httpx.AsyncClient",
+        "c2ai.clients.container_registry.http_client",
         return_value=_http_context(http_client),
     ):
         page = await ContainerRegistryClient().list_tags(
@@ -367,7 +367,7 @@ async def test_ecr_tag_listing_follows_the_registry_cursor_up_to_the_limit():
     )
 
     with patch(
-        "c2ai.clients.container_registry.httpx.AsyncClient",
+        "c2ai.clients.container_registry.http_client",
         return_value=_http_context(http_client),
     ):
         page = await ContainerRegistryClient().list_tags(
@@ -391,7 +391,7 @@ async def test_ecr_accepts_a_pre_encoded_authorization_token():
     http_client.get = AsyncMock(return_value=_v2_response({"tags": ["latest"]}))
 
     with patch(
-        "c2ai.clients.container_registry.httpx.AsyncClient",
+        "c2ai.clients.container_registry.http_client",
         return_value=_http_context(http_client),
     ):
         await ContainerRegistryClient().list_tags(
@@ -413,7 +413,7 @@ async def test_expired_ecr_credentials_report_a_refreshable_failure():
     http_client.get = AsyncMock(return_value=_v2_response({}, status_code=401))
 
     with patch(
-        "c2ai.clients.container_registry.httpx.AsyncClient",
+        "c2ai.clients.container_registry.http_client",
         return_value=_http_context(http_client),
     ):
         with pytest.raises(ServiceUnavailableError) as error:
@@ -435,7 +435,7 @@ async def test_unknown_ecr_repository_is_reported_as_invalid():
     http_client.get = AsyncMock(return_value=_v2_response({}, status_code=404))
 
     with patch(
-        "c2ai.clients.container_registry.httpx.AsyncClient",
+        "c2ai.clients.container_registry.http_client",
         return_value=_http_context(http_client),
     ):
         with pytest.raises(InvalidContainerImageRepository):
@@ -460,7 +460,7 @@ async def test_validates_one_ecr_tag_through_the_manifest_endpoint():
     )
 
     with patch(
-        "c2ai.clients.container_registry.httpx.AsyncClient",
+        "c2ai.clients.container_registry.http_client",
         return_value=_http_context(http_client),
     ):
         tag = await ContainerRegistryClient().get_tag(
@@ -488,7 +488,7 @@ async def test_missing_ecr_tag_raises_tag_not_found():
     http_client.get = AsyncMock(return_value=_v2_response({}, status_code=404))
 
     with patch(
-        "c2ai.clients.container_registry.httpx.AsyncClient",
+        "c2ai.clients.container_registry.http_client",
         return_value=_http_context(http_client),
     ):
         with pytest.raises(ContainerImageTagNotFound):

@@ -826,14 +826,27 @@ async def test_container_upgrade_defaults_to_amberd_devops_workflow():
     assert ref == "main"
 
 
+def _devops_client_patch():
+    """Patch the devops GitHubActionsClient; trigger_workflow echoes its workflow."""
+
+    patcher = patch(
+        "c2ai.services.registered_application_deployment.GitHubActionsClient"
+    )
+    client_class = patcher.start()
+    client = client_class.return_value
+
+    async def trigger(workflow, ref, inputs):
+        return {"trigger_method": "workflow_dispatch", "workflow_id": workflow, "run_id": 7}
+
+    client.trigger_workflow = AsyncMock(side_effect=trigger)
+    return patcher, client
+
+
 @pytest.mark.asyncio
 async def test_dispatches_github_upgrade_to_predefined_amberd_workflow():
     version = _github_version()
-    with patch(
-        "c2ai.services.registered_application_deployment."
-        "dispatch_github_update_workflow",
-        new_callable=AsyncMock,
-    ) as dispatch_mock:
+    patcher, client = _devops_client_patch()
+    try:
         reference = await dispatch_registered_application_upgrade(
             version,
             deployment_id=UUID("50000000-0000-0000-0000-000000000006"),
@@ -843,14 +856,21 @@ async def test_dispatches_github_upgrade_to_predefined_amberd_workflow():
             configuration={"github": {"version": "2.0.0"}},
             triggered_by="admin",
         )
+    finally:
+        patcher.stop()
 
-    dispatch_mock.assert_awaited_once_with(
-        correlation_id="50000000-0000-0000-0000-000000000006",
-        branch="2.0.0",
-        subdomain="release-prod",
-        triggered_by="admin",
+    client.trigger_workflow.assert_awaited_once_with(
+        "ada-update.yaml",
+        "main",
+        {
+            "slack_user": "admin",
+            "subdomain": "release-prod",
+            "branch": "2.0.0",
+            "deployment_id": "50000000-0000-0000-0000-000000000006",
+        },
     )
     assert reference["workflow_id"] == "ada-update.yaml"
+    assert reference["run_id"] == 7
     assert reference["version"] == "2.0.0"
     assert reference["pipeline"] == "github-upgrade"
 
@@ -866,11 +886,8 @@ async def test_github_upgrade_targets_the_deployed_workflow_subdomain():
         },
         "github": {"version": "26.06.03"},
     }
-    with patch(
-        "c2ai.services.registered_application_deployment."
-        "dispatch_github_update_workflow",
-        new_callable=AsyncMock,
-    ) as dispatch_mock:
+    patcher, client = _devops_client_patch()
+    try:
         reference = await dispatch_registered_application_upgrade(
             version,
             deployment_id=UUID("50000000-0000-0000-0000-000000000008"),
@@ -880,13 +897,12 @@ async def test_github_upgrade_targets_the_deployed_workflow_subdomain():
             configuration=configuration,
             triggered_by="admin",
         )
+    finally:
+        patcher.stop()
 
-    dispatch_mock.assert_awaited_once_with(
-        correlation_id="50000000-0000-0000-0000-000000000008",
-        branch="26.06.03",
-        subdomain="amberd-test-deploy",
-        triggered_by="admin",
-    )
+    _workflow, _ref, inputs = client.trigger_workflow.await_args.args
+    assert inputs["subdomain"] == "amberd-test-deploy"
+    assert inputs["branch"] == "26.06.03"
     assert reference["subdomain"] == "amberd-test-deploy"
 
 
@@ -897,11 +913,8 @@ async def test_github_termination_targets_the_deployed_workflow_subdomain():
         "parameters": {"subdomain": "amberd-test-deploy"},
         "github": {"version": "26.06.03"},
     }
-    with patch(
-        "c2ai.services.registered_application_deployment."
-        "dispatch_github_terminate_workflow",
-        new_callable=AsyncMock,
-    ) as dispatch_mock:
+    patcher, client = _devops_client_patch()
+    try:
         reference = await dispatch_registered_application_termination(
             version,
             deployment_id=UUID("50000000-0000-0000-0000-000000000009"),
@@ -910,11 +923,17 @@ async def test_github_termination_targets_the_deployed_workflow_subdomain():
             configuration=configuration,
             triggered_by="admin",
         )
+    finally:
+        patcher.stop()
 
-    dispatch_mock.assert_awaited_once_with(
-        "amberd-test-deploy",
-        correlation_id="50000000-0000-0000-0000-000000000009",
-        triggered_by="admin",
+    client.trigger_workflow.assert_awaited_once_with(
+        "ada-terminate.yaml",
+        "main",
+        {
+            "slack_user": "admin",
+            "subdomain": "amberd-test-deploy",
+            "deployment_id": "50000000-0000-0000-0000-000000000009",
+        },
     )
     assert reference["subdomain"] == "amberd-test-deploy"
 
@@ -1016,11 +1035,8 @@ async def test_container_termination_defaults_to_amberd_devops_workflow():
 @pytest.mark.asyncio
 async def test_dispatches_github_termination_to_predefined_amberd_workflow():
     version = _github_version()
-    with patch(
-        "c2ai.services.registered_application_deployment."
-        "dispatch_github_terminate_workflow",
-        new_callable=AsyncMock,
-    ) as dispatch_mock:
+    patcher, client = _devops_client_patch()
+    try:
         reference = await dispatch_registered_application_termination(
             version,
             deployment_id=UUID("50000000-0000-0000-0000-000000000007"),
@@ -1029,12 +1045,11 @@ async def test_dispatches_github_termination_to_predefined_amberd_workflow():
             configuration={"github": {"version": "2.0.0"}},
             triggered_by="admin",
         )
+    finally:
+        patcher.stop()
 
-    dispatch_mock.assert_awaited_once_with(
-        "release-prod",
-        correlation_id="50000000-0000-0000-0000-000000000007",
-        triggered_by="admin",
-    )
+    _workflow, _ref, inputs = client.trigger_workflow.await_args.args
+    assert inputs["subdomain"] == "release-prod"
     assert reference["workflow_id"] == "ada-terminate.yaml"
     assert reference["pipeline"] == "github-termination"
 

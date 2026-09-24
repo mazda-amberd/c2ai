@@ -4,12 +4,12 @@ GitHub Actions API client for triggering workflows.
 
 import asyncio
 import logging
-import os
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any
 
-import httpx
+from c2ai.clients.http import http_client
+from c2ai.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +24,10 @@ class GitHubActionsClient:
         github_token: str | None = None,
         api_base_url: str = "https://api.github.com",
     ):
-        self.repo_owner = repo_owner or os.getenv("GITHUB_REPO_OWNER")
-        self.repo_name = repo_name or os.getenv("GITHUB_REPO_NAME")
-        self.github_token = (
-            github_token or os.getenv("GITHUB_PAT") or os.getenv("GITHUB_TOKEN")
-        )
+        settings = get_settings()
+        self.repo_owner = repo_owner or settings.github_repo_owner
+        self.repo_name = repo_name or settings.github_repo_name
+        self.github_token = github_token or settings.github_pat
         self.api_base_url = api_base_url.rstrip("/")
 
         if not self.repo_owner:
@@ -51,7 +50,7 @@ class GitHubActionsClient:
         url = f"{self.api_base_url}/repos/{self.repo_owner}/{self.repo_name}/{kind}"
         refs: list[str] = []
         per_page = min(limit, 100)
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with http_client(30.0) as client:
             for page in range(1, (limit + per_page - 1) // per_page + 1):
                 response = await client.get(
                     url, headers=self._headers(),
@@ -123,7 +122,7 @@ class GitHubActionsClient:
             ref,
         )
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with http_client(30.0) as client:
             response = await client.post(url, json=payload, headers=self._headers())
 
             if response.status_code >= 400:
@@ -173,7 +172,7 @@ class GitHubActionsClient:
             self.repo_owner,
             self.repo_name,
         )
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with http_client(30.0) as client:
             response = await client.post(url, json=payload, headers=self._headers())
             if response.status_code >= 400:
                 logger.error(
@@ -199,7 +198,7 @@ class GitHubActionsClient:
             f"{self.api_base_url}/repos/{self.repo_owner}/{self.repo_name}"
             f"/actions/runs/{run_id}"
         )
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with http_client(20.0) as client:
             response = await client.get(url, headers=self._headers())
         response.raise_for_status()
         return response.json()
@@ -213,7 +212,7 @@ class GitHubActionsClient:
         )
         jobs: list[dict[str, Any]] = []
         page = 1
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with http_client(20.0) as client:
             while True:
                 response = await client.get(
                     url,
@@ -252,7 +251,7 @@ class GitHubActionsClient:
             params["created"] = (
                 f">={(dispatched_at - timedelta(minutes=2)).strftime('%Y-%m-%dT%H:%M:%SZ')}"
             )
-        async with httpx.AsyncClient(timeout=20.0) as client:
+        async with http_client(20.0) as client:
             response = await client.get(url, params=params, headers=self._headers())
         response.raise_for_status()
         return response.json().get("workflow_runs", [])

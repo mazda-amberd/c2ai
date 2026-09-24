@@ -14,15 +14,14 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
 import sys
 
 import psycopg2
 from argon2 import PasswordHasher
-from dotenv import load_dotenv
 from psycopg2 import sql
 from psycopg2.extras import Json
 
+from c2ai.config import get_settings
 from c2ai.db.migrate import run_migrations
 from c2ai.db.url import psycopg2_connect_kwargs, sync_database_url
 
@@ -55,7 +54,7 @@ def recreate_database() -> None:
 def seed_admin_user() -> None:
     """Insert the bootstrap administrator (no-op when it already exists)."""
 
-    password = os.getenv("C2AI_ADMIN_PASSWORD", "admin")
+    password = get_settings().admin_password
     conn = psycopg2.connect(**psycopg2_connect_kwargs(sync_database_url()))
     try:
         with conn, conn.cursor() as cursor:
@@ -87,7 +86,6 @@ def seed_admin_user() -> None:
 
 
 def main() -> None:
-    load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--yes", action="store_true", help="Confirm dropping the database.")

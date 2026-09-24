@@ -8,7 +8,6 @@ the payload is returned with ``degraded=true``.
 from __future__ import annotations
 
 import logging
-import os
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -16,6 +15,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from c2ai.clients.grafana import GrafanaClient
+from c2ai.config import get_settings
 from c2ai.constants import metrics_queries as mq
 from c2ai.constants.prometheus import (
     excluded_deployment_names,
@@ -80,10 +80,7 @@ def _store(key: tuple, response: MetricsResponse) -> None:
 
 def _scrape_interval() -> int:
     """Prometheus scrape interval in seconds. Override with ATHENA_SCRAPE_INTERVAL_SECONDS."""
-    try:
-        return max(1, int(os.getenv("ATHENA_SCRAPE_INTERVAL_SECONDS", "60")))
-    except ValueError:
-        return 60
+    return get_settings().scrape_interval_seconds
 
 
 def _macros(window: Window) -> tuple[str, str]:

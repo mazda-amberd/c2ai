@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import os
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -13,6 +12,8 @@ from urllib.parse import quote
 
 import httpx
 
+from c2ai.clients.http import http_client
+from c2ai.config import get_settings
 from c2ai.core.exceptions import (
     ContainerImageTagNotFound,
     ContainerRegistryNotSupported,
@@ -183,14 +184,14 @@ class ContainerRegistryClient:
     ) -> None:
         self.docker_hub_api_url = (
             docker_hub_api_url
-            or os.getenv("DOCKER_HUB_API_URL")
+            or get_settings().docker_hub_api_url
             or "https://hub.docker.com"
         ).rstrip("/")
         self.credential_provider_url = (
-            credential_provider_url or os.getenv("REGISTRY_CREDENTIAL_PROVIDER_URL", "")
+            credential_provider_url or get_settings().registry_credential_provider_url
         ).rstrip("/")
-        self.credential_provider_token = credential_provider_token or os.getenv(
-            "REGISTRY_CREDENTIAL_PROVIDER_TOKEN", ""
+        self.credential_provider_token = (
+            credential_provider_token or get_settings().registry_credential_provider_token
         )
 
     async def list_tags(
@@ -221,7 +222,7 @@ class ContainerRegistryClient:
         )
 
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with http_client(15.0) as client:
                 headers = await self._docker_hub_headers(
                     client,
                     credential_id,
@@ -281,7 +282,7 @@ class ContainerRegistryClient:
             f"{quote(repository_name, safe='')}/tags/{quote(tag, safe='')}"
         )
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with http_client(15.0) as client:
                 headers = await self._docker_hub_headers(
                     client,
                     credential_id,
@@ -324,7 +325,7 @@ class ContainerRegistryClient:
         repository = f"{target.host}/{target.path}"
         url = f"https://{target.host}/v2/{_quote_repository_path(target.path)}/tags/list"
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with http_client(15.0) as client:
                 headers = await self._registry_v2_headers(
                     client,
                     credential_id,
@@ -410,7 +411,7 @@ class ContainerRegistryClient:
             f"/manifests/{quote(tag, safe='')}"
         )
         try:
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with http_client(15.0) as client:
                 headers = await self._registry_v2_headers(
                     client,
                     credential_id,

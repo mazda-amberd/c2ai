@@ -5,26 +5,9 @@ Pure validation helpers for identifiers and passwords.
 
 from __future__ import annotations
 
-import os
 import re
 
-
-def get_int_env(name: str, default: int) -> int:
-    """
-    Return an environment variable as an integer, falling back to *default*
-    if the variable is unset or not a valid integer.
-
-    Args:
-        name: Name of the environment variable.
-        default: Default value if the variable is unset or invalid.
-
-    Returns:
-        Integer value of the environment variable or the default.
-    """
-    try:
-        return int(os.getenv(name, default))
-    except (TypeError, ValueError):
-        return default
+from c2ai.config import get_settings
 
 
 def validate_identifier(identifier: str) -> tuple[bool, str | None, str | None]:
@@ -45,9 +28,10 @@ def validate_identifier(identifier: str) -> tuple[bool, str | None, str | None]:
         *error_message* and *normalised_identifier* are mutually exclusive:
         one will always be None.
     """
-    min_length = get_int_env("IDENTIFIER_MIN_LENGTH", 3)
-    max_length = get_int_env("IDENTIFIER_MAX_LENGTH", 30)
-    symbols = os.getenv("IDENTIFIER_ALLOWED_SYMBOLS", "@_+.")
+    settings = get_settings()
+    min_length = settings.identifier_min_length
+    max_length = settings.identifier_max_length
+    symbols = settings.identifier_allowed_symbols
 
     if identifier is None or not isinstance(identifier, str):
         return False, "Identifier must be a string.", None
@@ -103,7 +87,7 @@ def validate_password(password: str) -> tuple[bool, str | None]:
     if not re.search(r"\d", password):
         return False, "Password must include at least one number."
 
-    specials = os.getenv("PASSWORD_SPECIALS", "!@#$%^&*()_+-")
+    specials = get_settings().password_specials
     if not re.search(f"[{re.escape(specials)}]", password):
         return False, "Password must include at least one special character."
 

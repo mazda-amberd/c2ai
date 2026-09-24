@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import os
-
 from sqlalchemy.engine import URL, make_url
+
+from c2ai.config import get_settings
 
 
 def database_url() -> str:
@@ -15,7 +15,7 @@ def database_url() -> str:
     the asyncpg driver the API requires.
     """
 
-    raw = (os.getenv("DATABASE_URL") or os.getenv("LOCAL_DATABASE_URL") or "").strip()
+    raw = get_settings().database_url.strip()
     if not raw:
         raise RuntimeError(
             "DATABASE_URL is not set. Example: "

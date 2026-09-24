@@ -18,7 +18,6 @@ import logging
 from pathlib import Path
 
 import psycopg2
-from dotenv import load_dotenv
 
 from c2ai.db.url import psycopg2_connect_kwargs, sync_database_url
 
@@ -80,7 +79,6 @@ def run_migrations(stamp: bool = False) -> int:
 
 
 def main() -> None:
-    load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description="Apply pending SQL migrations.")
     parser.add_argument(

@@ -166,7 +166,7 @@ class TestGrafanaClient:
         )
         mock_response.raise_for_status = MagicMock()
 
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("c2ai.clients.grafana.http_client") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
             mock_client.__aenter__.return_value = mock_client
@@ -185,7 +185,7 @@ class TestGrafanaClient:
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
 
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("c2ai.clients.grafana.http_client") as mock_client_class:
             mock_client = AsyncMock()
             mock_client.post.side_effect = httpx.HTTPStatusError(
                 "Server Error",
@@ -459,7 +459,7 @@ class TestGpuQueryBuilders:
         )
         mock_response.raise_for_status = MagicMock()
 
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("c2ai.clients.grafana.http_client") as mock_client_class:
             mock_http = AsyncMock()
             mock_http.post.return_value = mock_response
             mock_http.__aenter__.return_value = mock_http
@@ -629,7 +629,7 @@ class TestGpuTierTotals:
         )
         mock_response.raise_for_status = MagicMock()
 
-        with patch("httpx.AsyncClient") as mock_client_class:
+        with patch("c2ai.clients.grafana.http_client") as mock_client_class:
             mock_http = AsyncMock()
             mock_http.post.return_value = mock_response
             mock_http.__aenter__.return_value = mock_http

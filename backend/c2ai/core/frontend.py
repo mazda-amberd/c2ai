@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+
+from c2ai.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +19,7 @@ _API_PREFIXES = ("api/", "auth/", "users/", "jobs/")
 
 
 def _dist_dir() -> Path:
-    configured = os.getenv("C2AI_FRONTEND_DIST", "").strip()
+    configured = get_settings().frontend_dist.strip()
     if configured:
         return Path(configured).expanduser().resolve()
     # backend/c2ai/core/frontend.py -> <repo>/frontend/dist

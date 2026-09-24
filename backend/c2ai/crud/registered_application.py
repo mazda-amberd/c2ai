@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -15,6 +14,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, joinedload, selectinload
 
+from c2ai.config import get_settings
 from c2ai.constants.registered_application import (
     ACTIVE_DEPLOYMENT_INSTANCE_STATUSES,
     DEPLOYMENT_STEP_ORDER,
@@ -77,7 +77,7 @@ _CONTAINER_SECRET_CONSTRAINTS = {
 
 
 def _credential_encryption_key() -> str:
-    key = os.getenv("ATHENA_CREDENTIAL_ENCRYPTION_KEY", "").strip()
+    key = get_settings().credential_encryption_key.strip()
     if not key:
         raise ServiceUnavailableError(
             "Credential storage is not configured. Set "

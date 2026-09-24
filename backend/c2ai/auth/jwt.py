@@ -12,7 +12,6 @@ admin rights takes effect immediately instead of when the token expires.
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -23,7 +22,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 
-from c2ai.auth.cookie import AUTH_COOKIE_NAME, get_token_from_cookie_or_header
+from c2ai.auth.cookie import get_token_from_cookie_or_header
+from c2ai.config import get_settings
 from c2ai.core.exceptions import (
     AdminPrivilegesRequired,
     InvalidToken,
@@ -39,22 +39,13 @@ logger = logging.getLogger(__name__)
 ATHENA_DATETIME_FMT = "%d-%m-%Y_%H:%M:%S"
 DEFAULT_ALGORITHM = "HS256"
 
-_DEFAULT_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60
-_MAX_TOKEN_TTL_SECONDS = 30 * 24 * 60 * 60
 _MIN_TOKEN_TTL_SECONDS = 60
-
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except ValueError:
-        return default
 
 
 def default_token_ttl_seconds() -> int:
     """Lifetime used when a login request does not ask for one."""
 
-    return clamp_token_ttl(_env_int("ATHENA_TOKEN_TTL_SECONDS", _DEFAULT_TOKEN_TTL_SECONDS))
+    return clamp_token_ttl(get_settings().token_ttl_seconds)
 
 
 def clamp_token_ttl(requested_seconds: int) -> int:
@@ -62,7 +53,7 @@ def clamp_token_ttl(requested_seconds: int) -> int:
 
     maximum = max(
         _MIN_TOKEN_TTL_SECONDS,
-        _env_int("ATHENA_TOKEN_MAX_TTL_SECONDS", _MAX_TOKEN_TTL_SECONDS),
+        get_settings().token_max_ttl_seconds,
     )
     return max(_MIN_TOKEN_TTL_SECONDS, min(requested_seconds, maximum))
 
@@ -70,7 +61,7 @@ def clamp_token_ttl(requested_seconds: int) -> int:
 def get_jwt_secret() -> str:
     """Return the signing secret (``ATHENA_AUTH_SECRET``, or legacy ``JWT_SECRET``)."""
 
-    secret = os.environ.get("ATHENA_AUTH_SECRET") or os.environ.get("JWT_SECRET")
+    secret = get_settings().auth_secret
     if not secret:
         raise RuntimeError("JWT secret is not configured. Set ATHENA_AUTH_SECRET.")
     return secret
@@ -170,7 +161,7 @@ def decode_jwt(token: str, *, algorithms: list[str] | None = None) -> AthenaToke
 async def get_access_token(request: Request) -> str:
     """The raw bearer token from the auth cookie or ``Authorization`` header."""
 
-    token = get_token_from_cookie_or_header(request, cookie_name=AUTH_COOKIE_NAME)
+    token = get_token_from_cookie_or_header(request)
     if not token:
         raise MissingToken()
     return token

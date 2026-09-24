@@ -21,7 +21,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import math
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
@@ -30,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from c2ai.clients.grafana import GrafanaClient
+from c2ai.config import get_settings
 from c2ai.crud.financial import (
     FinancialRateNotFoundError,
     record_private_llm_cost,
@@ -51,20 +51,12 @@ SECONDS_PER_HOUR = Decimal("3600")
 # window would advance the checkpoint and silently discard that usage, so we
 # defer until the accumulated window is comfortably wider than the scrape
 # interval. Override with ``ATHENA_FINANCIAL_MIN_WINDOW_SECONDS`` to match the
-# actual scrape interval (this default assumes a 5-minute scrape).
-DEFAULT_MIN_INGESTION_WINDOW_SECONDS = 900
+# actual scrape interval (the 900s default assumes a 5-minute scrape).
 
 
 def _min_ingestion_window_seconds() -> int:
     """Minimum accumulated window before a poll queries and advances."""
-    raw = os.getenv(
-        "ATHENA_FINANCIAL_MIN_WINDOW_SECONDS",
-        str(DEFAULT_MIN_INGESTION_WINDOW_SECONDS),
-    )
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        return DEFAULT_MIN_INGESTION_WINDOW_SECONDS
+    return get_settings().financial_min_window_seconds
 
 
 GPU_TIER_LABEL_TO_NUMBER = {

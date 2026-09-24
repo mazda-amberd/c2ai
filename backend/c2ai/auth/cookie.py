@@ -10,43 +10,30 @@ Environment variables:
 
 from __future__ import annotations
 
-import os
-
 from fastapi import Response
 from starlette.requests import Request
 
-AUTH_COOKIE_NAME = os.getenv("ATHENA_AUTH_COOKIE_NAME", "access_token")
-_SAMESITE_VALUES = {"lax", "strict", "none"}
+from c2ai.config import get_settings
 
 
-def _samesite() -> str:
-    value = os.getenv("ATHENA_COOKIE_SAMESITE", "lax").strip().lower()
-    return value if value in _SAMESITE_VALUES else "lax"
-
-
-def _secure(samesite: str) -> bool:
-    raw = os.getenv("ATHENA_COOKIE_SECURE", "").strip().lower()
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"0", "false", "no", "off"}:
-        return samesite == "none"
-    return samesite == "none"
+def auth_cookie_name() -> str:
+    return get_settings().auth_cookie_name
 
 
 def _domain() -> str | None:
-    return os.getenv("ATHENA_AUTH_COOKIE_DOMAIN", "").strip() or None
+    return get_settings().auth_cookie_domain.strip() or None
 
 
 def get_token_from_cookie_or_header(
     request: Request,
     *,
-    cookie_name: str = AUTH_COOKIE_NAME,
+    cookie_name: str | None = None,
     header_name: str = "Authorization",
     scheme: str = "Bearer",
 ) -> str | None:
     """Return the token from the auth cookie, else from ``Authorization: Bearer``."""
 
-    token = request.cookies.get(cookie_name)
+    token = request.cookies.get(cookie_name or auth_cookie_name())
     if token:
         return token
     header = request.headers.get(header_name)
@@ -59,14 +46,14 @@ def get_token_from_cookie_or_header(
 def set_auth_cookie(response: Response, token: str, *, max_age: int) -> None:
     """Set the HttpOnly auth cookie for ``max_age`` seconds."""
 
-    samesite = _samesite()
+    settings = get_settings()
     response.set_cookie(
-        key=AUTH_COOKIE_NAME,
+        key=settings.auth_cookie_name,
         value=token,
         max_age=max_age,
         httponly=True,
-        secure=_secure(samesite),
-        samesite=samesite,
+        secure=settings.cookie_is_secure,
+        samesite=settings.cookie_samesite,
         path="/",
         domain=_domain(),
     )
@@ -75,11 +62,11 @@ def set_auth_cookie(response: Response, token: str, *, max_age: int) -> None:
 def clear_auth_cookie(response: Response) -> None:
     """Instruct the browser to delete the auth cookie."""
 
-    samesite = _samesite()
+    settings = get_settings()
     response.delete_cookie(
-        key=AUTH_COOKIE_NAME,
+        key=settings.auth_cookie_name,
         path="/",
         domain=_domain(),
-        secure=_secure(samesite),
-        samesite=samesite,
+        secure=settings.cookie_is_secure,
+        samesite=settings.cookie_samesite,
     )

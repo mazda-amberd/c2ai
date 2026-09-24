@@ -23,7 +23,7 @@ async def test_provider_sends_value_once_and_returns_only_opaque_reference():
     context.__aexit__ = AsyncMock(return_value=None)
 
     with patch(
-        "c2ai.clients.container_secret_provider.httpx.AsyncClient",
+        "c2ai.clients.container_secret_provider.http_client",
         return_value=context,
     ):
         provider = ContainerSecretProviderClient(

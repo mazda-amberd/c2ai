@@ -37,9 +37,9 @@ Datasource UID:
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
 
+from c2ai.config import get_settings
 from c2ai.schemas.grafana import MetricType
 
 # =============================================================================
@@ -51,7 +51,7 @@ _DEFAULT_PROMETHEUS_DS_UID = "prometheus"
 
 def get_grafana_prometheus_datasource() -> dict[str, str]:
     """Return Grafana datasource object for Prometheus queries."""
-    uid = os.getenv("GRAFANA_PROMETHEUS_DATASOURCE_UID", _DEFAULT_PROMETHEUS_DS_UID)
+    uid = get_settings().grafana_prometheus_datasource_uid or _DEFAULT_PROMETHEUS_DS_UID
     return {"type": "prometheus", "uid": uid}
 
 
@@ -82,13 +82,9 @@ TIER_CONFIG: dict[str, dict[str, int] | None] = {
     "Tier 4": None,
 }
 
-# Default label_tier values per Athena tier.
-# "prod" is an alias for Tier 3 until the cluster labels are standardised.
-_DEFAULT_TIER_LABEL_REGEX: dict[str, str] = {
-    "Tier1": "tier1",
-    "Tier2": "tier2",
-    "Tier3": "tier3|prod",
-}
+# label_tier regex and Ray GPU cluster per tier come from settings
+# (ATHENA_TIER{N}_LABEL_REGEX, ATHENA_TIER{N}_GPU_CLUSTER); "prod" is an alias
+# for Tier 3 until the cluster labels are standardised.
 
 
 def _tier_label_regex(tier_key: str) -> str:
@@ -96,27 +92,12 @@ def _tier_label_regex(tier_key: str) -> str:
     Prometheus RE2 regex matching the kube_deployment_labels label_tier value
     for this logical tier.  Overridable via ATHENA_TIER{N}_LABEL_REGEX.
     """
-    env_name = f"ATHENA_{tier_key.upper()}_LABEL_REGEX"
-    default = _DEFAULT_TIER_LABEL_REGEX.get(tier_key, "^$")
-    raw = os.getenv(env_name, default)
-    return raw.strip() or "^$"
-
-
-# Default ray_io_cluster name for the Ray GPU cluster in each tier.
-# Overridable via ATHENA_TIER{N}_GPU_CLUSTER.
-# Defaults align with Grafana k8s app deployments overview (Ray per tier).
-_DEFAULT_TIER_GPU_CLUSTERS: dict[str, str] = {
-    "Tier1": "qwen-5254d",
-    "Tier2": "qwen-pq9sc",
-    "Tier3": "qwen-l8dnl",
-}
+    return get_settings().tier_label_regex(tier_key)
 
 
 def _gpu_cluster_name(tier_key: str) -> str:
     """Ray cluster name (ray_io_cluster label) for GPU queries in this tier."""
-    env_name = f"ATHENA_{tier_key.upper()}_GPU_CLUSTER"
-    default = _DEFAULT_TIER_GPU_CLUSTERS.get(tier_key, "")
-    return os.getenv(env_name, default).strip()
+    return get_settings().tier_gpu_cluster(tier_key)
 
 
 # =============================================================================
@@ -133,24 +114,17 @@ def excluded_deployment_names() -> frozenset[str]:
     Example:
         ATHENA_EXCLUDED_DEPLOYMENTS=nginx,prometheus-adapter,kube-state-metrics
     """
-    raw = os.getenv("ATHENA_EXCLUDED_DEPLOYMENTS", "nginx")
-    return frozenset(name.strip().lower() for name in raw.split(",") if name.strip())
+    return get_settings().excluded_deployment_set
 
 
 def _cpu_cores_cap() -> float:
     """Total CPU cores → 100% denominator. Override via ATHENA_CPU_CORES_CAP."""
-    try:
-        return max(1.0, float(os.getenv("ATHENA_CPU_CORES_CAP", "8")))
-    except ValueError:
-        return 8.0
+    return get_settings().cpu_cores_cap
 
 
 def _memory_gb_cap() -> float:
     """Total memory GB → 100% denominator. Override via ATHENA_MEMORY_GB_CAP."""
-    try:
-        return max(1.0, float(os.getenv("ATHENA_MEMORY_GB_CAP", "80")))
-    except ValueError:
-        return 80.0
+    return get_settings().memory_gb_cap
 
 
 # =============================================================================

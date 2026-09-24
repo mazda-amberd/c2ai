@@ -23,6 +23,7 @@ from c2ai.clients.grafana import (
     GrafanaClient,
     _build_grafana_query_body as build_grafana_query_body,
 )
+from c2ai.config import get_settings
 from c2ai.constants.prometheus import TIER_CONFIG
 from c2ai.schemas.grafana import MetricType
 
@@ -187,14 +188,15 @@ def main():
     )
     args = parser.parse_args()
     
-    token = args.token or os.getenv("GRAFANA_API_TOKEN", "")
+    settings = get_settings()
+    token = args.token or settings.grafana_api_token
     
     if not token:
         print("ERROR: No API token provided!")
         print("Set GRAFANA_API_TOKEN environment variable or use --token flag")
         sys.exit(1)
     
-    grafana_url = os.getenv("GRAFANA_API_URL", "https://grafana-k8s.amberd.ai/api/ds/query")
+    grafana_url = settings.grafana_api_url or "https://grafana-k8s.amberd.ai/api/ds/query"
     print(f"Using Grafana URL: {grafana_url}")
     print(f"Token: {token[:10]}...{token[-4:]}" if len(token) > 14 else "Token: (too short to mask)")
     

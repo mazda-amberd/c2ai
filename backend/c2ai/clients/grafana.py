@@ -7,12 +7,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-import os
 import re
 from datetime import datetime
 
 import httpx
 
+from c2ai.clients.http import http_client
+from c2ai.config import get_settings
 from c2ai.constants.prometheus import (
     METRIC_QUERIES,
     REF_IDS,
@@ -103,10 +104,10 @@ class GrafanaClient:
         Raises:
             ValueError: If GRAFANA_API_URL is not set.
         """
-        self.api_url = api_url or os.getenv("GRAFANA_API_URL")
+        self.api_url = api_url or get_settings().grafana_api_url
         if not self.api_url:
             raise ValueError("GRAFANA_API_URL environment variable is required")
-        self.api_token = api_token or os.getenv("GRAFANA_API_TOKEN", "")
+        self.api_token = api_token or get_settings().grafana_api_token
 
     async def fetch_grafana_query(self, body: dict) -> GrafanaResponse:
         """
@@ -115,7 +116,7 @@ class GrafanaClient:
         ``fetch_gpu_tier_totals``.
         """
         try:
-            async with httpx.AsyncClient() as client:
+            async with http_client() as client:
                 response = await client.post(
                     self.api_url,
                     json=body,
@@ -152,7 +153,7 @@ class GrafanaClient:
         ``GrafanaResponse`` drops the per-refId ``error`` field, which the level-based
         metrics API needs to tell a failed query apart from one that returned no data.
         """
-        async with httpx.AsyncClient() as client:
+        async with http_client() as client:
             response = await client.post(
                 self.api_url,
                 json=body,
@@ -509,18 +510,14 @@ class GrafanaClient:
             ValueError: If ``GRAFANA_LOKI_DATASOURCE_UID`` is unset.
             httpx.HTTPStatusError: On non-success HTTP from Grafana.
         """
-        loki_uid = os.getenv("GRAFANA_LOKI_DATASOURCE_UID", "").strip()
+        loki_uid = get_settings().grafana_loki_datasource_uid.strip()
         if not loki_uid:
             raise ValueError(
                 "GRAFANA_LOKI_DATASOURCE_UID environment variable is required for logs"
             )
         cap = max_lines
         if cap is None:
-            raw_cap = os.getenv("GRAFANA_LOKI_MAX_LINES", "2000").strip()
-            try:
-                cap = max(1, min(50000, int(raw_cap)))
-            except ValueError:
-                cap = 2000
+            cap = get_settings().grafana_loki_max_lines
         datasource = {"type": "loki", "uid": loki_uid}
         q: dict = {
             "refId": "A",
@@ -537,7 +534,7 @@ class GrafanaClient:
             "to": str(end_ms),
         }
         try:
-            async with httpx.AsyncClient() as client:
+            async with http_client() as client:
                 response = await client.post(
                     self.api_url,
                     json=body,

@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 from uuid import UUID
 
 import httpx
 
+from c2ai.clients.http import http_client
+from c2ai.config import get_settings
 from c2ai.core.exceptions import ServiceUnavailableError
 
 
@@ -19,10 +20,10 @@ class ContainerSecretProviderClient:
         base_url: str | None = None,
         token: str | None = None,
     ) -> None:
-        self.base_url = (base_url or os.getenv("CONTAINER_SECRET_PROVIDER_URL", "")).rstrip(
+        self.base_url = (base_url or get_settings().container_secret_provider_url).rstrip(
             "/"
         )
-        self.token = token or os.getenv("CONTAINER_SECRET_PROVIDER_TOKEN", "")
+        self.token = token or get_settings().container_secret_provider_token
         if not self.base_url or not self.token:
             raise ServiceUnavailableError(
                 "Container secret management is not configured."
@@ -55,7 +56,7 @@ class ContainerSecretProviderClient:
             payload["secret_value"] = secret_value
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with http_client(30.0) as client:
                 response = await client.put(
                     f"{self.base_url}/secrets/{secret_id}",
                     json=payload,
@@ -79,7 +80,7 @@ class ContainerSecretProviderClient:
         """Delete broker material by stable Athena ID and opaque reference."""
 
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with http_client(30.0) as client:
                 response = await client.request(
                     "DELETE",
                     f"{self.base_url}/secrets/{secret_id}",

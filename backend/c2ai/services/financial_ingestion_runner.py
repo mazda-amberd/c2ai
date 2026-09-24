@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
@@ -15,6 +14,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from c2ai.clients.grafana import GrafanaClient
+from c2ai.config import get_settings
 from c2ai.db.session import AsyncSessionLocal, engine
 from c2ai.services.gateway_cost_ingestion import ingest_gateway_costs
 
@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 
 # Stable, application-specific signed BIGINT key for PostgreSQL advisory locks.
 FINANCIAL_INGESTION_LOCK_KEY = 4_701_384_465_192_026
-DEFAULT_POLL_SECONDS = 3600
 
 
 @dataclass(frozen=True)
@@ -43,21 +42,9 @@ class FinancialIngestionRunResult:
     unpriced_models: tuple[str, ...] = ()
 
 
-def _positive_env_int(name: str, default: int) -> int:
-    try:
-        return max(1, int(os.getenv(name, str(default))))
-    except ValueError:
-        return default
-
-
 def financial_ingestion_enabled() -> bool:
     """Whether the in-process gateway polling scheduler should run."""
-    return os.getenv("ATHENA_FINANCIAL_INGESTION_ENABLED", "true").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return get_settings().financial_ingestion_enabled
 
 
 @asynccontextmanager
@@ -114,10 +101,7 @@ async def run_gateway_cost_ingestion_once(
 
 async def financial_ingestion_loop(stop_event: asyncio.Event) -> None:
     """Poll immediately and then at the configured interval."""
-    poll_seconds = _positive_env_int(
-        "ATHENA_FINANCIAL_POLL_SECONDS",
-        DEFAULT_POLL_SECONDS,
-    )
+    poll_seconds = get_settings().financial_poll_seconds
     while not stop_event.is_set():
         try:
             result = await run_gateway_cost_ingestion_once()

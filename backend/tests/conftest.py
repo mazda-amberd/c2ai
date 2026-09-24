@@ -8,10 +8,13 @@ All frames use real k8s/RayCluster label shapes from docs/grafana-k8s-exploratio
 
 import os
 
-# `c2ai.db.session` creates the async engine at import time; tests never need a real DB
-# for routes that mock CRUD / clients.
+# Tests never read backend/.env: every setting comes from these defaults or
+# from the test itself (monkeypatch.setenv). `c2ai.db.session` creates the
+# async engine at import time; tests never need a real DB for routes that
+# mock CRUD / clients.
+os.environ["C2AI_ENV_FILE"] = ""
 os.environ.setdefault(
-    "LOCAL_DATABASE_URL",
+    "DATABASE_URL",
     "postgresql+asyncpg://athena:athena@127.0.0.1:5432/athena_test",
 )
 os.environ.setdefault(
@@ -19,12 +22,16 @@ os.environ.setdefault(
     "unit-test-secret-not-for-production",
 )
 os.environ.setdefault("ATHENA_FINANCIAL_INGESTION_ENABLED", "false")
+os.environ.setdefault("C2AI_RUN_WORKER", "false")
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from c2ai.app import app
 from c2ai.auth.jwt import AthenaTokenUser, get_access_token, get_current_user_token
+from c2ai.clients.http import use_http_transport
+from c2ai.config import get_settings
 from c2ai.schemas.grafana import (
     GrafanaField,
     GrafanaFieldLabels,
@@ -36,6 +43,48 @@ from c2ai.schemas.grafana import (
 )
 
 _FAKE_USER = AthenaTokenUser(identifier="test-user", service="athena")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_settings(monkeypatch):
+    """Re-read settings whenever a test changes the environment."""
+
+    get_settings.cache_clear()
+    for name in ("setenv", "delenv"):
+        original = getattr(monkeypatch, name)
+
+        def changed(*args, _original=original, **kwargs):
+            _original(*args, **kwargs)
+            get_settings.cache_clear()
+
+        setattr(monkeypatch, name, changed)
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture
+def http_mock():
+    """Route every outbound HTTP call through a handler: ``http_mock(handler)``.
+
+    ``handler(request) -> httpx.Response``. Returns the list of requests sent.
+    """
+
+    requests: list[httpx.Request] = []
+    stack = []
+
+    def install(handler):
+        def recording(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            return handler(request)
+
+        context = use_http_transport(httpx.MockTransport(recording))
+        context.__enter__()
+        stack.append(context)
+        return requests
+
+    yield install
+    while stack:
+        stack.pop().__exit__(None, None, None)
 
 
 @pytest.fixture
