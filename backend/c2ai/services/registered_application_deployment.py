@@ -644,10 +644,18 @@ async def dispatch_registered_application_deployment(
         #     if llm is not None
         #     else {}
         # )
+        # Only declared parameters are workflow inputs; snapshots may carry
+        # Athena-side keys (e.g. the adopted instance's subdomain).
+        declared = {definition.key for definition in version.parameters}
+        parameters = {
+            key: value
+            for key, value in configuration["parameters"].items()
+            if key in declared
+        }
         default_inputs: dict[str, Any] = {}
         if (
             workflow_accepts_default_slack_user(github.repository)
-            and SLACK_USER_PARAMETER not in configuration["parameters"]
+            and SLACK_USER_PARAMETER not in parameters
         ):
             # These workflows always declare slack_user; sending the triggering
             # user spares every registration from restating it.
@@ -655,7 +663,7 @@ async def dispatch_registered_application_deployment(
         repository_dispatch_payload = {
             **system_values,
             **default_inputs,
-            **configuration["parameters"],
+            **parameters,
             "provider": f"tier{tier}",
             # **llm_inputs,
         }
@@ -675,7 +683,7 @@ async def dispatch_registered_application_deployment(
             # workflow input object. repository_dispatch remains free-form.
             workflow_inputs = {
                 **default_inputs,
-                **configuration["parameters"],
+                **parameters,
                 "provider": f"tier{tier}",
                 # **llm_inputs,
                 "deployment_id": str(deployment_id),
@@ -809,6 +817,38 @@ async def _dispatch_upgrade(
         **reference,
         "pipeline": "container-upgrade",
         "operation": "upgrade",
+    }
+
+
+async def dispatch_registered_application_move_tier(
+    version: RegisteredApplicationVersion,
+    *,
+    deployment_id: UUID,
+    instance_name: str,
+    target_tier: int,
+    configuration: dict[str, Any],
+    triggered_by: str,
+) -> dict[str, Any]:
+    """Dispatch Amberd's ada-move-to-tier workflow for a GitHub Workflow instance."""
+
+    if version.application.application_type != ApplicationType.GITHUB_WORKFLOW.value:
+        raise UnprocessableEntityError("Only GitHub Workflow deployments can move tiers.")
+    subdomain = resolve_github_workflow_subdomain(configuration, instance_name=instance_name)
+    reference = await dispatch_devops_workflow(
+        GITHUB_WORKFLOW_MOVE_TIER,
+        {
+            "slack_user": triggered_by,
+            "subdomain": subdomain,
+            "tier": f"tier{target_tier}",
+            "deployment_id": str(deployment_id),
+        },
+    )
+    return {
+        **reference,
+        "subdomain": subdomain,
+        "target_tier": target_tier,
+        "pipeline": "github-move-tier",
+        "operation": "move_tier",
     }
 
 

@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import pytest
@@ -36,6 +36,7 @@ from c2ai.models.registered_application import (
 from c2ai.schemas.registered_application import (
     RegisteredApplicationDeploymentProgressUpdate,
 )
+from tests.helpers import mock_db
 
 
 def _instance(
@@ -75,13 +76,7 @@ def _instance(
 
 
 def _db():
-    db = MagicMock()
-    db.add = MagicMock()
-    db.flush = AsyncMock()
-    db.refresh = AsyncMock()
-    db.commit = AsyncMock()
-    db.rollback = AsyncMock()
-    return db
+    return mock_db()
 
 
 @pytest.mark.asyncio

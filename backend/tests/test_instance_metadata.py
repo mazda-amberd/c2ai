@@ -28,16 +28,16 @@ async def test_enrich_tiers_with_instance_metadata_prefers_latest_deployment_row
     """DB deployment history should override host-label parsing."""
     older = SimpleNamespace(
         id=1,
-        subdomain="amberd-acme-ada",
-        customer_name="acme-old",
-        env_instance="ada-old",
+        subdomain=None,
+        instance_name="amberd-acme-ada",
+        configuration={"parameters": {"customer_name": "acme-old", "env_instance": "ada-old"}},
         created_at=datetime(2026, 1, 1),
     )
     newer = SimpleNamespace(
         id=2,
-        subdomain="amberd-acme-ada",
-        customer_name="acme",
-        env_instance="ada",
+        subdomain=None,
+        instance_name="amberd-acme-ada",
+        configuration={"parameters": {"customer_name": "acme", "env_instance": "ada"}},
         created_at=older.created_at + timedelta(days=1),
     )
     db = AsyncMock()

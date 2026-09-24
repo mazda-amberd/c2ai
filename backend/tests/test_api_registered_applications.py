@@ -725,7 +725,7 @@ def test_deploy_registered_application_dispatches_and_returns_instance(
             return_value=instance,
         ) as create_mock,
         patch(
-            "c2ai.api.registered_applications."
+            "c2ai.deployments.dispatch."
             "dispatch_registered_application_deployment",
             new_callable=AsyncMock,
             return_value={"trigger_method": "workflow_dispatch"},
@@ -807,7 +807,7 @@ def test_deploy_registered_application_names_the_instance_the_workflow_creates(
             return_value=instance,
         ) as create_mock,
         patch(
-            "c2ai.api.registered_applications."
+            "c2ai.deployments.dispatch."
             "dispatch_registered_application_deployment",
             new_callable=AsyncMock,
             return_value={"trigger_method": "workflow_dispatch"},
@@ -865,7 +865,7 @@ def test_deploy_registered_application_falls_back_to_a_generated_instance_name(
             return_value=instance,
         ) as create_mock,
         patch(
-            "c2ai.api.registered_applications."
+            "c2ai.deployments.dispatch."
             "dispatch_registered_application_deployment",
             new_callable=AsyncMock,
             return_value={"trigger_method": "workflow_dispatch"},
@@ -915,7 +915,7 @@ def test_deploy_registered_application_reports_pipeline_failure(
             return_value=instance,
         ),
         patch(
-            "c2ai.api.registered_applications."
+            "c2ai.deployments.dispatch."
             "dispatch_registered_application_deployment",
             new_callable=AsyncMock,
             side_effect=RuntimeError("GitHub is unavailable"),
@@ -1037,7 +1037,7 @@ def test_deploy_registered_container_uses_path_tier_and_stored_template(
             return_value=instance,
         ) as create_mock,
         patch(
-            "c2ai.api.registered_applications."
+            "c2ai.deployments.dispatch."
             "dispatch_registered_application_deployment",
             new_callable=AsyncMock,
             return_value={"pipeline": "container"},
@@ -1257,7 +1257,7 @@ def test_rollback_redispatches_stored_configuration(
             return_value=instance,
         ),
         patch(
-            "c2ai.api.registered_applications."
+            "c2ai.deployments.dispatch."
             "dispatch_registered_application_deployment",
             new_callable=AsyncMock,
             return_value={"trigger_method": "workflow_dispatch"},

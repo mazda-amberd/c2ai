@@ -1,7 +1,9 @@
 # pylint: disable=import-error
-"""SQLAlchemy model for the `pipeline_runs` table."""
+"""SQLAlchemy model for the `pipeline_runs` table: the deployment operation log."""
 
-from sqlalchemy import BigInteger, Column, DateTime, Integer, String
+from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
 from .base import Base
@@ -9,29 +11,40 @@ from .base import Base
 
 class PipelineRun(Base):
     """
-    One row per deploy/update/terminate operation triggered from the Athena UI.
+    One row per lifecycle operation of a deployment instance.
 
-    GitHub Actions owns the pipeline status; this table stores only the
-    correlation metadata needed to look up the GH run and the lifecycle sentinel
-    `ended_at` used to enforce the one-active-operation-per-subdomain guard.
+    Every application type writes here (ADA through /api/deploy*, registered
+    applications through /api/registered-applications); the instance's
+    current state lives in ``deployment_instances``. At most one row per
+    subdomain may be unfinished (``ended_at IS NULL``) — a unique index
+    enforces the one-operation-at-a-time rule.
 
     Attributes:
-        id (str): UUID primary key; also used as `correlation_id` / `deployment_id`
-            passed to the GitHub Actions workflow so the two sides share a handle.
-        subdomain (str): Target instance subdomain, e.g. amberd-acme-ada.
-        operation (str): "deploy" | "update" | "terminate".
-        event_type (str): GitHub workflow file name: "ada-deploy.yaml" etc.
-        triggered_by (str): Athena user identifier from the JWT.
-        run_id (int | None): GitHub Actions run_id; NULL until resolved by background task.
-        tier (int | None): Numeric tier (deploy/update only).
-        branch (str | None): Git branch (deploy/update only).
-        dispatched_at (datetime): When the workflow was dispatched.
-        ended_at (datetime | None): NULL while active; set when GH run completes.
+        id (str): UUID; also the ``deployment_id`` input of legacy workflows.
+        deployment_instance_id (UUID): The instance this operation acts on.
+        subdomain (str): The instance's host label (or instance name).
+        operation (str): "deploy" | "update" | "migration" | "terminate".
+        event_type (str): Workflow file (or pipeline) that runs it.
+        triggered_by (str): Athena user identifier.
+        run_id (int | None): GitHub Actions run id, once known.
+        tier (int | None): Tier the operation targets.
+        branch (str | None): Version/ref being deployed.
+        dispatched_at (datetime): When the operation was requested.
+        ended_at (datetime | None): NULL while the operation is in progress.
+        conclusion (str | None): success | failure | cancelled | abandoned.
     """
 
     __tablename__ = "pipeline_runs"
 
     id = Column(String, primary_key=True)
+    deployment_instance_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("deployment_instances.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    # Declared so the unit of work inserts an instance before its first
+    # operation row when both are flushed together.
+    deployment_instance = relationship("DeploymentInstance", lazy="noload")
 
     subdomain = Column(String, nullable=False, index=True)
     operation = Column(String, nullable=False)
@@ -49,6 +62,7 @@ class PipelineRun(Base):
         server_default=func.now(),
     )
     ended_at = Column(DateTime(timezone=True), nullable=True)
+    conclusion = Column(String, nullable=True)
 
     def to_dict(self) -> dict:
         return {

@@ -3,23 +3,20 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from c2ai.clients.github_actions import GitHubActionsClient
-from c2ai.constants.registered_application import (
-    DeploymentInstanceStatus,
-    DeploymentStep,
-)
 from c2ai.core.exceptions import ServiceUnavailableError
 from c2ai.crud import github_connection as crud_github_connection
-from c2ai.models.registered_application import (
-    DeploymentInstance,
-    DeploymentInstanceEvent,
-)
+from c2ai.crud.registered_application import settle_operation
+from c2ai.deployments import lifecycle
+from c2ai.deployments.lifecycle import Outcome
+from c2ai.deployments.operations import active_operation, claimed_run_ids, record_dispatch
+from c2ai.models.registered_application import DeploymentInstance
 from c2ai.services.registered_application_deployment import (
     resolve_github_workflow_subdomain,
 )
@@ -34,25 +31,6 @@ _FAILED_CONCLUSIONS = {
     "startup_failure",
     "timed_out",
 }
-
-
-def _operation(reference: dict[str, Any], instance: DeploymentInstance) -> str:
-    value = reference.get("operation")
-    if value in {"deploy", "upgrade", "terminate"}:
-        return str(value)
-    if instance.status == DeploymentInstanceStatus.UPDATING.value:
-        return "upgrade"
-    if instance.status in {
-        DeploymentInstanceStatus.TERMINATING.value,
-        DeploymentInstanceStatus.TERMINATED.value,
-    }:
-        return "terminate"
-    pipeline = str(reference.get("pipeline", ""))
-    if "upgrade" in pipeline:
-        return "upgrade"
-    if "termination" in pipeline or "terminate" in pipeline:
-        return "terminate"
-    return "deploy"
 
 
 def _failure_reason(progress: dict[str, Any]) -> str:
@@ -86,62 +64,56 @@ async def _synchronize_terminal_state(
 ) -> None:
     """Make GitHub's terminal result authoritative when callbacks are absent."""
 
-    if progress.get("status") != "completed":
+    if progress.get("status") != "completed" or instance.status not in lifecycle.IN_PROGRESS:
         return
-    operation = _operation(instance.dispatch_reference or {}, instance)
-    conclusion = progress.get("conclusion")
-    success = conclusion == "success"
-    next_step = (
-        DeploymentStep.COMPLETED.value if success else DeploymentStep.FAILED.value
-    )
-    next_status = (
-        DeploymentInstanceStatus.TERMINATED.value
-        if success and operation == "terminate"
-        else DeploymentInstanceStatus.RUNNING.value
-        if success
-        else DeploymentInstanceStatus.FAILED.value
-    )
-    failure_reason = None if success else _failure_reason(progress)
-
-    if (
-        instance.current_step == next_step
-        and instance.status == next_status
-        and instance.failure_reason == failure_reason
-    ):
-        return
-
-    completed_at = _github_completed_at(progress)
-    instance.current_step = next_step
-    instance.status = next_status
-    instance.failure_reason = failure_reason
-    instance.completed_at = completed_at
-    if success and operation == "terminate":
-        instance.terminated_at = completed_at
-    if instance.subdomain:
-        if not success:
-            instance.dns_status = "failed"
-        elif operation == "terminate":
-            instance.dns_status = "deleted"
-        elif operation == "deploy":
-            instance.dns_status = "active"
-
+    operation = lifecycle.operation_of(instance)
+    success = progress.get("conclusion") == "success"
     run_number = progress.get("run_number")
     run_label = f" #{run_number}" if run_number is not None else ""
-    message = (
-        f"GitHub Actions {operation} workflow{run_label} completed successfully."
-        if success
-        else f"GitHub Actions {operation} workflow{run_label} failed."
+    label = operation.value.replace("_", " ")
+    await settle_operation(
+        db,
+        instance,
+        Outcome.SUCCESS if success else Outcome.FAILURE,
+        at=_github_completed_at(progress),
+        failure_reason=None if success else _failure_reason(progress),
+        message=(
+            f"GitHub Actions {label} workflow{run_label} completed successfully."
+            if success
+            else f"GitHub Actions {label} workflow{run_label} failed."
+        ),
+        created_by="github-actions",
     )
-    instance.events.append(
-        DeploymentInstanceEvent(
-            step=next_step,
-            status=next_status,
-            message=message,
-            failure_reason=failure_reason,
-            created_by="github-actions",
-        )
-    )
-    db.add(instance)
+
+
+async def client_for_reference(
+    db: AsyncSession, reference: dict[str, Any]
+) -> GitHubActionsClient | None:
+    """The GitHub client (and credentials) a dispatch reference was sent with."""
+
+    owner = reference.get("repo_owner")
+    repository = reference.get("repo_name")
+    if not owner or not repository:
+        return None
+    options: dict[str, Any] = {
+        "repo_owner": str(owner),
+        "repo_name": str(repository),
+        "api_base_url": str(reference.get("api_base_url") or "https://api.github.com"),
+    }
+    connection_id = reference.get("connection")
+    if connection_id:
+        runtime = await crud_github_connection.resolve_github_connection(db, str(connection_id))
+        if runtime is not None:
+            options["github_token"] = runtime.token
+            options["api_base_url"] = runtime.api_base_url
+    return GitHubActionsClient(**options)
+
+
+def _dispatched_at(reference: dict[str, Any]) -> datetime:
+    try:
+        return datetime.fromisoformat(str(reference["dispatched_at"]).replace("Z", "+00:00"))
+    except (KeyError, ValueError):
+        return datetime.now(UTC) - timedelta(hours=1)
 
 
 async def get_registered_deployment_workflow_progress(
@@ -151,30 +123,18 @@ async def get_registered_deployment_workflow_progress(
     """Load GitHub's jobs/steps and persist correlation plus terminal state."""
 
     reference = dict(instance.dispatch_reference or {})
-    owner = reference.get("repo_owner")
-    repository = reference.get("repo_name")
-    workflow_id = reference.get("workflow_id")
-    if not owner or not repository or not workflow_id:
+    if not reference.get("workflow_id"):
         return None, None
-
-    client_options: dict[str, Any] = {
-        "repo_owner": str(owner),
-        "repo_name": str(repository),
-        "api_base_url": str(
-            reference.get("api_base_url") or "https://api.github.com"
-        ),
-    }
-    connection_id = reference.get("connection")
     try:
-        if connection_id:
-            runtime = await crud_github_connection.resolve_github_connection(
-                db,
-                str(connection_id),
+        client = await client_for_reference(db, reference)
+        if client is None:
+            return None, None
+        exclude: frozenset[int] = frozenset()
+        if reference.get("run_id") is None:
+            claimed = await claimed_run_ids(
+                db, since=_dispatched_at(reference) - timedelta(minutes=5)
             )
-            if runtime is not None:
-                client_options["github_token"] = runtime.token
-                client_options["api_base_url"] = runtime.api_base_url
-        client = GitHubActionsClient(**client_options)
+            exclude = frozenset(claimed)
         # Runs are titled with the subdomain the workflow was given, which is the
         # derived host label rather than the Athena instance name.
         progress = await client.get_workflow_progress(
@@ -187,6 +147,7 @@ async def get_registered_deployment_workflow_progress(
                 )
             ),
             deployment_id=str(instance.id),
+            exclude_run_ids=exclude,
         )
         if progress is None:
             return None, "Waiting for the matching GitHub Actions run."
@@ -195,6 +156,7 @@ async def get_registered_deployment_workflow_progress(
         if reference.get("run_id") != progress["run_id"]:
             reference["run_id"] = progress["run_id"]
             instance.dispatch_reference = reference
+            record_dispatch(await active_operation(db, instance.id), reference)
             changed = True
         original_state = (
             instance.status,
@@ -214,8 +176,8 @@ async def get_registered_deployment_workflow_progress(
         logger.warning(
             "GitHub workflow progress unavailable deployment=%s repo=%s/%s: %s",
             instance.id,
-            owner,
-            repository,
+            reference.get("repo_owner"),
+            reference.get("repo_name"),
             error,
         )
         return None, "GitHub Actions progress could not be loaded."

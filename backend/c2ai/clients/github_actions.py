@@ -7,11 +7,17 @@ import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any
+from urllib.parse import quote
+
+import httpx
 
 from c2ai.clients.http import http_client
 from c2ai.config import get_settings
 
 logger = logging.getLogger(__name__)
+
+_REF_CACHE_TTL = timedelta(seconds=60)
+_ref_cache: dict[tuple[str, str, str, str], tuple[bool, datetime]] = {}
 
 
 class GitHubActionsClient:
@@ -75,6 +81,54 @@ class GitHubActionsClient:
     async def list_repository_branches(self, *, limit: int = 200) -> list[str]:
         """Read branch names using this connection."""
         return await self._list_repository_refs("branches", limit=limit)
+
+    async def ref_exists(self, ref: str) -> bool:
+        """Whether ``ref`` is a branch or tag of this repository.
+
+        Cached briefly; a network failure answers True so a GitHub hiccup does
+        not block a deployment the workflow itself will validate.
+        """
+
+        key = (self.api_base_url, self.repo_owner, self.repo_name, ref)
+        cached = _ref_cache.get(key)
+        now = datetime.now(UTC)
+        if cached and now - cached[1] < _REF_CACHE_TTL:
+            return cached[0]
+        base = f"{self.api_base_url}/repos/{self.repo_owner}/{self.repo_name}"
+        quoted = quote(ref, safe="")
+        try:
+            async with http_client(10.0) as client:
+                exists = False
+                for url in (f"{base}/branches/{quoted}", f"{base}/git/ref/tags/{quoted}"):
+                    response = await client.get(url, headers=self._headers())
+                    if response.status_code == 200:
+                        exists = True
+                        break
+        except httpx.RequestError:
+            logger.warning("Ref check for %s/%s@%s failed; allowing", self.repo_owner,
+                           self.repo_name, ref)
+            return True
+        _ref_cache[key] = (exists, now)
+        return exists
+
+    async def cancel_workflow_run(self, run_id: int) -> None:
+        """Ask GitHub to cancel a run; an already finished run (409) is fine."""
+
+        url = (
+            f"{self.api_base_url}/repos/{self.repo_owner}/{self.repo_name}"
+            f"/actions/runs/{run_id}/cancel"
+        )
+        async with http_client(15.0) as client:
+            response = await client.post(url, headers=self._headers())
+        if response.status_code in (200, 202, 409):
+            return
+        logger.error(
+            "GitHub refused to cancel run %s: status=%s body=%s",
+            run_id,
+            response.status_code,
+            response.text[:300],
+        )
+        response.raise_for_status()
 
     async def trigger_workflow(
         self,
@@ -265,8 +319,14 @@ class GitHubActionsClient:
         dispatched_at: datetime | None,
         instance_name: str,
         deployment_id: str,
+        exclude_run_ids: frozenset[int] = frozenset(),
     ) -> int | None:
-        """Correlate legacy/repository dispatches that did not return a run ID."""
+        """Correlate dispatches that did not return a run ID.
+
+        A run already linked to another operation (``exclude_run_ids``) is
+        never matched again, so two dispatches close together cannot both
+        claim the same run.
+        """
 
         runs = await self.list_workflow_runs(
             workflow_id,
@@ -274,6 +334,7 @@ class GitHubActionsClient:
             ref=ref,
             dispatched_at=dispatched_at,
         )
+        runs = [run for run in runs if int(run.get("id", 0)) not in exclude_run_ids]
         if not runs:
             return None
 
@@ -309,6 +370,7 @@ class GitHubActionsClient:
         *,
         instance_name: str,
         deployment_id: str,
+        exclude_run_ids: frozenset[int] = frozenset(),
     ) -> dict[str, Any] | None:
         """Resolve and normalize a run with its job/category and step hierarchy."""
 
@@ -332,6 +394,7 @@ class GitHubActionsClient:
                 dispatched_at=dispatched_at,
                 instance_name=instance_name,
                 deployment_id=deployment_id,
+                exclude_run_ids=exclude_run_ids,
             )
         if run_id is None:
             return None

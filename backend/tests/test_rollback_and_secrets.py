@@ -134,7 +134,7 @@ class TestRollback:
                 return_value={"operation": "upgrade", "rollback": True},
             ) as upgrade_mock,
             patch(
-                f"{_API}.dispatch_registered_application_deployment", new_callable=AsyncMock
+                "c2ai.deployments.dispatch.dispatch_registered_application_deployment", new_callable=AsyncMock
             ) as deploy_mock,
             patch(
                 f"{_API}.crud_registered_application.complete_registered_application_upgrade_dispatch",
@@ -176,7 +176,7 @@ class TestRollback:
                 return_value="llm-token",
             ),
             patch(
-                f"{_API}.dispatch_registered_application_deployment",
+                "c2ai.deployments.dispatch.dispatch_registered_application_deployment",
                 new_callable=AsyncMock,
                 return_value={"pipeline": "container"},
             ) as deploy_mock,
@@ -215,7 +215,7 @@ class TestRollback:
                 return_value=runtime,
             ),
             patch(
-                f"{_API}.dispatch_registered_application_deployment",
+                "c2ai.deployments.dispatch.dispatch_registered_application_deployment",
                 new_callable=AsyncMock,
                 return_value={"trigger_method": "workflow_dispatch"},
             ) as deploy_mock,

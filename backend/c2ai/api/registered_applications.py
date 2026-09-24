@@ -45,6 +45,7 @@ from c2ai.crud import (
     registered_application as crud_registered_application,
 )
 from c2ai.db.session import get_db_session as db_session
+from c2ai.deployments.dispatch import dispatch_deployment as _dispatch_deployment
 from c2ai.models.registered_application import RegisteredApplicationVersion
 from c2ai.schemas.registered_application import (
     ContainerApplicationSecretCreate,
@@ -95,7 +96,6 @@ from c2ai.services.registered_application_deployment import (
     build_deployment_configuration,
     configured_version,
     default_github_instance_name,
-    dispatch_registered_application_deployment,
     dispatch_registered_application_termination,
     dispatch_registered_application_upgrade,
     resolve_github_deployment_instance_name,
@@ -139,55 +139,6 @@ def _require_deployment_callback_token(
             "Invalid deployment callback token.",
             code="InvalidDeploymentCallbackToken",
         )
-
-
-async def _dispatch_deployment(
-    db: AsyncSession,
-    version: RegisteredApplicationVersion,
-    *,
-    deployment_id: UUID,
-    instance_name: str,
-    tier: int,
-    configuration: dict,
-    triggered_by: str,
-) -> dict:
-    """Dispatch a deploy pipeline with the credentials its application type needs.
-
-    Used for both first deployments and rollbacks, so a redeploy always sends
-    the same registry, LLM, and GitHub credentials the original did.
-    """
-
-    options: dict = {}
-    if version.application.application_type == ApplicationType.GITHUB_WORKFLOW.value:
-        github = version.github_configuration
-        if github is not None:
-            runtime = await crud_github_connection.resolve_github_connection(
-                db, github.github_connection_id
-            )
-            if runtime is not None:
-                options["github_token"] = runtime.token
-                options["github_api_base_url"] = runtime.api_base_url
-    else:
-        template = version.container_configuration
-        if template is not None and template.registry_password_encrypted is not None:
-            registry = await crud_registered_application.resolve_container_registry_credentials(
-                db, version.id
-            )
-            if registry is not None:
-                options["registry_username"] = registry.username
-                options["registry_token"] = registry.password
-        options["llm_api_token"] = await crud_registered_application.resolve_llm_api_token(
-            db, version.id
-        )
-    return await dispatch_registered_application_deployment(
-        version,
-        deployment_id=deployment_id,
-        instance_name=instance_name,
-        tier=tier,
-        configuration=configuration,
-        triggered_by=triggered_by,
-        **options,
-    )
 
 
 def _github_registration_detail(

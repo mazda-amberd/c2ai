@@ -8,6 +8,7 @@ import pytest
 from c2ai.services.github_workflow_progress import (
     get_registered_deployment_workflow_progress,
 )
+from tests.helpers import mock_db
 
 
 @pytest.mark.asyncio
@@ -61,8 +62,7 @@ async def test_completed_termination_syncs_status_and_exposes_nested_steps():
             "run_id": 891,
         },
     )
-    db = MagicMock()
-    db.commit = AsyncMock()
+    db = mock_db()
     client = MagicMock()
     client.get_workflow_progress = AsyncMock(return_value=progress)
 
@@ -129,8 +129,7 @@ async def test_failed_job_sets_failed_state_and_specific_reason():
             "run_id": 900,
         },
     )
-    db = MagicMock()
-    db.commit = AsyncMock()
+    db = mock_db()
     client = MagicMock()
     client.get_workflow_progress = AsyncMock(return_value=progress)
 

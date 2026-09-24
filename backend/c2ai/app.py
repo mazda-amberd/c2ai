@@ -21,7 +21,6 @@ from c2ai.api.troubleshooting import router as troubleshooting_router
 from c2ai.api.users import router as users_router
 from c2ai.clients.http import close_http_clients
 from c2ai.config import check_startup_settings, get_settings
-from c2ai.core.background import cancel_background_tasks
 from c2ai.core.exception_handlers import attach_exception_handlers
 from c2ai.core.frontend import setup_frontend_serving
 from c2ai.jobs import Worker, get_job_store
@@ -47,7 +46,6 @@ async def _lifespan(_app: FastAPI):
             with suppress(asyncio.CancelledError):
                 await worker_task
             set_in_process_worker(None)
-        await cancel_background_tasks()
         await close_http_clients()
 
 

@@ -5,10 +5,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from c2ai.models.deployment import Deployment
+from c2ai.models.registered_application import DeploymentInstance
 from c2ai.schemas.grafana import Instance
 from c2ai.utils.host_labels import split_workflow_host_label
 
@@ -31,32 +31,48 @@ def _normalize(value: str | None) -> str | None:
     return trimmed or None
 
 
+def _parameter(instance: DeploymentInstance, key: str) -> str | None:
+    parameters = (instance.configuration or {}).get("parameters")
+    value = parameters.get(key) if isinstance(parameters, dict) else None
+    return value if isinstance(value, str) else None
+
+
 async def load_instance_metadata_map(
     db: AsyncSession,
     subdomains: list[str],
 ) -> dict[str, InstanceMetadata]:
     """
-    Fetch the latest deployment metadata per subdomain from Athena's DB.
+    Client and instance names per subdomain from the deployment records.
 
-    When multiple rows exist for the same subdomain, the newest row wins.
+    Deployments that were given a customer and environment (ADA and other
+    GitHub workflows) supply them; the newest instance at a subdomain wins.
     """
     if not subdomains:
         return {}
 
     result = await db.execute(
-        select(Deployment)
-        .where(Deployment.subdomain.in_(subdomains))
-        .order_by(Deployment.created_at.desc(), Deployment.id.desc())
+        select(DeploymentInstance)
+        .where(
+            or_(
+                DeploymentInstance.subdomain.in_(subdomains),
+                DeploymentInstance.instance_name.in_(subdomains),
+            )
+        )
+        .order_by(DeploymentInstance.created_at.desc(), DeploymentInstance.id.desc())
     )
-    deployments = result.scalars().all()
 
     metadata_by_subdomain: dict[str, InstanceMetadata] = {}
-    for deployment in deployments:
-        if deployment.subdomain in metadata_by_subdomain:
+    for instance in result.scalars().all():
+        subdomain = instance.subdomain or instance.instance_name
+        if subdomain in metadata_by_subdomain:
             continue
-        metadata_by_subdomain[deployment.subdomain] = InstanceMetadata(
-            client_name=_normalize(deployment.customer_name),
-            instance_name=_normalize(deployment.env_instance),
+        client_name = _parameter(instance, "customer_name")
+        environment = _parameter(instance, "env_instance")
+        if client_name is None and environment is None:
+            continue
+        metadata_by_subdomain[subdomain] = InstanceMetadata(
+            client_name=_normalize(client_name),
+            instance_name=_normalize(environment),
         )
 
     return metadata_by_subdomain

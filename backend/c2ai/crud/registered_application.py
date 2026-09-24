@@ -7,7 +7,7 @@ import logging
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -31,10 +31,7 @@ from c2ai.core.exceptions import (
     DeploymentAlreadyAtVersion,
     DeploymentInstanceNotFound,
     DeploymentProgressConflict,
-    DeploymentRollbackNotAvailable,
-    DeploymentTerminationNotAvailable,
     DeploymentTerminationNotSupported,
-    DeploymentUpgradeNotAvailable,
     DeploymentUpgradeNotSupported,
     DuplicateContainerApplicationSecret,
     DuplicateDeploymentInstance,
@@ -44,6 +41,18 @@ from c2ai.core.exceptions import (
     RegisteredApplicationHasRunningInstances,
     RegisteredApplicationNotFound,
     ServiceUnavailableError,
+    UnprocessableEntityError,
+)
+from c2ai.deployments import lifecycle
+from c2ai.deployments.lifecycle import Operation, Outcome
+from c2ai.deployments.operations import (
+    active_operation,
+    close_operation,
+    is_active_operation_conflict,
+    log_subdomain,
+    open_operation,
+    operation_conflict,
+    record_dispatch,
 )
 from c2ai.models.registered_application import (
     ApplicationLLMConfiguration,
@@ -898,6 +907,28 @@ async def delete_registered_application(
         raise
 
 
+async def _flush_operation(db: AsyncSession, instance: DeploymentInstance) -> None:
+    """Flush a staged operation, turning index violations into API errors."""
+
+    try:
+        await db.flush()
+    except IntegrityError as error:
+        await db.rollback()
+        if is_active_operation_conflict(error):
+            raise operation_conflict(log_subdomain(instance)) from error
+        constraint = _violated_constraint(error)
+        if constraint == _DEPLOYMENT_SUBDOMAIN_CONSTRAINT:
+            raise DuplicateDeploymentSubdomain(instance.subdomain) from error
+        if constraint in (_DEPLOYMENT_NAME_CONSTRAINT, None):
+            # ``None``: the driver did not report a name; the tier/name pair is
+            # the only other unique index an instance row can violate.
+            raise DuplicateDeploymentInstance(instance.instance_name, instance.tier) from error
+        raise
+    except SQLAlchemyError:
+        await db.rollback()
+        raise
+
+
 async def create_registered_application_deployment(
     db: AsyncSession,
     version: RegisteredApplicationVersion,
@@ -907,61 +938,61 @@ async def create_registered_application_deployment(
     configuration: dict,
     triggered_by: str,
 ) -> DeploymentInstance:
-    """Persist a pending instance; caller dispatches and commits atomically."""
+    """Persist a pending instance and its deploy operation.
+
+    The caller dispatches the pipeline and then commits (``complete_*``), or
+    rolls back so a failed dispatch leaves nothing behind.
+    """
 
     dns_configuration = configuration.get("dns")
     instance = DeploymentInstance(
+        id=uuid4(),
         application=version.application,
         application_version=version,
         instance_name=instance_name,
         tier=tier,
-        status=DeploymentInstanceStatus.PENDING.value,
         configuration=configuration,
-        triggered_by=triggered_by,
-        current_step=DeploymentStep.VALIDATING_CONFIGURATION.value,
+        rollback_count=0,
         subdomain=(dns_configuration or {}).get("subdomain"),
         hostname=(dns_configuration or {}).get("hostname"),
-        dns_status="pending" if dns_configuration else None,
     )
+    lifecycle.begin(instance, Operation.DEPLOY, triggered_by=triggered_by)
     instance.events.append(
         DeploymentInstanceEvent(
             step=DeploymentStep.VALIDATING_CONFIGURATION.value,
-            status=DeploymentInstanceStatus.PENDING.value,
+            status=instance.status,
             message="Deployment configuration validated.",
             created_by=triggered_by,
         )
     )
     db.add(instance)
-    try:
-        await db.flush()
-    except IntegrityError as error:
-        await db.rollback()
-        constraint = _violated_constraint(error)
-        if constraint == _DEPLOYMENT_SUBDOMAIN_CONSTRAINT:
-            raise DuplicateDeploymentSubdomain(instance.subdomain) from error
-        if constraint in (_DEPLOYMENT_NAME_CONSTRAINT, None):
-            # ``None``: the driver did not report a name; the tier/name pair is
-            # the only unique constraint a new instance row can violate.
-            raise DuplicateDeploymentInstance(instance_name, tier) from error
-        raise
+    open_operation(
+        db,
+        instance,
+        Operation.DEPLOY,
+        triggered_by=triggered_by,
+        version=configured_version(configuration, version.application.application_type),
+    )
+    await _flush_operation(db, instance)
     return instance
 
 
-async def complete_registered_application_dispatch(
+async def complete_operation_dispatch(
     db: AsyncSession,
     instance: DeploymentInstance,
     dispatch_reference: dict,
     *,
-    event_message: str = "Deployment pipeline dispatched.",
+    event_message: str,
 ) -> DeploymentInstance:
-    """Mark a flushed deployment as dispatched and commit the transaction."""
+    """Record the accepted dispatch on the instance and its log row, then commit."""
 
-    instance.status = DeploymentInstanceStatus.DEPLOYING.value
+    lifecycle.mark_dispatched(instance)
     instance.dispatch_reference = dispatch_reference
+    record_dispatch(await active_operation(db, instance.id), dispatch_reference)
     instance.events.append(
         DeploymentInstanceEvent(
             step=DeploymentStep.VALIDATING_CONFIGURATION.value,
-            status=DeploymentInstanceStatus.DEPLOYING.value,
+            status=instance.status,
             message=event_message,
             created_by=instance.triggered_by,
         )
@@ -980,23 +1011,53 @@ async def complete_registered_application_dispatch(
     return instance
 
 
+async def complete_registered_application_dispatch(
+    db: AsyncSession,
+    instance: DeploymentInstance,
+    dispatch_reference: dict,
+    *,
+    event_message: str = "Deployment pipeline dispatched.",
+) -> DeploymentInstance:
+    """Mark a staged deployment (or redeploy) as dispatched and commit."""
+
+    return await complete_operation_dispatch(
+        db, instance, dispatch_reference, event_message=event_message
+    )
+
+
+async def _lock_instance(db: AsyncSession, deployment_id: UUID) -> DeploymentInstance:
+    instance = await get_registered_application_deployment(db, deployment_id, for_update=True)
+    if instance is None:
+        await db.rollback()
+        raise DeploymentInstanceNotFound(deployment_id)
+    return instance
+
+
+async def _ensure_can_begin(
+    db: AsyncSession, instance: DeploymentInstance, operation: Operation
+) -> None:
+    try:
+        lifecycle.ensure_can_begin(instance, operation)
+    except Exception:
+        await db.rollback()
+        raise
+
+
 async def prepare_registered_application_upgrade(
     db: AsyncSession,
     deployment_id: UUID,
     *,
     target_version: str,
     triggered_by: str,
+    allow_same_version: bool = False,
 ) -> DeploymentInstance:
-    """Lock a running instance and stage its type-specific version upgrade."""
+    """Lock a running instance and stage its type-specific version upgrade.
 
-    instance = await get_registered_application_deployment(
-        db,
-        deployment_id,
-        for_update=True,
-    )
-    if instance is None:
-        await db.rollback()
-        raise DeploymentInstanceNotFound(deployment_id)
+    ``allow_same_version`` re-applies the current version (the ADA "update"
+    button redeploys a branch in place).
+    """
+
+    instance = await _lock_instance(db, deployment_id)
     application_type = instance.application.application_type
     if application_type not in {
         ApplicationType.CONTAINERIZED.value,
@@ -1004,12 +1065,7 @@ async def prepare_registered_application_upgrade(
     }:
         await db.rollback()
         raise DeploymentUpgradeNotSupported()
-    if instance.status not in {
-        DeploymentInstanceStatus.RUNNING.value,
-        DeploymentInstanceStatus.FAILED.value,
-    }:
-        await db.rollback()
-        raise DeploymentUpgradeNotAvailable(instance.status)
+    await _ensure_can_begin(db, instance, Operation.UPGRADE)
 
     # A failed instance may retry the version its previous upgrade stored.
     retrying_failed_upgrade = instance.status == DeploymentInstanceStatus.FAILED.value
@@ -1033,7 +1089,7 @@ async def prepare_registered_application_upgrade(
             )
         github["version"] = target_version
     current = configured_version(instance.configuration, application_type)
-    if current == target_version and not retrying_failed_upgrade:
+    if current == target_version and not (retrying_failed_upgrade or allow_same_version):
         await db.rollback()
         raise DeploymentAlreadyAtVersion(target_version)
     # Keep the last configuration that ran successfully for rollback. Retrying
@@ -1043,25 +1099,20 @@ async def prepare_registered_application_upgrade(
     ):
         instance.previous_configuration = deepcopy(instance.configuration)
     instance.configuration = configuration
-    instance.status = DeploymentInstanceStatus.UPDATING.value
-    instance.current_step = DeploymentStep.VALIDATING_CONFIGURATION.value
-    instance.failure_reason = None
-    instance.completed_at = None
-    instance.triggered_by = triggered_by
+    lifecycle.begin(instance, Operation.UPGRADE, triggered_by=triggered_by)
     instance.events.append(
         DeploymentInstanceEvent(
             step=DeploymentStep.VALIDATING_CONFIGURATION.value,
-            status=DeploymentInstanceStatus.UPDATING.value,
+            status=instance.status,
             message=f"Upgrade to version '{target_version}' requested.",
             created_by=triggered_by,
         )
     )
     db.add(instance)
-    try:
-        await db.flush()
-    except SQLAlchemyError:
-        await db.rollback()
-        raise
+    open_operation(
+        db, instance, Operation.UPGRADE, triggered_by=triggered_by, version=target_version
+    )
+    await _flush_operation(db, instance)
     return instance
 
 
@@ -1074,29 +1125,16 @@ async def complete_registered_application_upgrade_dispatch(
 ) -> DeploymentInstance:
     """Commit a version change after its update pipeline is dispatched."""
 
-    instance.status = DeploymentInstanceStatus.UPDATING.value
-    instance.dispatch_reference = dispatch_reference
     target_version = configured_version(
         instance.configuration, instance.application.application_type
     )
-    instance.events.append(
-        DeploymentInstanceEvent(
-            step=DeploymentStep.VALIDATING_CONFIGURATION.value,
-            status=DeploymentInstanceStatus.UPDATING.value,
-            message=event_message
-            or f"Application upgrade pipeline dispatched for version '{target_version}'.",
-            created_by=instance.triggered_by,
-        )
+    return await complete_operation_dispatch(
+        db,
+        instance,
+        dispatch_reference,
+        event_message=event_message
+        or f"Application upgrade pipeline dispatched for version '{target_version}'.",
     )
-    db.add(instance)
-    try:
-        await db.flush()
-        await db.refresh(instance, attribute_names=["updated_at"])
-        await db.commit()
-    except SQLAlchemyError:
-        await db.rollback()
-        raise
-    return instance
 
 
 async def prepare_registered_application_termination(
@@ -1107,47 +1145,27 @@ async def prepare_registered_application_termination(
 ) -> DeploymentInstance:
     """Lock a supported instance and stage its destructive termination."""
 
-    instance = await get_registered_application_deployment(
-        db,
-        deployment_id,
-        for_update=True,
-    )
-    if instance is None:
-        await db.rollback()
-        raise DeploymentInstanceNotFound(deployment_id)
+    instance = await _lock_instance(db, deployment_id)
     if instance.application.application_type not in {
         ApplicationType.CONTAINERIZED.value,
         ApplicationType.GITHUB_WORKFLOW.value,
     }:
         await db.rollback()
         raise DeploymentTerminationNotSupported()
-    if instance.status not in {
-        DeploymentInstanceStatus.RUNNING.value,
-        DeploymentInstanceStatus.FAILED.value,
-    }:
-        await db.rollback()
-        raise DeploymentTerminationNotAvailable(instance.status)
+    await _ensure_can_begin(db, instance, Operation.TERMINATE)
 
-    instance.status = DeploymentInstanceStatus.TERMINATING.value
-    instance.current_step = DeploymentStep.VALIDATING_CONFIGURATION.value
-    instance.failure_reason = None
-    instance.completed_at = None
-    instance.terminated_at = None
-    instance.triggered_by = triggered_by
+    lifecycle.begin(instance, Operation.TERMINATE, triggered_by=triggered_by)
     instance.events.append(
         DeploymentInstanceEvent(
             step=DeploymentStep.VALIDATING_CONFIGURATION.value,
-            status=DeploymentInstanceStatus.TERMINATING.value,
+            status=instance.status,
             message="Application deployment termination requested.",
             created_by=triggered_by,
         )
     )
     db.add(instance)
-    try:
-        await db.flush()
-    except SQLAlchemyError:
-        await db.rollback()
-        raise
+    open_operation(db, instance, Operation.TERMINATE, triggered_by=triggered_by)
+    await _flush_operation(db, instance)
     return instance
 
 
@@ -1158,24 +1176,48 @@ async def complete_registered_application_termination_dispatch(
 ) -> DeploymentInstance:
     """Commit terminating state after the cleanup pipeline is dispatched."""
 
-    instance.status = DeploymentInstanceStatus.TERMINATING.value
-    instance.dispatch_reference = dispatch_reference
+    return await complete_operation_dispatch(
+        db,
+        instance,
+        dispatch_reference,
+        event_message="Application termination pipeline dispatched.",
+    )
+
+
+async def prepare_registered_application_move_tier(
+    db: AsyncSession,
+    deployment_id: UUID,
+    *,
+    target_tier: int,
+    triggered_by: str,
+) -> DeploymentInstance:
+    """Lock a GitHub Workflow instance and stage its move to ``target_tier``."""
+
+    instance = await _lock_instance(db, deployment_id)
+    if instance.application.application_type != ApplicationType.GITHUB_WORKFLOW.value:
+        await db.rollback()
+        raise UnprocessableEntityError(
+            "Only GitHub Workflow deployments can move to another tier."
+        )
+    await _ensure_can_begin(db, instance, Operation.MOVE_TIER)
+    if instance.tier == target_tier:
+        await db.rollback()
+        raise UnprocessableEntityError(f"The deployment already runs in Tier {target_tier}.")
+
+    lifecycle.begin(instance, Operation.MOVE_TIER, triggered_by=triggered_by)
     instance.events.append(
         DeploymentInstanceEvent(
             step=DeploymentStep.VALIDATING_CONFIGURATION.value,
-            status=DeploymentInstanceStatus.TERMINATING.value,
-            message="Application termination pipeline dispatched.",
-            created_by=instance.triggered_by,
+            status=instance.status,
+            message=f"Move from Tier {instance.tier} to Tier {target_tier} requested.",
+            created_by=triggered_by,
         )
     )
     db.add(instance)
-    try:
-        await db.flush()
-        await db.refresh(instance, attribute_names=["updated_at"])
-        await db.commit()
-    except SQLAlchemyError:
-        await db.rollback()
-        raise
+    open_operation(
+        db, instance, Operation.MOVE_TIER, triggered_by=triggered_by, tier=target_tier
+    )
+    await _flush_operation(db, instance)
     return instance
 
 
@@ -1258,6 +1300,47 @@ async def get_registered_application_deployment(
     return result.scalar_one_or_none()
 
 
+async def settle_operation(
+    db: AsyncSession,
+    instance: DeploymentInstance,
+    outcome: Outcome,
+    *,
+    at: datetime | None = None,
+    failure_reason: str | None = None,
+    message: str | None = None,
+    created_by: str = "deployment-pipeline",
+) -> None:
+    """Apply an operation's final outcome to the instance and close its log row.
+
+    The caller commits. Used by pipeline callbacks, GitHub run conclusions,
+    cancellation, and the reconciler.
+    """
+
+    at = at or datetime.now(UTC)
+    run = await active_operation(db, instance.id)
+    operation = lifecycle.operation_of(instance)
+    target_tier = run.tier if run is not None and operation is Operation.MOVE_TIER else None
+    status = lifecycle.settle(
+        instance,
+        operation,
+        outcome,
+        at=at,
+        failure_reason=failure_reason,
+        target_tier=target_tier,
+    )
+    close_operation(run, outcome, at=at)
+    instance.events.append(
+        DeploymentInstanceEvent(
+            step=instance.current_step,
+            status=status,
+            message=message,
+            failure_reason=instance.failure_reason,
+            created_by=created_by,
+        )
+    )
+    db.add(instance)
+
+
 async def update_registered_application_deployment_progress(
     db: AsyncSession,
     deployment_id: UUID,
@@ -1265,14 +1348,7 @@ async def update_registered_application_deployment_progress(
 ) -> DeploymentInstance:
     """Apply one monotonic, idempotent pipeline progress update."""
 
-    instance = await get_registered_application_deployment(
-        db,
-        deployment_id,
-        for_update=True,
-    )
-    if instance is None:
-        await db.rollback()
-        raise DeploymentInstanceNotFound(deployment_id)
+    instance = await _lock_instance(db, deployment_id)
 
     next_step = payload.current_step.value
     next_status = payload.status.value
@@ -1364,46 +1440,35 @@ async def update_registered_application_deployment_progress(
             "Containerized deployments must configure DNS before completion."
         )
 
-    now = datetime.now(tz=UTC)
-    instance.current_step = next_step
-    instance.status = next_status
-    instance.failure_reason = payload.failure_reason
-    if instance.subdomain and not is_upgrade:
-        if is_termination:
-            if next_step == DeploymentStep.CONFIGURING_DNS.value:
-                instance.dns_status = "deleting"
-            elif next_step == DeploymentStep.COMPLETED.value:
-                instance.dns_status = "deleted"
-            elif next_step == DeploymentStep.FAILED.value:
-                instance.dns_status = "failed"
-        elif next_step == DeploymentStep.CONFIGURING_DNS.value:
-            instance.dns_status = "configuring"
-        elif next_step == DeploymentStep.COMPLETED.value:
-            instance.dns_status = "active"
-        elif next_step == DeploymentStep.FAILED.value:
-            instance.dns_status = "failed"
-    instance.completed_at = (
-        now
-        if next_step in {DeploymentStep.COMPLETED.value, DeploymentStep.FAILED.value}
-        else None
-    )
-    instance.terminated_at = (
-        now
-        if is_termination
-        and next_step == DeploymentStep.COMPLETED.value
-        and next_status == DeploymentInstanceStatus.TERMINATED.value
-        else None
-    )
-    instance.events.append(
-        DeploymentInstanceEvent(
-            step=next_step,
-            status=next_status,
-            message=payload.message,
-            failure_reason=payload.failure_reason,
-            created_by="deployment-pipeline",
+    if is_terminal_step:
+        outcome = (
+            Outcome.SUCCESS if next_step == DeploymentStep.COMPLETED.value else Outcome.FAILURE
         )
-    )
-    db.add(instance)
+        await settle_operation(
+            db,
+            instance,
+            outcome,
+            failure_reason=payload.failure_reason,
+            message=payload.message,
+        )
+    else:
+        # In-progress report: the step advances, the status stays the
+        # operation's in-progress status (validated above).
+        instance.current_step = next_step
+        instance.status = next_status
+        instance.failure_reason = payload.failure_reason
+        if next_step == DeploymentStep.CONFIGURING_DNS.value:
+            instance.dns_status = "deleting" if is_termination else "configuring"
+        instance.events.append(
+            DeploymentInstanceEvent(
+                step=next_step,
+                status=next_status,
+                message=payload.message,
+                failure_reason=payload.failure_reason,
+                created_by="deployment-pipeline",
+            )
+        )
+        db.add(instance)
     try:
         await db.flush()
         await db.refresh(instance, attribute_names=["updated_at"])
@@ -1420,30 +1485,13 @@ async def prepare_registered_application_rollback(
     *,
     triggered_by: str,
 ) -> DeploymentInstance:
-    """Lock an instance and prepare redispatch of its stored configuration."""
+    """Lock an instance and stage a return to its previous version (or a redeploy)."""
 
-    instance = await get_registered_application_deployment(
-        db,
-        deployment_id,
-        for_update=True,
-    )
-    if instance is None:
-        await db.rollback()
-        raise DeploymentInstanceNotFound(deployment_id)
-    if instance.status not in {
-        DeploymentInstanceStatus.RUNNING.value,
-        DeploymentInstanceStatus.FAILED.value,
-    }:
-        await db.rollback()
-        raise DeploymentRollbackNotAvailable(instance.status)
+    instance = await _lock_instance(db, deployment_id)
+    await _ensure_can_begin(db, instance, Operation.ROLLBACK)
 
     application_type = instance.application.application_type
-    instance.current_step = DeploymentStep.VALIDATING_CONFIGURATION.value
-    instance.failure_reason = None
-    instance.completed_at = None
     instance.rollback_count += 1
-    instance.triggered_by = triggered_by
-
     previous = instance.previous_configuration
     previous_version = (
         configured_version(previous, application_type) if isinstance(previous, dict) else None
@@ -1454,15 +1502,15 @@ async def prepare_registered_application_rollback(
         # the upgrade rules (status "updating"); swapping keeps a roll-forward.
         instance.previous_configuration = deepcopy(instance.configuration)
         instance.configuration = deepcopy(previous)
-        instance.status = DeploymentInstanceStatus.UPDATING.value
+        lifecycle.begin(instance, Operation.ROLLBACK, triggered_by=triggered_by)
+        logged = Operation.ROLLBACK
         message = (
             f"Rollback #{instance.rollback_count} to version '{previous_version}' requested."
         )
     else:
         # Never upgraded: a rollback re-applies the stored configuration.
-        instance.status = DeploymentInstanceStatus.DEPLOYING.value
-        if instance.subdomain:
-            instance.dns_status = "pending"
+        lifecycle.begin(instance, Operation.ROLLBACK, triggered_by=triggered_by, redeploy=True)
+        logged = Operation.DEPLOY
         message = f"Rollback #{instance.rollback_count} requested."
     instance.events.append(
         DeploymentInstanceEvent(
@@ -1473,9 +1521,12 @@ async def prepare_registered_application_rollback(
         )
     )
     db.add(instance)
-    try:
-        await db.flush()
-    except SQLAlchemyError:
-        await db.rollback()
-        raise
+    open_operation(
+        db,
+        instance,
+        logged,
+        triggered_by=triggered_by,
+        version=configured_version(instance.configuration, application_type),
+    )
+    await _flush_operation(db, instance)
     return instance
