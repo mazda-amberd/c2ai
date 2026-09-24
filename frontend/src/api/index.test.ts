@@ -33,7 +33,7 @@ describe("parseFastApiDetail", () => {
 
     expect(parseFastApiDetail(body)).toBe(
       "Connection name is required. " +
-        "Repository url repository_url must be a GitHub repository URL. " +
+        "Repository url must be a GitHub repository URL. " +
         "Access token is required.",
     );
   });
