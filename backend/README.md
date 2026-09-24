@@ -1,485 +1,228 @@
-# Athena Backend
+# C2AI backend (Athena service)
 
-This document explains how to set up and run the **Athena backend** locally.
+FastAPI service behind the C2AI UI: application registration and deployment,
+tier dashboards (Grafana/Prometheus), deployment logs (Loki), AI
+troubleshooting, and cost tracking. Python 3.11+, PostgreSQL 14+ (with
+`pgcrypto` and `uuid-ossp`).
 
-## Prerequisites
+## Layout
 
-- **Python**: 3.10+ (see `pyproject.toml`)
-- **Poetry** installed
-- A database available/configured (see your `.env` for DB settings)
+```
+backend/
+  main.py                 # python main.py  -> uvicorn on APP_HOST:APP_PORT
+  c2ai/
+    app.py                # create_app(): routers, CORS, error handlers, SPA
+    api/                  # HTTP routes (thin: validate, call services/crud, map)
+    auth/                 # JWT + cookie helpers, auth dependencies
+    clients/              # GitHub, Grafana, container registry, secret broker
+    constants/            # PromQL catalogues, tiers, lifecycle enums
+    core/                 # exceptions, handlers, logging, SPA serving, bg tasks
+    crud/                 # database access
+    db/                   # engine/session, migration runner, dev bootstrap
+    llm/                  # vLLM chat model + troubleshooting prompt
+    models/               # SQLAlchemy ORM models
+    schemas/              # Pydantic request/response contracts
+    services/             # domain logic (deploy payloads, metrics, costs, ...)
+  migrations/NNNN_*.sql   # forward-only SQL migrations
+  scripts/                # operational helpers
+  tests/                  # pytest suite (no database or network needed)
+```
 
-## Setup & Run
-
-Clone or pull the Athena project from (https://github.com/Inferaim/athena) the **`dev`** branch in Git.
-
-> All commands below must be run from:
->
-> ```bash
-> cd athena/backend
-> ```
-
-### 1) Install dependencies
-
-Install the required Python libraries:
+## Setup
 
 ```bash
-poetry install
+cd backend
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+cp .env.example .env            # then fill in DATABASE_URL, secrets, Grafana, GitHub
+python -m c2ai.auth.generate_secret --write   # sets ATHENA_AUTH_SECRET in .env
 ```
 
-### 2) Activate the virtual environment
+### Database
 
-Activate the `(athena-venv)` virtual environment created by Poetry.
-
-Typical Poetry workflow options:
-
-- Spawn a shell inside the venv:
+A fresh local database (drops and recreates the database in `DATABASE_URL`,
+applies every migration, seeds `admin` / `$C2AI_ADMIN_PASSWORD`):
 
 ```bash
-poetry shell
+python -m c2ai.db.init_db --yes
 ```
 
-- Or run commands directly without activating the shell using `poetry run ...`.
-
-### 3) Initialize the Athena database
-
-For a **fresh local database**, the init script recreates the DB, runs all migrations, and seeds the admin user:
+Any existing database (staging, production, or after pulling new code):
 
 ```bash
-poetry run python src/init_db.py
+python -m c2ai.db.migrate
 ```
 
-### 4) Run database migrations
+A database that already matches the schema but predates the migration table
+is stamped once with `python -m c2ai.db.migrate --stamp`. Schema changes are
+new numbered files in `migrations/`; never edit an applied migration.
 
-If the database already exists (e.g. a shared staging DB, or you just pulled new changes), apply any pending migrations without touching existing data:
+### Run
 
 ```bash
-poetry run python src/migrate.py
+python main.py                  # http://localhost:8007
 ```
 
-**Existing databases that already match the baseline schema** (created before migrations were introduced) should be stamped once so the runner knows they are at head:
+If `../frontend/dist` exists (run `npm run build` in `frontend/`), the UI is
+served from the same origin; otherwise run the Vite dev server (port 5173),
+which calls the API on port 8007.
+
+### Test and lint
 
 ```bash
-poetry run python src/migrate.py --stamp
+pytest                          # ~670 tests, fully mocked
+ruff check c2ai tests scripts main.py
 ```
 
-After that, running `src/migrate.py` without `--stamp` will only apply genuinely new migrations going forward.
+## Configuration
 
-> New schema changes must be added as a numbered `.sql` file in `backend/db/migrations/` (e.g. `0002_add_foo.sql`). Never modify an already-applied migration file.
-
-### 5) Generate / update `ATHENA_AUTH_SECRET`
-
-Generate and print a new JWT signing secret:
-
-```bash
-poetry run python src/service/auth/generate_secret.py
-```
-
-You will see output like:
-
-```text
-ATHENA_AUTH_SECRET="XXXXXXX"
-```
-
-Copy the entire printed line and paste it into:
-
-- `athena/backend/.env`
-
-#### Optional: auto-write to `.env`
-
-You can also write/update the secret automatically:
-
-```bash
-poetry run python src/service/auth/generate_secret.py --write --env-file .env
-```
-
-### 6) Start the Athena service
-
-Start the FastAPI service:
-
-```bash
-poetry run python main.py
-```
-
-By default it uses `APP_HOST` and `APP_PORT` from your environment (see `main.py`).
-
-## Grafana (k8s) and metrics
-
-Cluster model: workloads are standard **Kubernetes Deployments** whose pods carry a `label_tier` Kubernetes label. Tier membership is determined by `kube_deployment_labels{label_tier=~"..."}`. Pod → Deployment mapping: pod → ReplicaSet (`kube_pod_owner`) → Deployment (`kube_replicaset_owner`). GPU metrics from `ray_node_gpus_utilization` (DCGM is not available on this cluster). See `docs/grafana-k8s-exploration.md` for full exploration notes.
-
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `GRAFANA_API_URL` | Grafana datasource query endpoint | — (required) |
-| `GRAFANA_API_TOKEN` | Grafana bearer token | — (required) |
-| `GRAFANA_PROMETHEUS_DATASOURCE_UID` | Prometheus datasource UID | `prometheus` |
-| `ATHENA_FINANCIAL_INGESTION_ENABLED` | Run the in-process gateway cost scheduler | `true` |
-| `ATHENA_FINANCIAL_POLL_SECONDS` | Delay between gateway counter polls | `3600` |
-
-**Deployment logs (Loki)** — `GET /api/logs/deployment` uses the same Grafana `GRAFANA_API_URL` with a Loki datasource:
-
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `GRAFANA_LOKI_DATASOURCE_UID` | Loki datasource UID for `/api/ds/query` (must match Grafana; a wrong UID yields HTTP 404 *Data source not found* from Grafana) | — (required for logs) |
-| `GRAFANA_LOKI_MAX_LINES` | Max log lines per request | `2000` |
-| `GRAFANA_LOKI_NAMESPACE_LABEL` | LogQL stream label for instance / namespace | `namespace` |
-| `GRAFANA_LOKI_DEPLOYMENT_LABEL` | LogQL stream label for app / deployment name | `deployment` |
-| `GRAFANA_LOKI_TIER_LABEL` | Optional; when set, tier query param adds `tierN` to the selector | unset |
-
-Per-tier **label_tier** overrides (Prometheus RE2, defaults match cluster layout):
-
-| Variable | Default |
-|----------|---------|
-| `ATHENA_TIER1_LABEL_REGEX` | `tier1` |
-| `ATHENA_TIER2_LABEL_REGEX` | `tier2` |
-| `ATHENA_TIER3_LABEL_REGEX` | `tier3\|prod` |
-
-**GPU (Ray)** — tier totals use one Prometheus query: `avg by (label_tier)(label_replace(...) or ...)` over `ray_node_gpus_utilization` with no app/namespace/deployment filters. Per-app GPU uses the panel-18 token × tier query (`get_gpu_per_app_query()`): unfiltered `kube_deployment_labels` and `llm_total_tokens_total` so all apps contribute. Override Ray cluster names per tier if they differ from defaults:
-
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `ATHENA_TIER1_GPU_CLUSTER` / `ATHENA_TIER2_GPU_CLUSTER` / `ATHENA_TIER3_GPU_CLUSTER` | Literal `ray_io_cluster` value matched in each `label_replace` arm | `qwen-5254d` / `qwen-pq9sc` / `qwen-l8dnl` |
-
-**Unit normalisation** — raw Prometheus values are converted to 0–100% for UI thresholds:
-
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `ATHENA_CPU_CORES_CAP` | Total CPU cores → 100% denominator | `8` |
-| `ATHENA_MEMORY_GB_CAP` | Total memory GB → 100% denominator | `80` |
-| `ATHENA_EXCLUDED_DEPLOYMENTS` | Comma-separated deployment names to hide from the instance list (case-insensitive) | `nginx` |
-
-GPU (`ray_node_gpus_utilization`): tier totals are one instant query with a `label_tier` dimension (`tier1`–`tier3`); values are in the 0–num_gpus scale; the UI shows that value with a `%` suffix. Per-app GPU is the panel-18 token×tier query (`get_gpu_per_app_query()`); instances without panel-18 attribution show 0.
-
-Successful `GET /api/metrics` calls upsert the `application_instances` table (created by migrations — run `poetry run python src/migrate.py` before starting the server).
-
-## Using Postman
-
-Use Postman with the appropriate HTTP endpoints to interact with the Athena service.
-
-All endpoints except `POST /auth/login` require a valid JWT (`Authorization: Bearer <token>` header or cookie).
-
-### Financial tracking
-
-`GET /api/financial/costs` reads stored historical cost records. Optional query
-parameters are `start_date`, `end_date`, `cost_type` (`private_llm`,
-`public_api`, or `both`), `tier` (1-4), and an exact `source_namespace`.
-Start and end dates are inclusive UTC calendar dates and must be supplied
-together. When omitted, the current calendar month through today is used.
-Without `tier`, the response contains the Cluster total and all Tier totals;
-with `tier`, it contains that Tier total and its per-application totals.
-Monetary values are returned as decimal strings in USD and are not recalculated
-using the current rate.
-
-The scheduler queries the Grafana Prometheus datasource once at startup and then
-hourly. The first successful poll stores a database checkpoint and does not
-create a charge. Later polls query the exact checkpoint interval with
-`increase(…)` over the gateway counters. Because the gateway reports the caller
-pod IP as `requested_host`, each query joins it to `kube_pod_info.pod_ip` to
-derive `source_namespace`, and Athena then obtains each namespace's Kubernetes
-tier label over the same interval.
-
-One poll prices both cost sources from that same interval, split by the
-gateway's `provider` label so a request is never charged twice:
-
-* **Private LLM** (`provider="vllm"`, our own GPU-hosted models). The measured
-  request-duration seconds from `llm_duration_seconds_sum` are billable GPU
-  time, priced as `GPU-hours × stored hourly GPU rate` (initially `$2.50`).
-  This remains an estimate, as Story 10.2 allows for v1.
-* **Public API** (every other provider — OpenAI, Azure OpenAI, Anthropic).
-  `llm_input_tokens_total` and `llm_output_tokens_total` are queried per
-  `source_namespace`, `provider` and `model`, then priced exactly as
-  `tokens × the provider's published per-million rate`, with input and output
-  billed at their own rates. No estimation is involved.
-
-Seeded public rates (per million tokens, migration
-`0017_public_api_token_rates`):
-
-| Provider | Model | Input | Output |
-|----------|-------|-------|--------|
-| `openai` / `azure-openai` | `gpt-4o` | `$2.50` | `$10.00` |
-| `anthropic` | `claude-sonnet-4-6` | `$3.00` | `$15.00` |
-
-Rates are effective-dated: changing a price closes the current row and inserts a
-new one, so previously calculated costs keep the rate they were charged at. The
-cost and applied rate are stored immutably for historical display. Usage of a
-model with no configured rate is logged and skipped rather than failing the
-whole poll — add its rate (via `configure_public_api_rate`, or a migration
-following the `0017` pattern) before that model goes into use.
-
-If a poll interval is shorter than the Prometheus scrape interval,
-`increase(...)` can temporarily return no series. In that case Athena keeps the
-checkpoint unchanged and retries with a larger accumulated interval on the next
-poll, preventing usage from being skipped.
-
-The source-namespace Grafana dashboard is a UI over this datasource; Athena
-calls `/api/ds/query` rather than downloading dashboard HTML. Prometheus must
-scrape the gateway counters with their `requested_host`, `provider` and `model`
-labels alongside `kube_pod_info.pod_ip`; calls that cannot be mapped to a
-non-host-network Kubernetes pod are intentionally left unattributed. A
-PostgreSQL transaction advisory lock ensures only one Athena replica queries and
-persists a checkpoint interval at a time.
-
-### Auth & users
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/auth/login` | Generate a JWT (optionally set cookie) |
-| `GET` | `/users/` | List users |
-| `POST` | `/users/` | Create a new user |
-| `PATCH` | `/users?user_name=username` | Update a user |
-| `DELETE` | `/users?user_name=username` | Delete a user |
-
-### Deployments & pipeline
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/deploy` | Trigger a new deployment (ada-deploy); returns `PipelineRunOut` |
-| `POST` | `/api/deploy/update` | Trigger an in-place update (ada-update); returns `PipelineRunOut` |
-| `POST` | `/api/deploy/terminate` | Terminate a live deployment (ada-terminate); returns `PipelineRunOut` |
-| `GET` | `/api/pipeline/active` | All active operations across all instances |
-| `GET` | `/api/pipeline/status?subdomain=…` | Live status for the latest run on a subdomain |
-| `GET` | `/api/pipeline/history?subdomain=…` | Past runs for a subdomain (DB only, no GitHub API calls) |
-| `POST` | `/api/pipeline/cancel` | Cancel a linked GitHub Actions run (owner of run only) |
-| `GET` | `/api/github/branches?repo=…` | List branches in an Inferaim GitHub repository |
-
-### Registered application deployment tracking
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/registered-applications/deployments?tier=…` | Paginated deployment instance history |
-| `GET` | `/api/registered-applications/deployments/{id}` | Current progress, GitHub Actions jobs/steps, stored configuration, and event history |
-| `POST` | `/api/registered-applications/deployments/{id}/rollback` | Redispatch the stored configuration (admin only) |
-| `POST` | `/api/registered-applications/deployments/{id}/upgrade` | Trigger the type-specific in-place upgrade workflow |
-| `POST` | `/api/registered-applications/deployments/{id}/terminate` | Confirm and trigger the type-specific termination workflow |
-| `POST` | `/api/registered-applications/deployments/{id}/progress` | Pipeline progress callback |
-| `POST` | `/api/registered-applications/{application_id}/deployments` | Deploy a registered GitHub workflow using its saved connection and workflow configuration |
-| `POST` | `/api/registered-applications/{application_id}/tiers/{tier}/deployments` | Deploy a registered container template into the Tier supplied by the URL |
-
-The GitHub deployment request contains only the deployment name, Tier context,
-and registered workflow parameter values. Removed container overrides and secret
-reference fields are rejected by the strict request schema:
-
-```json
-{
-  "instance_name": "release-production",
-  "tier": 2,
-  "parameters": {}
-}
-```
-
-The container deployment request is intentionally limited to deployment-specific
-values:
-
-```json
-{
-  "instance_name": "chat-service-tier-1",
-  "version": "2.0.0"
-}
-```
-
-Athena validates the exact image tag using the encrypted registry credential,
-then constructs the deployment configuration from the registered template. The
-client cannot override the target Tier, image repository, registry, container
-port, pull policy, resources, scaling, storage, environment variables, or public
-exposure setting. The generated hostname is
-`<instance_name>.amberd.ai`. Decrypted registry credentials are used only for
-the outbound registry validation call and are never persisted in deployment
-history, included in workflow inputs, or returned by the API.
-
-The shared upgrade request is `{"version": "2.0.0"}` and is accepted only for a
-running deployment. For containers, Athena validates the exact registry tag,
-copies the stored configuration, replaces only `container.image_tag`, and
-dispatches the configured update workflow. Configure
-`CONTAINER_UPGRADE_REPOSITORY` and `CONTAINER_UPGRADE_WORKFLOW`; they default to
-the container deployment repository and `container-update.yml`. For GitHub
-Workflow applications, Athena records `github.version` and passes the version as
-the `branch` input to the predefined Amberd `ada-update.yaml` workflow. Upgrade
-progress uses status `updating` until the pipeline reports `completed` with
-status `running`, or reports `failed`. DNS remains unchanged during upgrades.
-
-Termination requires `{"confirmation": "<instance-name>"}` and accepts running
-or failed deployments of either supported type. Container cleanup uses
-`CONTAINER_TERMINATION_REPOSITORY` and `CONTAINER_TERMINATION_WORKFLOW`; they
-default to the container deployment repository and `container-terminate.yml`.
-The cleanup pipeline receives the immutable deployment configuration, including
-the provider-neutral DNS identity. It reports `terminating` while deleting
-Kubernetes resources, then `configuring_dns` while deleting the DNS record, and
-finally `completed` with status `terminated`. Athena preserves the hostname for
-history and records DNS status as `deleted`.
-
-GitHub Workflow termination dispatches the predefined Amberd
-`ada-terminate.yaml` workflow with the deployment ID and instance name. It uses
-the same `terminating` and `terminated` history states but has no Athena-managed
-DNS stage.
-
-For every GitHub-dispatched deploy, upgrade, or termination, the deployment
-detail endpoint resolves the matching workflow run and returns its jobs as
-progress categories with the ordered GitHub steps nested below each job. Athena
-also synchronizes a completed run to `running`, `terminated`, or `failed` when a
-pipeline progress callback was not sent. GitHub credentials therefore need
-Actions **read** permission in addition to Actions **write** permission.
-
-#### Registered-application production configuration
-
-Review these variables before enabling registered-application deployments in a
-shared environment:
-
-| Variable | Required when | Purpose / default |
-|----------|---------------|-------------------|
-| `ATHENA_CREDENTIAL_ENCRYPTION_KEY` | GitHub, container-registry, or LLM credentials are stored | High-entropy key used by PostgreSQL `pgcrypto` to encrypt all stored credential values at rest |
-| `GITHUB_PAT` or `GITHUB_TOKEN` | A legacy connection ID or predefined workflow is dispatched | Fallback token with access to the configured repositories and Actions workflows |
-| `DEVOPS_BRANCH` | Optional | Ref containing container workflows; defaults to `main` |
-| `CONTAINER_DEPLOYMENT_REPOSITORY` | Optional | Container deployment workflow repository; defaults to `amberd-ai/devops` |
-| `CONTAINER_DEPLOYMENT_WORKFLOW` | Optional | Container deployment workflow; defaults to `container-deploy.yml` |
-| `CONTAINER_UPGRADE_REPOSITORY` | Optional | Upgrade workflow repository; defaults to the deployment repository |
-| `CONTAINER_UPGRADE_WORKFLOW` | Optional | Upgrade workflow; defaults to `container-update.yml` |
-| `CONTAINER_TERMINATION_REPOSITORY` | Optional | Termination workflow repository; defaults to the deployment repository |
-| `CONTAINER_TERMINATION_WORKFLOW` | Optional | Termination workflow; defaults to `container-terminate.yml` |
-| `DEPLOYMENT_CALLBACK_TOKEN` | Progress callbacks are enabled | Shared secret required in `X-Athena-Deployment-Token` |
-| `CONTAINER_SECRET_PROVIDER_URL` | Managed container secrets are enabled | External write-only secret broker base URL |
-| `CONTAINER_SECRET_PROVIDER_TOKEN` | Secret broker requires authentication | Bearer token sent only to the secret broker |
-| `REGISTRY_CREDENTIAL_PROVIDER_URL` | Private container registries are enabled | Resolves opaque registry credential IDs |
-| `REGISTRY_CREDENTIAL_PROVIDER_TOKEN` | Credential provider requires authentication | Bearer token sent only to the credential provider |
-| `DOCKER_HUB_API_URL` | Optional | Docker Hub API override; defaults to `https://hub.docker.com` |
-
-Keep tokens in the deployment platform's protected secret store. Do not commit
-them to Athena configuration files or workflow inputs.
-
-### Container image tags
-
-Administrators can discover deployment-ready tags for the current version of a
-registered container application:
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/registered-applications/{application_id}/image-tags?limit=100` | List normalized Docker Hub tags and image references |
-
-Docker Hub is the first supported registry adapter. Public repositories are read
-without credentials. When the application has a `registry_credential` reference,
-configure the external credential provider with:
+Every variable, with defaults, is listed in [`.env.example`](.env.example).
+The ones that must be set in any real environment:
 
 | Variable | Purpose |
-|----------|---------|
-| `REGISTRY_CREDENTIAL_PROVIDER_URL` | Base URL of the provider that resolves opaque registry credential IDs |
-| `REGISTRY_CREDENTIAL_PROVIDER_TOKEN` | Bearer token used only for credential-provider requests |
-| `DOCKER_HUB_API_URL` | Optional Docker Hub API override; defaults to `https://hub.docker.com` |
+|---|---|
+| `DATABASE_URL` | `postgresql+asyncpg://user:pass@host:5432/db` (`LOCAL_DATABASE_URL` still accepted) |
+| `ATHENA_AUTH_SECRET` | JWT signing secret |
+| `ATHENA_CREDENTIAL_ENCRYPTION_KEY` | pgcrypto key for stored GitHub/registry/LLM credentials |
+| `GITHUB_PAT` | Token for Amberd's predefined workflows (Actions read + write) |
+| `GRAFANA_API_URL`, `GRAFANA_API_TOKEN` | Grafana `/api/ds/query` endpoint and token |
+| `GRAFANA_LOKI_DATASOURCE_UID` | Loki datasource for logs and troubleshooting |
+| `DEPLOYMENT_CALLBACK_TOKEN` | Shared secret for pipeline progress callbacks |
+| `VLLM_ENDPOINT` | OpenAI-compatible endpoint for AI troubleshooting |
 
-Athena calls
-`GET {REGISTRY_CREDENTIAL_PROVIDER_URL}/credentials/{credential_id}` and expects
-`{"identifier": "...", "secret": "..."}`. The secret should be a read-only
-Docker Hub personal access token where possible. Athena exchanges it through
-Docker Hub's short-lived access-token endpoint, uses the bearer token for tag
-discovery, and never returns or persists either credential. Unsupported
-registries return a validation error until a dedicated adapter is added.
+## Authentication and roles
 
-### Legacy managed-secret metadata endpoints
+`POST /auth/login` issues a JWT (also set as an HttpOnly cookie). Sessions
+last `ATHENA_TOKEN_TTL_SECONDS` (default 7 days); a client may ask for a
+different lifetime but never more than `ATHENA_TOKEN_MAX_TTL_SECONDS`
+(default 30 days).
 
-Managed-secret endpoints require an administrator token and are available only
-for registered applications whose type is `containerized`:
+Every authenticated request re-reads the user from the database, so deleting
+a user or removing admin rights takes effect immediately. Endpoints return
+**401** when the session is missing/invalid (the UI signs out) and **403**
+when a signed-in user lacks admin rights. Admin rights come from the stored
+`metadata.user_type == "Admin"`.
+
+| Method | Path | Access |
+|---|---|---|
+| `POST` | `/auth/login`, `/auth/logout` | public |
+| `GET` | `/auth/whoami` | signed in |
+| `GET/POST/PATCH/DELETE` | `/users/` | admin |
+| `PATCH` | `/users/update_password` | signed in (own password) |
+| `POST` | `/users/reset_password/{user}` | admin |
+
+The bootstrap `admin` account sees every user; other admins see the users
+they created.
+
+## Registered applications (PRD: Registration & Deployment, EPICs 3-8)
+
+Registration is global; deployment is always tier-scoped. All routes below
+require an admin.
 
 | Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/registered-applications/{application_id}/secrets` | List secret metadata and opaque references |
-| `POST` | `/api/registered-applications/{application_id}/secrets` | Create secret metadata and write the value to the configured provider |
-| `PATCH` | `/api/registered-applications/{application_id}/secrets/{secret_id}` | Update metadata and optionally rotate the write-only value |
-| `DELETE` | `/api/registered-applications/{application_id}/secrets/{secret_id}` | Delete provider material and soft-delete metadata |
+|---|---|---|
+| `GET` | `/api/registered-applications` | Catalog: search, type/status filters, optional `tier` facet, sort, paging |
+| `POST` | `/api/registered-applications/github` | Register a GitHub Workflow application (version 1) |
+| `POST` | `/api/registered-applications/container` | Register a Containerized application (version 1) |
+| `GET` | `/api/registered-applications/{id}` | Current version (credentials never returned) |
+| `DELETE` | `/api/registered-applications/{id}` | Blocked while instances or managed secrets exist; the error names each remaining instance and tier |
+| `GET` | `/api/registered-applications/{id}/github-tags` | Branches and tags for the version picker |
+| `GET` | `/api/registered-applications/{id}/image-tags` | Registry tags (Docker Hub, GHCR, ECR, private v2) |
+| `POST` | `/api/registered-applications/{id}/deployments` | Deploy a GitHub Workflow app into `tier` |
+| `POST` | `/api/registered-applications/{id}/tiers/{tier}/deployments` | Deploy a container app into the path tier |
+| `GET` | `/api/registered-applications/deployments` | Instance history (filters: tier, application, instance, status) |
+| `GET` | `/api/registered-applications/deployments/{id}` | Progress, GitHub jobs/steps, events |
+| `POST` | `.../deployments/{id}/upgrade` | `{"version": "..."}` — type-specific in-place upgrade |
+| `POST` | `.../deployments/{id}/rollback` | Return to the previous version (see below) |
+| `POST` | `.../deployments/{id}/terminate` | `{"confirmation": "<instance name>"}` |
+| `POST` | `.../deployments/{id}/progress` | Pipeline callback (`X-Athena-Deployment-Token`) |
+| `GET/POST/PATCH/DELETE` | `/api/registered-applications/{id}/secrets[/{secret_id}]` | Managed container secrets (write-only values) |
+| `GET/POST` | `/api/github-connections`, `/api/github-connections/validate` | Reusable GitHub connections (tokens encrypted, never returned) |
+| `GET` | `/api/registered-applications/llm-models[/pricing]` | Model suggestions and pricing availability |
 
-Configure the external write-only secret broker with:
+**Deploying.** GitHub Workflow apps dispatch the registered workflow
+(`workflow_dispatch` inputs or `repository_dispatch` `client_payload`) using
+the saved GitHub connection; the chosen branch/tag is sent as the `branch`
+input. Container apps dispatch the container pipeline with the registered
+template, the chosen image tag, `<instance_name>.amberd.ai` as the hostname,
+and the application's managed secrets as provider *references* (name,
+environment variable, reference). Decrypted registry/LLM credentials are used
+only for the outbound calls and are never stored in deployment history.
 
-| Variable | Purpose |
-|----------|---------|
-| `CONTAINER_SECRET_PROVIDER_URL` | Base URL of the secret broker used by Athena |
-| `CONTAINER_SECRET_PROVIDER_TOKEN` | Bearer token used only for broker requests |
+**Upgrading.** Container upgrades validate the tag in the registry and run
+the container update workflow; GitHub apps run Amberd's predefined
+`ada-update.yaml` with the version as `branch`. The configuration the
+instance ran before the upgrade is kept.
 
-Athena calls `PUT {CONTAINER_SECRET_PROVIDER_URL}/secrets/{secret_id}` with the
-application ID, Kubernetes-safe secret name, environment variable, and the
-write-only `secret_value`. The broker must return `{"reference": "..."}`.
-Deletion calls the same resource with `DELETE` and the opaque reference.
+**Rolling back.** After an upgrade, rollback dispatches the in-place upgrade
+pipeline back to the previous version and swaps the stored configurations
+(so rolling back twice rolls forward). An instance that was never upgraded
+is redeployed from its stored configuration with the same credentials as the
+original deployment.
 
-These endpoints are retained for compatibility with existing stored metadata,
-but managed secrets are not part of the updated registration or deployment UI
-and cannot be attached through either current deployment contract. Secret values
-are never stored in Athena's database, deployment configuration, API responses,
-or application logs. Athena persists only the name, environment variable, audit
-metadata, and provider reference. Existing managed-secret rows must still be
-deleted before their container application can be deleted, preventing orphaned
-provider material.
-
-The progress callback requires `X-Athena-Deployment-Token` to match the backend
-`DEPLOYMENT_CALLBACK_TOKEN`. Configure the same value as a protected secret in
-the deployment pipeline. Athena already passes `deployment_id` to every
-registered-application workflow dispatch.
-
-Progress callbacks use this body:
+**Progress callbacks** (from the pipeline):
 
 ```json
-{
-  "current_step": "waiting_for_rollout",
-  "status": "deploying",
-  "message": "Waiting for workload readiness."
-}
+{"current_step": "waiting_for_rollout", "status": "deploying", "message": "Waiting for readiness."}
 ```
 
-Supported steps are `validating_configuration`, `creating_namespace`,
-`applying_resources`, `waiting_for_rollout`, `verifying_deployment`,
-`configuring_dns`, and `completed`. Report a failure with step/status `failed` and a non-empty
-`failure_reason`. Report completion with step `completed` and status `running`.
+Steps: `validating_configuration`, `creating_namespace`, `applying_resources`,
+`waiting_for_rollout`, `verifying_deployment`, `configuring_dns` (container
+deployments/terminations only), `completed`, `failed`. Report failure with
+step and status `failed` plus `failure_reason`; completion with step
+`completed` and status `running` (or `terminated` for terminations). Upgrades
+keep status `updating` until they complete. When a callback never arrives,
+the GitHub run's final conclusion is applied instead.
 
-Containerized registered-application deployments require a unique lowercase DNS
-label. Athena generates `<subdomain>.amberd.ai`, stores that hostname with the
-deployment, and includes a provider-neutral `dns` object in the dispatched
-pipeline configuration. The container pipeline must create the DNS record during
-the `configuring_dns` stage and only report `completed` after both the workload
-and DNS are ready. GitHub Workflow deployments do not receive DNS configuration
-and cannot report the `configuring_dns` stage. DNS-provider credentials and
-provider-specific record management remain owned by the deployment pipeline.
-
-### Metrics
+## Legacy ADA pipeline
 
 | Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/metrics` | Fetch CPU / memory / GPU metrics for all tiers from Grafana |
+|---|---|---|
+| `POST` | `/api/deploy`, `/api/deploy/update`, `/api/deploy/move-tier`, `/api/deploy/terminate` | Dispatch Amberd's `ada-*` workflows |
+| `GET` | `/api/pipeline/active`, `/api/pipeline/status`, `/api/pipeline/history` | Live and historical status (registered deployments included in `active`) |
+| `POST` | `/api/pipeline/cancel` | Cancel your own run |
+| `GET` | `/api/github/branches`, `/api/github/tags` | Refs in `GITHUB_REPO_OWNER/<repo>` |
 
-### Logs
+One operation runs per subdomain at a time. If GitHub rejects a dispatch the
+run is released immediately, so it does not block the subdomain.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/logs/deployment` | Deployment logs from Grafana Loki |
+## Metrics, logs, troubleshooting
 
-`GET /api/logs/deployment` query parameters:
+* `GET /api/metrics` — tier dashboard (per-instance CPU/memory/GPU; refreshes
+  the `application_instances` snapshot the legacy guards use).
+* `GET /api/v2/metrics?level=cluster|tier|application`,
+  `GET /api/v2/metrics/application?application=<ns>/<deployment>` — windowed
+  metrics (`range=1m..2d` or `from`/`to`), degraded per metric instead of
+  failing whole.
+* `GET /api/logs/deployment` — Loki logs with search (`level:error` tokens),
+  forward paging, and live tail (`tail=true`).
+* `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/report.pdf` — AI
+  troubleshooting report (logs + Kubernetes events + selected PromQL), owned
+  by the requesting user, kept 15 minutes.
 
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `subdomain` | Yes | Instance identifier (3-63 chars, lowercase alphanumeric + hyphens) |
-| `deployment` | Yes | Application / workload name |
-| `tier` | No | 1-based tier index (1–4); adds a tier label filter when `GRAFANA_LOKI_TIER_LABEL` is set |
-| `from` | No | ISO8601 inclusive lower time bound (defaults to 15 min ago) |
-| `to` | No | ISO8601 inclusive upper time bound (defaults to now) |
-| `search` | No | Server-side filter: free text (`\|=`) plus `level:info`-style tokens (`\|~`) |
-| `limit` | No | Max log lines per response (1–2000); enables cursor paging |
-| `cursor` | No | Opaque continuation token from the previous `next_cursor` |
-| `tail` | No | `true` = newest-first (backward) paging for live tail; `cursor` references the oldest line returned |
+Cluster model: workloads are Kubernetes Deployments labelled with
+`label_tier`; GPU comes from `ray_node_gpus_utilization`. Tier label regexes,
+Ray cluster names, and unit caps are configurable (see `.env.example` and
+`c2ai/constants/prometheus.py`). `python scripts/check_grafana_queries.py`
+runs the dashboard queries against a live Grafana.
 
-## Troubleshooting
+## Cost tracking
 
-### GitHub application version tags
+`GET /api/financial/costs` (signed in) returns stored costs for the cluster or
+one tier, filterable by date range, cost type (`public_api`, `private_llm`,
+`both`), and namespace. Values are decimal strings in USD and are never
+recalculated with newer rates.
 
-The registration UI calls `github.repository` **Workflow Repository**. The optional
-`github.code_repository` uses the same `owner/repository` format and saved GitHub
-connection. Apply migration `0016_github_code_repository` to existing databases.
+An in-process scheduler (`ATHENA_FINANCIAL_INGESTION_ENABLED`, every
+`ATHENA_FINANCIAL_POLL_SECONDS`) reads the LLM gateway counters from
+Prometheus for the exact interval since its checkpoint, attributing each call
+to a namespace through the caller pod IP:
 
-`GET /api/registered-applications/{application_id}/github-tags` (admin-only) returns
-`{ application_id, repository, branches, tags, items }`. It reads up to 200 branches
-and 200 tags from Code Repository when configured, otherwise Workflow Repository.
-`items` is the de-duplicated combined compatibility list. An empty Code Repository
-result does not fall back to a different repository. Access errors
-are reported separately from an empty branch/tag list; the connection needs read
-access to whichever repository supplies the refs.
+* **Private LLM** (`provider="vllm"`): request-seconds x the effective-dated
+  GPU hourly rate (seeded at $2.50) — an estimate, as v1 allows.
+* **Public API** (every other provider): input and output tokens x that
+  model's published per-million rates (`financial_rates`, seeded by
+  migrations 0017/0019). Usage of an unpriced model is logged and skipped.
 
-The deployment wizard requires a branch or tag selection and submits it as
-`version`. The backend maps that selected ref to the GitHub workflow's `branch`
-input, overriding any older registered `branch` default. The workflow repository
-and its configured `ref` are unchanged. Older API callers may omit `version` to
-preserve their existing registered parameter behavior; template version numbers
-are not Git refs.
-
-- If you change `.env` values, restart the server.
-- If you see import errors, confirm you are running from `athena/backend` and using `poetry run ...`.
+A PostgreSQL advisory lock ensures one replica ingests at a time. Rates are
+effective-dated: to change a price, close the current row and insert a new one.

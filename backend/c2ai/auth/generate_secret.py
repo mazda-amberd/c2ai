@@ -6,15 +6,9 @@ This prints a `.env`-ready line like:
 
 Optionally updates an existing .env file in-place.
 
-Usage (zsh):
-  cd athena/backend
-  poetry run athena-secret
-
-  # Write/update backend/.env (creates it if missing)
-  poetry run athena-secret --write
-
-  # Write/update specific env file
-  poetry run athena-secret --write --env-file .env
+Usage (from backend/):
+  python -m c2ai.auth.generate_secret            # print a new secret
+  python -m c2ai.auth.generate_secret --write    # write/update backend/.env
 
 Notes:
 - Output is URL-safe / shell-safe and quoted.
@@ -94,12 +88,12 @@ def main() -> None:
         action="store_true",
         help="Write/update the secret in an env file",
     )
-    # Specify path to .env file (default: athena/backend/.env) relative to this
+    # Specify path to .env file (default: backend/.env) relative to this
     # script
     parser.add_argument(
         "--env-file",
-        default=str(Path(__file__).resolve().parents[1] / ".env"),
-        help="Path to .env (default: athena/backend/.env)",
+        default=str(Path(__file__).resolve().parents[2] / ".env"),
+        help="Path to .env (default: backend/.env)",
     )
 
     args = parser.parse_args()

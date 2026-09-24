@@ -4,10 +4,10 @@ Script to test Prometheus queries against Grafana API.
 
 Usage:
     export GRAFANA_API_TOKEN="your-token-here"
-    python test_queries.py
+    python scripts/check_grafana_queries.py
 
 Or:
-    python test_queries.py --token "your-token-here"
+    python scripts/check_grafana_queries.py --token "your-token-here"
 """
 
 import argparse
@@ -16,8 +16,8 @@ import json
 import os
 import sys
 
-# Add parent directory to path for imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Make the backend package importable when run as scripts/check_grafana_queries.py
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from c2ai.clients.grafana import (
     GrafanaClient,
