@@ -1,0 +1,15 @@
+# Generated from pyproject.toml and pinned to the versions the test suite
+# and end-to-end checks passed with (Python 3.11).
+# Install: pip install -r requirements-dev.txt && pip install -e . --no-deps
+
+-r requirements.txt
+
+coverage==7.16.1
+iniconfig==2.3.0
+pluggy==1.6.0
+pygments==2.21.0
+pypdf==6.19.0
+pytest==8.4.2
+pytest-asyncio==0.23.8
+pytest-cov==7.1.0
+ruff==0.16.8

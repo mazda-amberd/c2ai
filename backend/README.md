@@ -33,7 +33,7 @@ backend/
 ```bash
 cd backend
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -r requirements-dev.txt && pip install -e . --no-deps   # pinned, tested versions
 cp .env.example .env            # then fill in DATABASE_URL, secrets, Grafana, GitHub
 python -m c2ai.auth.generate_secret --write   # sets ATHENA_AUTH_SECRET in .env
 ```

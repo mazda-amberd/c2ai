@@ -19,7 +19,7 @@ Prerequisites: Python 3.11+, Node 20.19+ (or 22.12+), PostgreSQL 14+.
 # Backend
 cd backend
 python3.11 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -r requirements-dev.txt && pip install -e . --no-deps   # pinned, tested versions
 cp .env.example .env                       # set DATABASE_URL at minimum
 python -m c2ai.auth.generate_secret --write
 python -m c2ai.db.init_db --yes            # fresh DB + migrations + admin user
