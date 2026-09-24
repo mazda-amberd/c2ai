@@ -1,7 +1,7 @@
 """Unit tests for troubleshooting output validation."""
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -19,8 +19,8 @@ def _metric_queries():
         namespace="amberd-acme-ada",
         deployment="ada",
         tier=1,
-        start=datetime(2026, 8, 22, 8, 0, tzinfo=timezone.utc),
-        end=datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc),
+        start=datetime(2026, 8, 22, 8, 0, tzinfo=UTC),
+        end=datetime(2026, 8, 22, 12, 0, tzinfo=UTC),
     )[:4]
 
 
@@ -44,7 +44,7 @@ def _model_json(actions: list[str]) -> str:
 def _event() -> TroubleshootingEvent:
     return TroubleshootingEvent(
         id="one",
-        timestamp=datetime(2026, 8, 22, 12, 0, tzinfo=timezone.utc),
+        timestamp=datetime(2026, 8, 22, 12, 0, tzinfo=UTC),
         source="application",
         severity="error",
         resource="deployment/ada",

@@ -23,20 +23,20 @@ import logging
 import math
 import os
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from c2ai.models.financial import FinancialCostRecord, LlmGatewayTokenCheckpoint
-from c2ai.schemas.grafana import GrafanaFieldLabels, GrafanaFrame, GrafanaResponse
 from c2ai.clients.grafana import GrafanaClient
 from c2ai.crud.financial import (
     FinancialRateNotFoundError,
     record_private_llm_cost,
     record_public_api_cost,
 )
+from c2ai.models.financial import FinancialCostRecord, LlmGatewayTokenCheckpoint
+from c2ai.schemas.grafana import GrafanaFieldLabels, GrafanaFrame, GrafanaResponse
 from c2ai.services.financial import FINANCIAL_QUANTUM
 
 logger = logging.getLogger(__name__)
@@ -104,7 +104,7 @@ class GatewayCostIngestionResult:
 def _require_aware(value: datetime, *, field_name: str) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field_name} must include a timezone")
-    return value.astimezone(timezone.utc)
+    return value.astimezone(UTC)
 
 
 def _frame_labels_and_value(
@@ -274,8 +274,8 @@ def build_gateway_cost_source_event_id(
         (
             application_key,
             str(tier),
-            period_start.astimezone(timezone.utc).isoformat(),
-            period_end.astimezone(timezone.utc).isoformat(),
+            period_start.astimezone(UTC).isoformat(),
+            period_end.astimezone(UTC).isoformat(),
         ),
     )
 
@@ -301,8 +301,8 @@ def build_gateway_public_cost_source_event_id(
             str(tier),
             provider,
             model_name,
-            period_start.astimezone(timezone.utc).isoformat(),
-            period_end.astimezone(timezone.utc).isoformat(),
+            period_start.astimezone(UTC).isoformat(),
+            period_end.astimezone(UTC).isoformat(),
         ),
     )
 
@@ -436,7 +436,7 @@ async def ingest_gateway_costs(
 ) -> GatewayCostIngestionResult:
     """Query one Grafana interval and persist its private and public costs."""
     period_end = _require_aware(
-        observed_at or datetime.now(tz=timezone.utc),
+        observed_at or datetime.now(tz=UTC),
         field_name="observed_at",
     )
     checkpoint = await _load_checkpoint_for_update(db)

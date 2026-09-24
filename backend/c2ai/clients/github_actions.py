@@ -5,7 +5,7 @@ GitHub Actions API client for triggering workflows.
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -113,7 +113,7 @@ class GitHubActionsClient:
             # A 204 response is still supported for older GitHub Enterprise servers.
             "return_run_details": True,
         }
-        dispatched_at = datetime.now(timezone.utc).isoformat()
+        dispatched_at = datetime.now(UTC).isoformat()
 
         logger.info(
             "Triggering GitHub Actions workflow: workflow_id=%s repo=%s/%s ref=%s",
@@ -165,7 +165,7 @@ class GitHubActionsClient:
             f"{self.repo_owner}/{self.repo_name}/dispatches"
         )
         payload = {"event_type": event_type, "client_payload": client_payload}
-        dispatched_at = datetime.now(timezone.utc).isoformat()
+        dispatched_at = datetime.now(UTC).isoformat()
 
         logger.info(
             "Triggering GitHub repository dispatch: event_type=%s repo=%s/%s",

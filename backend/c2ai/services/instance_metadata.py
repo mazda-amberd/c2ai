@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,11 +19,11 @@ logger = logging.getLogger(__name__)
 class InstanceMetadata:
     """Backend-owned metadata exposed alongside Grafana metrics."""
 
-    client_name: Optional[str]
-    instance_name: Optional[str]
+    client_name: str | None
+    instance_name: str | None
 
 
-def _normalize(value: Optional[str]) -> Optional[str]:
+def _normalize(value: str | None) -> str | None:
     """Collapse blank strings to ``None`` while preserving real values."""
     if value is None:
         return None
@@ -65,8 +64,8 @@ async def load_instance_metadata_map(
 
 async def enrich_tiers_with_instance_metadata(
     db: AsyncSession,
-    tiers: dict[str, Optional[list[Instance]]],
-) -> dict[str, Optional[list[Instance]]]:
+    tiers: dict[str, list[Instance] | None],
+) -> dict[str, list[Instance] | None]:
     """
     Populate ``client_name`` and ``instance_name`` for every metrics instance.
 

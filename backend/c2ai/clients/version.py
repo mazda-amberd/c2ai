@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Optional
 
 import httpx
 
@@ -61,7 +60,7 @@ class InstanceVersionClient:
         self,
         client: httpx.AsyncClient,
         subdomain: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Fetch the deployed product version for a single instance.
 
@@ -99,9 +98,9 @@ class InstanceVersionClient:
 
 
 async def enrich_tiers_with_versions(
-    tiers: dict[str, Optional[list[Instance]]],
-    version_client: Optional[InstanceVersionClient] = None,
-) -> dict[str, Optional[list[Instance]]]:
+    tiers: dict[str, list[Instance] | None],
+    version_client: InstanceVersionClient | None = None,
+) -> dict[str, list[Instance] | None]:
     """
     Populate ``Instance.version`` for every instance in the tier mapping.
 

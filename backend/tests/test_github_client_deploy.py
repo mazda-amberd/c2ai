@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -16,16 +15,15 @@ from c2ai.clients.github import (
     cancel_workflow_run,
     check_repo_tag_exists,
     dispatch_github_move_tier_workflow,
-    expected_run_name,
     dispatch_github_terminate_workflow,
     dispatch_github_update_workflow,
     dispatch_github_workflow,
+    expected_run_name,
     list_repo_branches,
     list_repo_tags,
-    workflow_prepare_subdomain,
 )
 from c2ai.core.exceptions import BadRequestError, ServiceUnavailableError
-
+from c2ai.utils.host_labels import workflow_prepare_subdomain
 
 # ---------------------------------------------------------------------------
 # workflow_prepare_subdomain
@@ -311,7 +309,7 @@ async def test_dispatch_terminate_raises_on_non_2xx(
 ) -> None:
     monkeypatch.setenv("GITHUB_PAT", "test-token")
 
-    inner, mock_cm = _make_mock_http_client(status_code=422)
+    _inner, mock_cm = _make_mock_http_client(status_code=422)
 
     with patch("c2ai.clients.github.httpx.AsyncClient", return_value=mock_cm):
         with pytest.raises(BadRequestError):

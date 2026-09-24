@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Annotated, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Annotated
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -12,6 +12,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token
 from c2ai.clients.grafana import GrafanaClient
 from c2ai.core.exceptions import GrafanaFetchError, ServiceUnavailableError
+from c2ai.schemas.deployment import DEPLOYMENT_LOG_NAME_RE, SUBDOMAIN_RE
+from c2ai.schemas.logs import DeploymentLogEntryOut, DeploymentLogsResponseOut
 from c2ai.services.loki_logs import (
     build_full_loki_logql,
     decode_logs_cursor_v1,
@@ -21,8 +23,6 @@ from c2ai.services.loki_logs import (
     ms_exclusive_after_cursor,
     ms_upper_bound_before_cursor,
 )
-from c2ai.schemas.deployment import DEPLOYMENT_LOG_NAME_RE, SUBDOMAIN_RE
-from c2ai.schemas.logs import DeploymentLogEntryOut, DeploymentLogsResponseOut
 
 logger = logging.getLogger(__name__)
 
@@ -68,12 +68,12 @@ def _parse_iso8601(value: str) -> datetime:
 
 def _ensure_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def _default_range() -> tuple[datetime, datetime]:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return now - timedelta(minutes=15), now
 
 
@@ -105,9 +105,9 @@ def _raise_for_grafana_logs_http(exc: httpx.HTTPStatusError) -> None:
 
 
 def _paging_enabled(
-    limit: Optional[int],
-    cursor: Optional[str],
-    search: Optional[str],
+    limit: int | None,
+    cursor: str | None,
+    search: str | None,
     client_time_bounds: bool,
     tail: bool,
 ) -> bool:
@@ -137,7 +137,7 @@ def _paging_enabled(
     return bool((search or "").strip() and client_time_bounds)
 
 
-def _clamp_limit(raw: Optional[int], default: int) -> int:
+def _clamp_limit(raw: int | None, default: int) -> int:
     cap = raw if raw is not None else default
     return max(1, min(2000, cap))
 
@@ -160,7 +160,7 @@ async def get_deployment_logs(
     subdomain: _SUBDOMAIN_QUERY,
     deployment: _DEPLOYMENT_QUERY,
     tier: Annotated[
-        Optional[int],
+        int | None,
         Query(
             ge=1,
             le=4,
@@ -168,22 +168,22 @@ async def get_deployment_logs(
         ),
     ] = None,
     from_ts: Annotated[
-        Optional[str],
+        str | None,
         Query(alias="from", description="ISO8601 inclusive lower time bound"),
     ] = None,
     to_ts: Annotated[
-        Optional[str],
+        str | None,
         Query(alias="to", description="ISO8601 inclusive upper time bound"),
     ] = None,
     search: Annotated[
-        Optional[str],
+        str | None,
         Query(
             max_length=400,
             description='Server-side filter: free text (tokenised ``|=``) plus ``level:info``-style tokens (LogQL ``|~``).',
         ),
     ] = None,
     limit: Annotated[
-        Optional[int],
+        int | None,
         Query(
             ge=1,
             le=2000,
@@ -191,7 +191,7 @@ async def get_deployment_logs(
         ),
     ] = None,
     cursor: Annotated[
-        Optional[str],
+        str | None,
         Query(
             max_length=2048,
             description="Opaque continuation token from the previous ``next_cursor``.",

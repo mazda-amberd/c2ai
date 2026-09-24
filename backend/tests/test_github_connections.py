@@ -6,13 +6,16 @@ import httpx
 import pytest
 from pydantic import ValidationError
 
-from c2ai.models.registered_application import GitHubConnection
-from c2ai.app import app
 from c2ai.api import github_connections as github_connections_api
+from c2ai.app import app
 from c2ai.auth.jwt import AthenaTokenUser, require_admin
 from c2ai.clients.github_connection import (
     GitHubConnectionValidationResult,
     validate_github_repository_connection,
+)
+from c2ai.core.exceptions import (
+    GitHubConnectionValidationFailed,
+    ServiceUnavailableError,
 )
 from c2ai.crud.github_connection import (
     create_github_connection,
@@ -20,10 +23,7 @@ from c2ai.crud.github_connection import (
     list_github_connections,
     resolve_github_connection,
 )
-from c2ai.core.exceptions import (
-    GitHubConnectionValidationFailed,
-    ServiceUnavailableError,
-)
+from c2ai.models.registered_application import GitHubConnection
 from c2ai.schemas.github_connection import (
     GitHubConnectionCreate,
     GitHubConnectionOut,

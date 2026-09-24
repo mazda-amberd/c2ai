@@ -10,10 +10,10 @@ import logging
 from typing import Any
 
 from fastapi import FastAPI, Request
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError as PydanticValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from c2ai.core.exceptions import AppException
 
@@ -79,7 +79,7 @@ def _normalize_validation_errors(exc: Any):
     Returns:
         list: List of normalized error dictionaries.
     """
-    if hasattr(exc, "errors") and callable(getattr(exc, "errors")):
+    if hasattr(exc, "errors") and callable(exc.errors):
         return [{"loc": e.get("loc"), "msg": e.get("msg"), "type": e.get("type")} for e in exc.errors()]
     # Fallback for unexpected exception types routed here
     return [{"loc": None, "msg": str(exc), "type": exc.__class__.__name__}]

@@ -7,7 +7,7 @@ including HTTP error types and domain-specific errors. These exceptions provide
 structured error information for consistent API responses and logging.
 """
 
-from typing import Any, Optional
+from typing import Any
 
 
 class AppException(Exception):
@@ -20,7 +20,7 @@ class AppException(Exception):
         code: Optional error code string.
     """
 
-    def __init__(self, detail: Any, status_code: int, code: Optional[str] = None):
+    def __init__(self, detail: Any, status_code: int, code: str | None = None):
         """
         Initialize AppException.
 
@@ -40,7 +40,7 @@ class NotFoundError(AppException):
     Exception for HTTP 404 Not Found errors.
     """
 
-    def __init__(self, detail: Any, code: Optional[str] = None):
+    def __init__(self, detail: Any, code: str | None = None):
         """
         Initialize NotFoundError.
 
@@ -56,7 +56,7 @@ class ConflictError(AppException):
     Exception for HTTP 409 Conflict errors.
     """
 
-    def __init__(self, detail: Any, code: Optional[str] = None):
+    def __init__(self, detail: Any, code: str | None = None):
         """
         Initialize ConflictError.
 
@@ -72,7 +72,7 @@ class BadRequestError(AppException):
     Exception for HTTP 400 Bad Request errors.
     """
 
-    def __init__(self, detail: Any, code: Optional[str] = None):
+    def __init__(self, detail: Any, code: str | None = None):
         """
         Initialize BadRequestError.
 
@@ -88,7 +88,7 @@ class UnprocessableEntityError(AppException):
     Exception for HTTP 422 Unprocessable Entity errors.
     """
 
-    def __init__(self, detail: Any, code: Optional[str] = None):
+    def __init__(self, detail: Any, code: str | None = None):
         """
         Initialize UnprocessableEntityError.
 
@@ -104,7 +104,7 @@ class UnauthorizedError(AppException):
     Exception for HTTP 401 Unauthorized errors.
     """
 
-    def __init__(self, detail: Any, code: Optional[str] = None):
+    def __init__(self, detail: Any, code: str | None = None):
         """
         Initialize UnauthorizedError.
 
@@ -120,7 +120,7 @@ class ForbiddenError(AppException):
     Exception for HTTP 403 Forbidden errors.
     """
 
-    def __init__(self, detail: Any, code: Optional[str] = None):
+    def __init__(self, detail: Any, code: str | None = None):
         """
         Initialize ForbiddenError.
 
@@ -136,7 +136,7 @@ class DatabaseError(AppException):
     Exception for database-related errors (HTTP 500).
     """
 
-    def __init__(self, detail: Any, code: Optional[str] = None):
+    def __init__(self, detail: Any, code: str | None = None):
         """
         Initialize DatabaseError.
 
@@ -152,7 +152,7 @@ class ServiceUnavailableError(AppException):
     Exception for service unavailable errors (HTTP 503).
     """
 
-    def __init__(self, detail: Any, code: Optional[str] = None):
+    def __init__(self, detail: Any, code: str | None = None):
         """
         Initialize ServiceUnavailableError.
 

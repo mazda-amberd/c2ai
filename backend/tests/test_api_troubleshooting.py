@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from langchain_core.messages import AIMessage
 
-from c2ai.app import app
 from c2ai.api import troubleshooting as api
+from c2ai.app import app
 from c2ai.auth.jwt import AthenaTokenUser
 from c2ai.schemas.troubleshooting import (
     TroubleshootingEvent,
@@ -41,7 +41,7 @@ def _event(
 ) -> TroubleshootingEvent:
     return TroubleshootingEvent(
         id=f"event-{index}",
-        timestamp=datetime(2026, 8, 19, 4, 0, tzinfo=timezone.utc)
+        timestamp=datetime(2026, 8, 19, 4, 0, tzinfo=UTC)
         + timedelta(microseconds=index),
         source=source,
         severity=severity,
@@ -209,7 +209,7 @@ class TestTroubleshootingReport:
         assert response.status_code == 401
 
     def test_returns_grounded_batch_report(self, deploy_auth_client, monkeypatch):
-        fixed_now = datetime(2026, 8, 19, 8, 0, tzinfo=timezone.utc)
+        fixed_now = datetime(2026, 8, 19, 8, 0, tzinfo=UTC)
         monkeypatch.setattr(api, "_utcnow", lambda: fixed_now)
         events = [
             _event(

@@ -38,7 +38,7 @@ Datasource UID:
 from __future__ import annotations
 
 import os
-from typing import Callable, Optional
+from collections.abc import Callable
 
 from c2ai.schemas.grafana import MetricType
 
@@ -75,7 +75,7 @@ TIER_DISPLAY_NAME_TO_GPU_PROMQL_LABEL: dict[str, str] = {
     "Tier 3": "tier3",
 }
 
-TIER_CONFIG: dict[str, Optional[dict[str, int]]] = {
+TIER_CONFIG: dict[str, dict[str, int] | None] = {
     "Tier 1": {"gpus": 2},
     "Tier 2": {"gpus": 2},
     "Tier 3": {"gpus": 2},
@@ -177,12 +177,12 @@ def _pod_to_deployment_filter(tier_label_re: str) -> str:
     Returns the two binary-join clauses to append after a pod-level metric.
     """
     return (
-        f'* on(namespace, pod) group_left(replicaset)'
-        f' label_replace(kube_pod_owner{{owner_kind="ReplicaSet"}},'
-        f' "replicaset", "$1", "owner_name", "(.*)")'
-        f' * on(namespace, replicaset) group_left(deployment)'
-        f' label_replace(kube_replicaset_owner{{owner_kind="Deployment"}},'
-        f' "deployment", "$1", "owner_name", "(.*)")'
+        '* on(namespace, pod) group_left(replicaset)'
+        ' label_replace(kube_pod_owner{owner_kind="ReplicaSet"},'
+        ' "replicaset", "$1", "owner_name", "(.*)")'
+        ' * on(namespace, replicaset) group_left(deployment)'
+        ' label_replace(kube_replicaset_owner{owner_kind="Deployment"},'
+        ' "deployment", "$1", "owner_name", "(.*)")'
     )
 
 

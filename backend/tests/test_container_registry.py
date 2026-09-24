@@ -276,7 +276,7 @@ async def test_get_tag_maps_docker_hub_not_found_to_validation_error():
         "c2ai.clients.container_registry.httpx.AsyncClient",
         return_value=_http_context(http_client),
     ):
-        with pytest.raises(ContainerImageTagNotFound, match="9.9.9"):
+        with pytest.raises(ContainerImageTagNotFound, match=r"9\.9\.9"):
             await ContainerRegistryClient(
                 docker_hub_api_url="https://hub.docker.test"
             ).get_tag(

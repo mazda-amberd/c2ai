@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import UTC, date, datetime, time, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,7 +35,7 @@ def resolve_financial_dates(
         )
 
     if start_date is None and end_date is None:
-        today = reference_date or datetime.now(tz=timezone.utc).date()
+        today = reference_date or datetime.now(tz=UTC).date()
         return today.replace(day=1), today
 
     if end_date < start_date:
@@ -59,8 +59,8 @@ def _inclusive_dates_to_utc_period(
             detail="end_date is outside the supported range",
         ) from exc
     return (
-        datetime.combine(start_date, time.min, tzinfo=timezone.utc),
-        datetime.combine(exclusive_end_date, time.min, tzinfo=timezone.utc),
+        datetime.combine(start_date, time.min, tzinfo=UTC),
+        datetime.combine(exclusive_end_date, time.min, tzinfo=UTC),
     )
 
 

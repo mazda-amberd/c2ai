@@ -2,7 +2,7 @@
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,7 +17,7 @@ from c2ai.services.financial_ingestion_runner import (
 )
 from c2ai.services.gateway_cost_ingestion import GatewayCostIngestionResult
 
-START = datetime(2026, 8, 1, tzinfo=timezone.utc)
+START = datetime(2026, 8, 1, tzinfo=UTC)
 END = START + timedelta(hours=1)
 
 

@@ -11,13 +11,13 @@ from sqlalchemy import distinct, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from c2ai.core.exceptions import DuplicateGitHubConnection, ServiceUnavailableError
 from c2ai.models.registered_application import (
     GitHubApplicationConfiguration,
     GitHubConnection,
     RegisteredApplication,
     RegisteredApplicationVersion,
 )
-from c2ai.core.exceptions import DuplicateGitHubConnection, ServiceUnavailableError
 from c2ai.schemas.github_connection import GitHubConnectionCreate
 
 _URL_CONSTRAINT = "uq_github_connections_url_active"

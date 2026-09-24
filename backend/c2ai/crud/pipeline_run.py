@@ -4,8 +4,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
-from typing import Optional
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,9 +27,9 @@ async def create_pipeline_run(
     operation: str,
     event_type: str,
     triggered_by: str,
-    tier: Optional[int] = None,
-    branch: Optional[str] = None,
-    deployment_metadata: Optional[dict] = None,
+    tier: int | None = None,
+    branch: str | None = None,
+    deployment_metadata: dict | None = None,
 ) -> PipelineRun:
     """Insert a pipeline run; for new deployments also record who the instance is for.
 
@@ -69,13 +68,13 @@ async def create_pipeline_run(
 async def get_active_run_for_subdomain(
     db: AsyncSession,
     subdomain: str,
-) -> Optional[PipelineRun]:
+) -> PipelineRun | None:
     """
     Return the active (ended_at IS NULL) pipeline run for this subdomain, if any.
     Orphaned unmatched dispatches older than ORPHAN_TIMEOUT are excluded so they
     don't permanently block the subdomain.
     """
-    orphan_cutoff = datetime.now(tz=timezone.utc) - ORPHAN_TIMEOUT
+    orphan_cutoff = datetime.now(tz=UTC) - ORPHAN_TIMEOUT
     result = await db.execute(
         select(PipelineRun)
         .where(PipelineRun.subdomain == subdomain)
@@ -94,7 +93,7 @@ async def get_active_run_for_subdomain(
 async def get_latest_run_for_subdomain(
     db: AsyncSession,
     subdomain: str,
-) -> Optional[PipelineRun]:
+) -> PipelineRun | None:
     result = await db.execute(
         select(PipelineRun)
         .where(PipelineRun.subdomain == subdomain)
@@ -105,7 +104,7 @@ async def get_latest_run_for_subdomain(
 
 
 async def get_all_active_runs(db: AsyncSession) -> list[PipelineRun]:
-    orphan_cutoff = datetime.now(tz=timezone.utc) - ORPHAN_TIMEOUT
+    orphan_cutoff = datetime.now(tz=UTC) - ORPHAN_TIMEOUT
     result = await db.execute(
         select(PipelineRun)
         .where(PipelineRun.ended_at.is_(None))
@@ -123,7 +122,7 @@ async def get_all_active_runs(db: AsyncSession) -> list[PipelineRun]:
 async def get_pipeline_run_by_id(
     db: AsyncSession,
     pipeline_run_id: str,
-) -> Optional[PipelineRun]:
+) -> PipelineRun | None:
     result = await db.execute(
         select(PipelineRun).where(PipelineRun.id == pipeline_run_id)
     )
@@ -169,7 +168,7 @@ async def mark_run_ended(
     )
     run = result.scalar_one_or_none()
     if run and run.ended_at is None:
-        run.ended_at = datetime.now(tz=timezone.utc)
+        run.ended_at = datetime.now(tz=UTC)
         db.add(run)
         await db.commit()
         logger.info("Marked pipeline_run=%s as ended", pipeline_run_id)

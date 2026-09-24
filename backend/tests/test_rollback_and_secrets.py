@@ -4,19 +4,19 @@ managed secrets reach container deployments as references only."""
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
 import pytest
 
+from c2ai.core.exceptions import DeploymentAlreadyAtVersion
 from c2ai.crud.registered_application import (
     ContainerRegistryRuntime,
     prepare_registered_application_rollback,
     prepare_registered_application_upgrade,
 )
-from c2ai.core.exceptions import DeploymentAlreadyAtVersion
 from c2ai.models.registered_application import ContainerApplicationSecret
 from c2ai.schemas.registered_application import ContainerRegisteredApplicationDeploymentCreate
 from c2ai.services.registered_application_deployment import (
@@ -45,7 +45,7 @@ def _secret(name: str, env: str, reference: str | None) -> ContainerApplicationS
         secret_reference=reference,
         created_by="admin",
         updated_by="admin",
-        created_at=datetime(2026, 8, 1, tzinfo=timezone.utc),
+        created_at=datetime(2026, 8, 1, tzinfo=UTC),
     )
 
 

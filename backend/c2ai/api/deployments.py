@@ -25,17 +25,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
-from typing import Annotated, Optional
+from collections.abc import Awaitable
+from datetime import UTC, datetime, timedelta
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from c2ai.models.application_instance import ApplicationInstance
 from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token
 from c2ai.clients.github import (
     GITHUB_REPO_OWNER,
@@ -46,8 +45,8 @@ from c2ai.clients.github import (
     cancel_workflow_run,
     check_repo_branch_exists,
     check_repo_tag_exists,
-    dispatch_github_terminate_workflow,
     dispatch_github_move_tier_workflow,
+    dispatch_github_terminate_workflow,
     dispatch_github_update_workflow,
     dispatch_github_workflow,
     get_deploy_source_repo,
@@ -57,19 +56,15 @@ from c2ai.clients.github import (
     resolve_run_id,
 )
 from c2ai.core.background import spawn
-from c2ai.crud import pipeline_run as crud_pipeline
-from c2ai.services.registered_pipeline_status import (
-    list_active_registered_pipeline_statuses,
-)
-from c2ai.db.session import AsyncSessionLocal
-from c2ai.db.session import get_db_session as db_session
 from c2ai.core.exceptions import (
     ConflictError,
     ForbiddenError,
     NotFoundError,
     UnprocessableEntityError,
 )
-from c2ai.utils.host_labels import workflow_prepare_subdomain
+from c2ai.crud import pipeline_run as crud_pipeline
+from c2ai.db.session import AsyncSessionLocal, get_db_session as db_session
+from c2ai.models.application_instance import ApplicationInstance
 from c2ai.schemas.deployment import (
     SUBDOMAIN_RE,
     DeployRequest,
@@ -79,6 +74,10 @@ from c2ai.schemas.deployment import (
     PipelineStatusOut,
     TerminateRequest,
 )
+from c2ai.services.registered_pipeline_status import (
+    list_active_registered_pipeline_statuses,
+)
+from c2ai.utils.host_labels import workflow_prepare_subdomain
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +134,7 @@ def _is_successfully_completed(status_out: PipelineStatusOut) -> bool:
     )
 
 
-async def _get_instance(db: AsyncSession, subdomain: str) -> Optional[ApplicationInstance]:
+async def _get_instance(db: AsyncSession, subdomain: str) -> ApplicationInstance | None:
     # ApplicationInstance.nodename stores the kubernetes namespace, which matches
     # the subdomain used by the devops workflows (e.g. "amberd-alex-test-ada").
     # ApplicationInstance.name stores the kubernetes resource owner name (e.g. "ada"),
@@ -151,8 +150,8 @@ def _grafana_cache_is_fresh(instance: ApplicationInstance) -> bool:
         return False
     updated = instance.updated_at
     if updated.tzinfo is None:
-        updated = updated.replace(tzinfo=timezone.utc)
-    return datetime.now(tz=timezone.utc) - updated < _GRAFANA_CACHE_STALE
+        updated = updated.replace(tzinfo=UTC)
+    return datetime.now(tz=UTC) - updated < _GRAFANA_CACHE_STALE
 
 
 async def _guard_no_active_run(db: AsyncSession, subdomain: str) -> None:
@@ -235,8 +234,8 @@ async def _background_resolve(
     workflow_file: str,
     subdomain: str,
     dispatched_at: datetime,
-    customer_name: Optional[str] = None,
-    env_instance: Optional[str] = None,
+    customer_name: str | None = None,
+    env_instance: str | None = None,
 ) -> None:
     """
     Background task: poll GH until the run_id is found, then persist it.
@@ -302,7 +301,7 @@ async def trigger_deployment(
     await _guard_branch_exists(body.branch)
 
     correlation_id = str(uuid.uuid4())
-    dispatched_at = datetime.now(tz=timezone.utc)
+    dispatched_at = datetime.now(tz=UTC)
 
     run = await crud_pipeline.create_pipeline_run(
         db,
@@ -384,7 +383,7 @@ async def move_deployment_to_tier(
     await _guard_instance_exists(db, subdomain, "move-tier")
 
     correlation_id = str(uuid.uuid4())
-    dispatched_at = datetime.now(tz=timezone.utc)
+    dispatched_at = datetime.now(tz=UTC)
 
     run = await crud_pipeline.create_pipeline_run(
         db,
@@ -438,7 +437,7 @@ async def trigger_deployment_update(
     await _guard_branch_exists(body.branch)
 
     correlation_id = str(uuid.uuid4())
-    dispatched_at = datetime.now(tz=timezone.utc)
+    dispatched_at = datetime.now(tz=UTC)
 
     run = await crud_pipeline.create_pipeline_run(
         db,
@@ -491,7 +490,7 @@ async def terminate_deployment(
     await _guard_instance_exists(db, subdomain, "terminate")
 
     correlation_id = str(uuid.uuid4())
-    dispatched_at = datetime.now(tz=timezone.utc)
+    dispatched_at = datetime.now(tz=UTC)
 
     run = await crud_pipeline.create_pipeline_run(
         db,
@@ -602,7 +601,7 @@ async def list_active_pipelines(
 
 @router.get(
     "/api/pipeline/status",
-    response_model=Optional[PipelineStatusOut],
+    response_model=PipelineStatusOut | None,
     status_code=status.HTTP_200_OK,
     summary="Live status for the latest pipeline run on a subdomain",
 )
@@ -610,7 +609,7 @@ async def get_pipeline_status(
     subdomain: _SUBDOMAIN_QUERY,
     _user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(db_session),
-) -> Optional[PipelineStatusOut]:
+) -> PipelineStatusOut | None:
     run = await crud_pipeline.get_latest_run_for_subdomain(db, subdomain)
     if not run:
         return None

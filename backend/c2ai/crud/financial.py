@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from sqlalchemy import func, or_, select
@@ -86,7 +86,7 @@ async def configure_private_llm_rate(
     resource = _normalize_required_text(resource_type, field_name="resource_type")
     normalized_rate = financial_decimal(hourly_rate, field_name="hourly_rate")
     normalized_currency = _normalize_currency(currency)
-    starts_at = effective_from or datetime.now(tz=timezone.utc)
+    starts_at = effective_from or datetime.now(tz=UTC)
     _require_aware_datetime(starts_at, field_name="effective_from")
 
     result = await db.execute(
@@ -175,7 +175,7 @@ async def configure_public_api_rate(
         field_name="output_rate_per_million_tokens",
     )
     normalized_currency = _normalize_currency(currency)
-    starts_at = effective_from or datetime.now(tz=timezone.utc)
+    starts_at = effective_from or datetime.now(tz=UTC)
     _require_aware_datetime(starts_at, field_name="effective_from")
 
     result = await db.execute(

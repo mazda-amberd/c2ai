@@ -10,10 +10,18 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Optional
+from datetime import UTC, datetime
+from typing import Any
 
+from c2ai.clients.grafana import GrafanaClient
+from c2ai.constants import metrics_queries as mq
+from c2ai.constants.prometheus import (
+    excluded_deployment_names,
+    get_grafana_prometheus_datasource,
+)
+from c2ai.constants.time_ranges import Window
 from c2ai.schemas.metrics import (
     MetricLevel,
     MetricSeries,
@@ -24,13 +32,6 @@ from c2ai.schemas.metrics import (
     Scope,
     WindowOut,
 )
-from c2ai.clients.grafana import GrafanaClient
-from c2ai.constants import metrics_queries as mq
-from c2ai.constants.prometheus import (
-    excluded_deployment_names,
-    get_grafana_prometheus_datasource,
-)
-from c2ai.constants.time_ranges import Window
 from c2ai.services.instance_metadata import InstanceMetadata
 from c2ai.utils.host_labels import split_workflow_host_label
 
@@ -61,10 +62,10 @@ class _Query:
     metric: str
     unit: MetricUnit
     expr: str
-    scope_id: Optional[str] = None  # None means the scope comes from result labels
+    scope_id: str | None = None  # None means the scope comes from result labels
 
 
-def _cache_key(level: MetricLevel, window: Window, tier: Optional[int]) -> tuple:
+def _cache_key(level: MetricLevel, window: Window, tier: int | None) -> tuple:
     bounds = window.preset or (window.start.isoformat(), window.end.isoformat())
     return (level.value, bounds, None if level is MetricLevel.CLUSTER else tier)
 
@@ -97,18 +98,18 @@ def _macros(window: Window) -> tuple[str, str]:
     return f"{span}s", f"{rate}s"
 
 
-def _tier_indexes(tier: Optional[int]) -> list[int]:
+def _tier_indexes(tier: int | None) -> list[int]:
     if tier is None:
         return list(range(1, len(TIER_NAMESPACES) + 1))
     return [tier] if 1 <= tier <= len(TIER_NAMESPACES) else []
 
 
-def _build_queries(level: MetricLevel, window: Window, tier: Optional[int]) -> list[_Query]:
+def _build_queries(level: MetricLevel, window: Window, tier: int | None) -> list[_Query]:
     """Every query for this level, each with a unique refId."""
     rng, rate = _macros(window)
     queries: list[_Query] = []
 
-    def add(catalogue: dict[str, tuple[str, MetricUnit]], scope_id: Optional[str]) -> None:
+    def add(catalogue: dict[str, tuple[str, MetricUnit]], scope_id: str | None) -> None:
         for metric, (expr, unit) in catalogue.items():
             queries.append(_Query(f"q{len(queries)}", metric, unit, expr, scope_id))
 
@@ -141,7 +142,7 @@ async def _fetch(client: GrafanaClient, window: Window, queries: list[_Query]) -
     return await client.fetch_grafana_query_raw(body)
 
 
-def _frames(payload: dict[str, Any], ref: str) -> tuple[list[dict], Optional[str]]:
+def _frames(payload: dict[str, Any], ref: str) -> tuple[list[dict], str | None]:
     """Frames for one refId plus its error, if Grafana reported one."""
     block = (payload.get("results") or {}).get(ref)
     if not isinstance(block, dict):
@@ -154,7 +155,7 @@ def _frames(payload: dict[str, Any], ref: str) -> tuple[list[dict], Optional[str
     return [f for f in (block.get("frames") or []) if isinstance(f, dict)], None
 
 
-def _labels_and_value(frame: dict) -> tuple[dict[str, str], Optional[float]]:
+def _labels_and_value(frame: dict) -> tuple[dict[str, str], float | None]:
     """Series labels and the single instant value carried by a frame."""
     fields = (frame.get("schema") or {}).get("fields") or []
     labels = {}
@@ -170,7 +171,7 @@ def _round(value: float) -> float:
     return round(value * 1000) / 1000
 
 
-def _scalar(frames: list[dict]) -> Optional[float]:
+def _scalar(frames: list[dict]) -> float | None:
     """Single value for a scope-level metric; None when Grafana returned nothing."""
     total = 0.0
     seen = False
@@ -264,8 +265,8 @@ async def build_metrics(
     client: GrafanaClient,
     level: MetricLevel,
     window: Window,
-    tier: Optional[int] = None,
-    metadata_loader: Optional[MetadataLoader] = None,
+    tier: int | None = None,
+    metadata_loader: MetadataLoader | None = None,
 ) -> MetricsResponse:
     """Fetch, normalise, and cache one level's metrics for the given window."""
     key = _cache_key(level, window, tier)
@@ -303,7 +304,7 @@ async def build_metrics(
             preset=window.preset,
             step_seconds=window.step_seconds,
         ),
-        generated_at=datetime.now(timezone.utc),
+        generated_at=datetime.now(UTC),
         refresh_after_seconds=REFRESH_SECONDS,
         series=series,
         degraded=bool(errors),

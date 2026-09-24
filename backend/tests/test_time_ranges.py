@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -13,7 +13,7 @@ from c2ai.constants.time_ranges import (
     resolve_window,
 )
 
-NOW = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
 
 
 @pytest.mark.parametrize("preset", sorted(RANGE_PRESETS))

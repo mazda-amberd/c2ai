@@ -5,14 +5,12 @@ from __future__ import annotations
 import json
 import os
 import re
-from datetime import datetime, timezone
 from collections.abc import Iterable
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
-from c2ai.models.registered_application import RegisteredApplicationVersion
-from c2ai.clients.github_actions import GitHubActionsClient
 from c2ai.clients.github import (
     GITHUB_REPO_NAME,
     GITHUB_REPO_OWNER,
@@ -22,8 +20,10 @@ from c2ai.clients.github import (
     dispatch_github_update_workflow,
     get_devops_branch,
 )
+from c2ai.clients.github_actions import GitHubActionsClient
 from c2ai.constants.registered_application import ApplicationType
 from c2ai.core.exceptions import UnprocessableEntityError
+from c2ai.models.registered_application import RegisteredApplicationVersion
 from c2ai.schemas.registered_application import (
     ContainerRegisteredApplicationDeploymentCreate,
     RegisteredApplicationDeploymentCreate,
@@ -767,7 +767,7 @@ async def _dispatch_upgrade(
 
     application_type = version.application.application_type
     if application_type == ApplicationType.GITHUB_WORKFLOW.value:
-        dispatched_at = datetime.now(timezone.utc).isoformat()
+        dispatched_at = datetime.now(UTC).isoformat()
         subdomain = resolve_github_workflow_subdomain(
             configuration,
             instance_name=instance_name,
@@ -841,7 +841,7 @@ async def dispatch_registered_application_termination(
 
     application_type = version.application.application_type
     if application_type == ApplicationType.GITHUB_WORKFLOW.value:
-        dispatched_at = datetime.now(timezone.utc).isoformat()
+        dispatched_at = datetime.now(UTC).isoformat()
         subdomain = resolve_github_workflow_subdomain(
             configuration,
             instance_name=instance_name,

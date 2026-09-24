@@ -10,9 +10,7 @@ import secrets
 import string
 from random import SystemRandom
 
-
 from c2ai.core.exceptions import PasswordValidationFailed
-
 
 
 def generate_password() -> str:
@@ -44,8 +42,8 @@ def generate_password() -> str:
     pass_len = os.getenv("PASSWORD_LENGTH", 10)
     try:
         length = int(pass_len)
-    except (TypeError, ValueError):
-        raise PasswordValidationFailed("PASSWORD_LENGTH must be an integer")
+    except (TypeError, ValueError) as error:
+        raise PasswordValidationFailed("PASSWORD_LENGTH must be an integer") from error
 
     if length <= len(prefix):
         raise PasswordValidationFailed(

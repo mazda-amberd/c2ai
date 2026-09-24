@@ -19,9 +19,12 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from c2ai.schemas.grafana import MetricType
-from c2ai.clients.grafana import GrafanaClient, _build_grafana_query_body as build_grafana_query_body
+from c2ai.clients.grafana import (
+    GrafanaClient,
+    _build_grafana_query_body as build_grafana_query_body,
+)
 from c2ai.constants.prometheus import TIER_CONFIG
+from c2ai.schemas.grafana import MetricType
 
 
 async def test_single_query(client: GrafanaClient, metric_type: MetricType, name: str):
@@ -32,7 +35,7 @@ async def test_single_query(client: GrafanaClient, metric_type: MetricType, name
     
     # Print the query being sent
     body = build_grafana_query_body(metric_type)
-    print(f"\nQuery expressions:")
+    print("\nQuery expressions:")
     for q in body["queries"]:
         print(f"  {q['refId']}: {q['expr']}")
     

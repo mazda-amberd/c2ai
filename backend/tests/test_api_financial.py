@@ -1,6 +1,6 @@
 """API tests for the shared historical financial filter and summaries."""
 
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
@@ -68,8 +68,8 @@ def test_cluster_financial_endpoint_uses_one_shared_filter(deploy_auth_client):
     assert [item["tier"] for item in body["tiers"]] == [1, 2, 3, 4]
 
     call_kwargs = aggregate.await_args.kwargs
-    assert call_kwargs["period_start"] == datetime(2026, 8, 1, tzinfo=timezone.utc)
-    assert call_kwargs["period_end"] == datetime(2026, 9, 1, tzinfo=timezone.utc)
+    assert call_kwargs["period_start"] == datetime(2026, 8, 1, tzinfo=UTC)
+    assert call_kwargs["period_end"] == datetime(2026, 9, 1, tzinfo=UTC)
     assert call_kwargs["cost_type"] is None
     assert call_kwargs["tier"] is None
     assert call_kwargs["source_namespace"] == "amberd-test-deploy"

@@ -4,10 +4,6 @@ Tests for the metrics API endpoints.
 
 from unittest.mock import AsyncMock, patch
 
-import pytest
-from fastapi.testclient import TestClient
-
-from c2ai.app import app
 from c2ai.schemas.grafana import Instance, Status
 
 

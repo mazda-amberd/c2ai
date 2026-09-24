@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import jwt as pyjwt
@@ -55,7 +55,7 @@ class TestTokens:
 
     def test_expired_token_is_rejected(self):
         token = pyjwt.encode(
-            {"identifier": "alice", "exp": int(datetime.now(timezone.utc).timestamp()) - 5},
+            {"identifier": "alice", "exp": int(datetime.now(UTC).timestamp()) - 5},
             get_jwt_secret(),
             algorithm="HS256",
         )
@@ -65,7 +65,7 @@ class TestTokens:
         assert error.value.code == "TokenExpired"
 
     def test_legacy_token_without_exp_uses_expired_string(self):
-        past = format_athena_datetime(datetime.now(timezone.utc) - timedelta(minutes=1))
+        past = format_athena_datetime(datetime.now(UTC) - timedelta(minutes=1))
         token = pyjwt.encode({"identifier": "alice", "expired": past}, get_jwt_secret())
         with pytest.raises(AppException) as error:
             decode_jwt(token)

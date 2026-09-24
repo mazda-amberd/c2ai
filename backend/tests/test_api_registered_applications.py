@@ -1,12 +1,31 @@
 """API tests for GitHub Workflow application registration."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import httpx
 import pytest
 
+from c2ai.app import app
+from c2ai.auth.jwt import AthenaTokenUser, require_admin
+from c2ai.clients.container_registry import (
+    ContainerRegistryTag,
+    ContainerRegistryTagPage,
+)
+from c2ai.core.exceptions import (
+    ContainerImageTagNotFound,
+    ContainerSecretsNotSupported,
+    DuplicateRegisteredApplication,
+    RegisteredApplicationHasRunningInstances,
+)
+from c2ai.crud.registered_application import (
+    ContainerApplicationSecretPage,
+    ContainerRegistryRuntime,
+    RegisteredApplicationCatalogPage,
+    RegisteredApplicationCatalogRecord,
+    RegisteredApplicationDeploymentPage,
+)
 from c2ai.models.registered_application import (
     ApplicationLLMConfiguration,
     ApplicationParameterDefinition,
@@ -18,25 +37,6 @@ from c2ai.models.registered_application import (
     GitHubApplicationConfiguration,
     RegisteredApplication,
     RegisteredApplicationVersion,
-)
-from c2ai.app import app
-from c2ai.auth.jwt import AthenaTokenUser, require_admin
-from c2ai.clients.container_registry import (
-    ContainerRegistryTag,
-    ContainerRegistryTagPage,
-)
-from c2ai.crud.registered_application import (
-    ContainerApplicationSecretPage,
-    ContainerRegistryRuntime,
-    RegisteredApplicationCatalogPage,
-    RegisteredApplicationCatalogRecord,
-    RegisteredApplicationDeploymentPage,
-)
-from c2ai.core.exceptions import (
-    ContainerImageTagNotFound,
-    ContainerSecretsNotSupported,
-    DuplicateRegisteredApplication,
-    RegisteredApplicationHasRunningInstances,
 )
 
 
@@ -96,7 +96,7 @@ def _container_request_body() -> dict:
 
 
 def _persisted_version() -> RegisteredApplicationVersion:
-    created_at = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
+    created_at = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
     application = RegisteredApplication(
         id=UUID("aaaaaaaa-0000-0000-0000-000000000001"),
         name="example-chatbot",
@@ -150,7 +150,7 @@ def _persisted_version() -> RegisteredApplicationVersion:
 
 
 def _persisted_container_version() -> RegisteredApplicationVersion:
-    created_at = datetime(2026, 8, 13, 12, 30, tzinfo=timezone.utc)
+    created_at = datetime(2026, 8, 13, 12, 30, tzinfo=UTC)
     application = RegisteredApplication(
         id=UUID("cccccccc-0000-0000-0000-000000000001"),
         name="chat-service",
@@ -211,7 +211,7 @@ def _tracked_instance(
     deployment_status: str = "deploying",
     current_step: str = "creating_namespace",
 ) -> DeploymentInstance:
-    created_at = datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc)
+    created_at = datetime(2026, 8, 13, 13, 0, tzinfo=UTC)
     instance = DeploymentInstance(
         id=UUID("eeeeeeee-0000-0000-0000-000000000010"),
         application=version.application,
@@ -338,7 +338,7 @@ def container_secret_admin_client(registered_applications_admin_client):
 
 
 def _managed_secret() -> ContainerApplicationSecret:
-    created_at = datetime(2026, 8, 14, 10, 0, tzinfo=timezone.utc)
+    created_at = datetime(2026, 8, 14, 10, 0, tzinfo=UTC)
     return ContainerApplicationSecret(
         id=UUID("99999999-0000-0000-0000-000000000001"),
         application_id=UUID("cccccccc-0000-0000-0000-000000000001"),
@@ -704,7 +704,7 @@ def test_deploy_registered_application_dispatches_and_returns_instance(
         configuration={"parameters": {"tier": "Tier 2"}, "secrets": []},
         triggered_by="admin-user",
         dispatch_reference={"trigger_method": "workflow_dispatch"},
-        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=UTC),
     )
     request = {
         "instance_name": "example-prod",
@@ -791,7 +791,7 @@ def test_deploy_registered_application_names_the_instance_the_workflow_creates(
         configuration={"parameters": {}, "secrets": []},
         triggered_by="admin-user",
         dispatch_reference={"trigger_method": "workflow_dispatch"},
-        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=UTC),
     )
     with (
         patch(
@@ -849,7 +849,7 @@ def test_deploy_registered_application_falls_back_to_a_generated_instance_name(
         configuration={"parameters": {}, "secrets": []},
         triggered_by="admin-user",
         dispatch_reference={"trigger_method": "workflow_dispatch"},
-        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=UTC),
     )
     with (
         patch(
@@ -899,7 +899,7 @@ def test_deploy_registered_application_reports_pipeline_failure(
         status="pending",
         configuration={"parameters": {"tier": "Tier 2"}, "secrets": []},
         triggered_by="admin-user",
-        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=UTC),
     )
     with (
         patch(
@@ -1002,7 +1002,7 @@ def test_deploy_registered_container_uses_path_tier_and_stored_template(
         subdomain="chat-service-tier-3",
         hostname="chat-service-tier-3.amberd.ai",
         dns_status="pending",
-        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=timezone.utc),
+        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=UTC),
     )
     with (
         patch(
@@ -2005,7 +2005,7 @@ def test_list_container_image_tags_returns_deployment_ready_references(
                 ContainerRegistryTag(
                     name="1.2.3",
                     digest="sha256:default",
-                    last_updated=datetime(2026, 8, 15, 10, 0, tzinfo=timezone.utc),
+                    last_updated=datetime(2026, 8, 15, 10, 0, tzinfo=UTC),
                 ),
                 ContainerRegistryTag(
                     name="2.0.0",

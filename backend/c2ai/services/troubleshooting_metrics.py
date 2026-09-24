@@ -9,9 +9,9 @@ from math import ceil
 from pathlib import Path
 from typing import Any
 
-from c2ai.schemas.grafana import GrafanaResponse
 from c2ai.clients.grafana import GrafanaClient
 from c2ai.constants.prometheus import get_grafana_prometheus_datasource
+from c2ai.schemas.grafana import GrafanaResponse
 from c2ai.schemas.troubleshooting import (
     TroubleshootingMetric,
     TroubleshootingMetricPoint,

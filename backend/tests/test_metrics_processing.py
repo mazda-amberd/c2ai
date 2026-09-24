@@ -5,8 +5,8 @@ All frames use owner_name + namespace labels as returned by the k8s Grafana
 datasource (docs/grafana-k8s-exploration.md §7).
 """
 
-import pytest
 
+from c2ai.clients.grafana import GrafanaClient
 from c2ai.schemas.grafana import (
     GrafanaField,
     GrafanaFieldLabels,
@@ -17,7 +17,6 @@ from c2ai.schemas.grafana import (
     GrafanaResponse,
     Status,
 )
-from c2ai.clients.grafana import GrafanaClient
 
 
 def _rc_frame(ref_id: str, owner_name: str, namespace: str, value: float) -> GrafanaFrame:

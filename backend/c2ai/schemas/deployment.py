@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
-from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -116,7 +114,7 @@ class DeployRequest(BaseModel):
         return _validate_subdomain_value(v)
 
     @model_validator(mode="after")
-    def derived_host_label_is_valid(self) -> "DeployRequest":
+    def derived_host_label_is_valid(self) -> DeployRequest:
         from c2ai.utils.host_labels import workflow_prepare_subdomain
 
         expected = workflow_prepare_subdomain(self.customer_name, self.env_instance)
@@ -217,11 +215,11 @@ class PipelineRunOut(BaseModel):
     operation: str
     event_type: str
     triggered_by: str
-    run_id: Optional[int] = None
-    tier: Optional[int] = None
-    branch: Optional[str] = None
-    dispatched_at: Optional[str] = None
-    ended_at: Optional[str] = None
+    run_id: int | None = None
+    tier: int | None = None
+    branch: str | None = None
+    dispatched_at: str | None = None
+    ended_at: str | None = None
 
 
 class PipelineStatusOut(PipelineRunOut):
@@ -232,13 +230,13 @@ class PipelineStatusOut(PipelineRunOut):
     when the GH API call fails.
     """
 
-    gh_status: Optional[str] = None
-    gh_conclusion: Optional[str] = None
-    run_url: Optional[str] = None
-    active_job: Optional[str] = None
-    current_step: Optional[str] = None
-    started_at: Optional[str] = None
-    completed_at: Optional[str] = None
+    gh_status: str | None = None
+    gh_conclusion: str | None = None
+    run_url: str | None = None
+    active_job: str | None = None
+    current_step: str | None = None
+    started_at: str | None = None
+    completed_at: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -256,8 +254,8 @@ class DeploymentOut(BaseModel):
     branch: str
     domain: str
     status: str
-    created_at: Optional[str] = None
-    completed_at: Optional[str] = None
+    created_at: str | None = None
+    completed_at: str | None = None
 
 
 class WebhookPayload(BaseModel):

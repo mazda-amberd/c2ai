@@ -23,6 +23,8 @@ os.environ.setdefault("ATHENA_FINANCIAL_INGESTION_ENABLED", "false")
 import pytest
 from fastapi.testclient import TestClient
 
+from c2ai.app import app
+from c2ai.auth.jwt import AthenaTokenUser, get_access_token, get_current_user_token
 from c2ai.schemas.grafana import (
     GrafanaField,
     GrafanaFieldLabels,
@@ -32,9 +34,6 @@ from c2ai.schemas.grafana import (
     GrafanaQueryResult,
     GrafanaResponse,
 )
-from c2ai.app import app
-from c2ai.auth.jwt import AthenaTokenUser, get_access_token, get_current_user_token
-
 
 _FAKE_USER = AthenaTokenUser(identifier="test-user", service="athena")
 

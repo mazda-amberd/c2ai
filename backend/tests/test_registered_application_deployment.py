@@ -6,6 +6,7 @@ from uuid import UUID
 
 import pytest
 
+from c2ai.core.exceptions import UnprocessableEntityError
 from c2ai.models.registered_application import (
     ApplicationLLMConfiguration,
     ApplicationParameterDefinition,
@@ -14,7 +15,10 @@ from c2ai.models.registered_application import (
     RegisteredApplication,
     RegisteredApplicationVersion,
 )
-from c2ai.core.exceptions import UnprocessableEntityError
+from c2ai.schemas.registered_application import (
+    ContainerRegisteredApplicationDeploymentCreate,
+    RegisteredApplicationDeploymentCreate,
+)
 from c2ai.services.registered_application_deployment import (
     build_container_deployment_configuration,
     build_container_pipeline_payload,
@@ -24,10 +28,6 @@ from c2ai.services.registered_application_deployment import (
     dispatch_registered_application_termination,
     dispatch_registered_application_upgrade,
     resolve_github_deployment_instance_name,
-)
-from c2ai.schemas.registered_application import (
-    ContainerRegisteredApplicationDeploymentCreate,
-    RegisteredApplicationDeploymentCreate,
 )
 
 

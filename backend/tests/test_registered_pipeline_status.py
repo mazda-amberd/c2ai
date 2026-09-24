@@ -1,6 +1,6 @@
 """Tests for projecting registered deployments onto the pipeline status contract."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -13,7 +13,7 @@ from c2ai.services.registered_pipeline_status import (
 
 
 def _instance(**overrides):
-    created_at = datetime(2026, 9, 3, 12, 0, 0, tzinfo=timezone.utc)
+    created_at = datetime(2026, 9, 3, 12, 0, 0, tzinfo=UTC)
     values = {
         "id": "cccccccc-0000-0000-0000-000000000003",
         "instance_name": "ada-tier-1",
@@ -126,7 +126,7 @@ async def test_falls_back_to_athena_progress_without_github_run():
 
 @pytest.mark.asyncio
 async def test_finished_deployment_reports_conclusion_and_end():
-    completed_at = datetime(2026, 9, 3, 12, 5, 0, tzinfo=timezone.utc)
+    completed_at = datetime(2026, 9, 3, 12, 5, 0, tzinfo=UTC)
     instance = _instance(
         status="failed",
         current_step="failed",

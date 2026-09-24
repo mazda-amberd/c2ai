@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from c2ai.schemas.deployment import PipelineStatusOut
-
 
 # ---------------------------------------------------------------------------
 # Fake ORM objects
@@ -39,7 +38,7 @@ class FakePipelineRun:
         self.run_id = run_id
         self.tier = tier
         self.branch = branch
-        self.dispatched_at = dispatched_at or datetime(2026, 4, 1, 12, 0, 0, tzinfo=timezone.utc)
+        self.dispatched_at = dispatched_at or datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
         self.ended_at = ended_at
 
     def to_dict(self) -> dict:
@@ -824,7 +823,7 @@ class TestCancelPipeline:
             id=fake.id,
             run_id=99_888,
             triggered_by="test-user",
-            ended_at=datetime(2026, 4, 2, 12, 0, 0, tzinfo=timezone.utc),
+            ended_at=datetime(2026, 4, 2, 12, 0, 0, tzinfo=UTC),
         )
 
         with (

@@ -1,5 +1,6 @@
 from enum import Enum
 
+
 class Model(Enum):
     MODEL_CONFIG_NAME = "vllm_qwen3_coder_next"
 

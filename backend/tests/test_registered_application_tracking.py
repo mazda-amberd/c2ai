@@ -1,17 +1,22 @@
 """Tests for durable registered-deployment progress and rollback state."""
 
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from c2ai.models.registered_application import (
-    DeploymentInstance,
-    RegisteredApplication,
-    RegisteredApplicationVersion,
+from c2ai.core.exceptions import (
+    DeploymentAlreadyAtVersion,
+    DeploymentProgressConflict,
+    DeploymentRollbackNotAvailable,
+    DeploymentTerminationNotAvailable,
+    DeploymentTerminationNotSupported,
+    DeploymentUpgradeNotAvailable,
+    DeploymentUpgradeNotSupported,
+    DuplicateDeploymentSubdomain,
 )
 from c2ai.crud.registered_application import (
     complete_registered_application_dispatch,
@@ -23,15 +28,10 @@ from c2ai.crud.registered_application import (
     prepare_registered_application_upgrade,
     update_registered_application_deployment_progress,
 )
-from c2ai.core.exceptions import (
-    DeploymentAlreadyAtVersion,
-    DeploymentProgressConflict,
-    DeploymentRollbackNotAvailable,
-    DeploymentTerminationNotAvailable,
-    DeploymentTerminationNotSupported,
-    DeploymentUpgradeNotAvailable,
-    DeploymentUpgradeNotSupported,
-    DuplicateDeploymentSubdomain,
+from c2ai.models.registered_application import (
+    DeploymentInstance,
+    RegisteredApplication,
+    RegisteredApplicationVersion,
 )
 from c2ai.schemas.registered_application import (
     RegisteredApplicationDeploymentProgressUpdate,
@@ -43,7 +43,7 @@ def _instance(
     status: str = "deploying",
     current_step: str = "validating_configuration",
 ) -> DeploymentInstance:
-    now = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
     application = RegisteredApplication(
         id=UUID("10000000-0000-0000-0000-000000000001"),
         name="release-workflow",

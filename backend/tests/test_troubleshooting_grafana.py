@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -130,7 +130,7 @@ def test_query_builders_match_dashboard_contract():
 async def test_collects_and_normalizes_all_dashboard_evidence_sources():
     client = FakeGrafanaClient()
     provider = GrafanaTroubleshootingDataProvider(client=client)
-    end = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
     start = end - timedelta(hours=4)
 
     events = await provider.collect_events(
@@ -169,7 +169,7 @@ async def test_uses_available_events_when_one_grafana_query_fails():
     provider = GrafanaTroubleshootingDataProvider(
         client=FakeGrafanaClient(fail_application=True)
     )
-    end = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
 
     events = await provider.collect_events(
         subdomain="amberd-acme-ada",
@@ -189,7 +189,7 @@ async def test_fails_when_every_grafana_query_fails():
     provider = GrafanaTroubleshootingDataProvider(
         client=FakeGrafanaClient(fail_all=True)
     )
-    end = datetime(2026, 8, 20, 12, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 20, 12, 0, tzinfo=UTC)
 
     with pytest.raises(ServiceUnavailableError) as raised:
         await provider.collect_events(

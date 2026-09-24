@@ -1,12 +1,11 @@
 """Tests for financial rates, cost calculation, and historical persistence."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
-from c2ai.models.financial import FinancialCostRecord, FinancialRate
 from c2ai.crud.financial import (
     FinancialRateNotFoundError,
     configure_private_llm_rate,
@@ -16,9 +15,10 @@ from c2ai.crud.financial import (
     record_private_llm_cost,
     record_public_api_cost,
 )
+from c2ai.models.financial import FinancialCostRecord, FinancialRate
 from c2ai.services.financial import calculate_private_llm_cost, calculate_public_api_cost
 
-START = datetime(2026, 8, 1, tzinfo=timezone.utc)
+START = datetime(2026, 8, 1, tzinfo=UTC)
 END = START + timedelta(hours=1)
 
 

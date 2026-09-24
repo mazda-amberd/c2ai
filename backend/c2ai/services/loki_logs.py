@@ -8,8 +8,9 @@ import hashlib
 import json
 import os
 import re
-from datetime import datetime, timezone
-from typing import Any, Iterator, Optional
+from collections.abc import Iterator
+from datetime import UTC, datetime
+from typing import Any
 
 from c2ai.schemas.logs import DeploymentLogEntryOut, LogLevelLiteral
 
@@ -97,7 +98,7 @@ def strip_level_tokens_from_search(query: str) -> str:
     return re.sub(r"\s+", " ", t).strip()
 
 
-def build_loki_line_filter_pipeline(search: Optional[str]) -> str:
+def build_loki_line_filter_pipeline(search: str | None) -> str:
     """
     Build LogQL pipeline stages after the stream selector for server-side search.
 
@@ -125,7 +126,7 @@ def build_loki_line_filter_pipeline(search: Optional[str]) -> str:
                 break
 
     if levels:
-        alts = "|".join(_LEVEL_LINE_REGEX_ALTS[l] for l in levels)
+        alts = "|".join(_LEVEL_LINE_REGEX_ALTS[level] for level in levels)
         parts.append(f"|~ \"(?i)(?:{alts})\"")
 
     if not parts:
@@ -136,8 +137,8 @@ def build_loki_line_filter_pipeline(search: Optional[str]) -> str:
 def build_full_loki_logql(
     namespace: str,
     deployment: str,
-    tier: Optional[int],
-    search: Optional[str],
+    tier: int | None,
+    search: str | None,
 ) -> str:
     """Stream selector plus optional line filter pipeline."""
     return build_loki_stream_selector(namespace, deployment, tier) + build_loki_line_filter_pipeline(
@@ -179,7 +180,7 @@ def ms_upper_bound_before_cursor(ts_ns: int) -> int:
 def build_loki_stream_selector(
     namespace: str,
     deployment: str,
-    tier: Optional[int],
+    tier: int | None,
 ) -> str:
     """
     Build a LogQL stream selector `{label="value",...}` scoped to one workload.
@@ -226,7 +227,7 @@ def _field_indices(fields: list[dict[str, Any]]) -> dict[str, int]:
     return out
 
 
-def _time_ns_from_cell(cell: Any) -> Optional[int]:
+def _time_ns_from_cell(cell: Any) -> int | None:
     if cell is None:
         return None
     if isinstance(cell, int):
@@ -244,7 +245,7 @@ def _time_ns_from_cell(cell: Any) -> Optional[int]:
 
 
 def _iso_from_ns(ns: int) -> str:
-    dt = datetime.fromtimestamp(ns / 1e9, tz=timezone.utc)
+    dt = datetime.fromtimestamp(ns / 1e9, tz=UTC)
     return dt.isoformat().replace("+00:00", "Z")
 
 
@@ -385,7 +386,7 @@ def _maybe_duration_ms(line: str) -> int | None:
         val = float(m.group(1))
     except ValueError:
         return None
-    return int(round(val))
+    return round(val)
 
 
 def _stable_entry_id(ts_ns: int, line: str, labels: dict[str, str]) -> str:

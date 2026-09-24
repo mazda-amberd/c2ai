@@ -10,18 +10,9 @@ import math
 import os
 import re
 from datetime import datetime
-from typing import Optional
 
 import httpx
 
-from c2ai.schemas.grafana import (
-    GrafanaField,
-    GrafanaFrame,
-    GrafanaResponse,
-    Instance,
-    MetricType,
-    Status,
-)
 from c2ai.constants.prometheus import (
     METRIC_QUERIES,
     REF_IDS,
@@ -34,6 +25,14 @@ from c2ai.constants.prometheus import (
     excluded_deployment_names,
     get_gpu_per_app_query,
     get_grafana_prometheus_datasource,
+)
+from c2ai.schemas.grafana import (
+    GrafanaField,
+    GrafanaFrame,
+    GrafanaResponse,
+    Instance,
+    MetricType,
+    Status,
 )
 
 logger = logging.getLogger(__name__)
@@ -91,8 +90,8 @@ class GrafanaClient:
 
     def __init__(
         self,
-        api_url: Optional[str] = None,
-        api_token: Optional[str] = None,
+        api_url: str | None = None,
+        api_token: str | None = None,
     ):
         """
         Initialise the Grafana client.
@@ -490,8 +489,8 @@ class GrafanaClient:
         logql: str,
         start_ms: int,
         end_ms: int,
-        max_lines: Optional[int] = None,
-        direction: Optional[str] = None,
+        max_lines: int | None = None,
+        direction: str | None = None,
     ) -> dict:
         """
         Run a Loki **range** query via Grafana's unified ``/api/ds/query`` endpoint.
@@ -691,8 +690,8 @@ class GrafanaClient:
 
     @staticmethod
     def _k8s_namespace_from_field_labels(
-        field: Optional[GrafanaField],
-    ) -> Optional[str]:
+        field: GrafanaField | None,
+    ) -> str | None:
         """Kubernetes namespace from Grafana field labels (handles relabel exports)."""
         if not field or not field.labels:
             return None
@@ -700,7 +699,7 @@ class GrafanaClient:
         return lbl.namespace or lbl.exported_namespace
 
     @staticmethod
-    def _namespace_from_frame(frame: GrafanaFrame) -> Optional[str]:
+    def _namespace_from_frame(frame: GrafanaFrame) -> str | None:
         """Prefer labels on the value field; fall back to any field (Grafana varies)."""
         fields = frame.schema_.fields
         if len(fields) > GrafanaClient.VALUE_FIELD_INDEX:
@@ -716,14 +715,14 @@ class GrafanaClient:
         return None
 
     @staticmethod
-    def _label_tier_from_field_labels(field: Optional[GrafanaField]) -> Optional[str]:
+    def _label_tier_from_field_labels(field: GrafanaField | None) -> str | None:
         """``label_tier`` from Grafana field labels (tier-total GPU instant query)."""
         if not field or not field.labels:
             return None
         return field.labels.label_tier
 
     @staticmethod
-    def _label_tier_from_frame(frame: GrafanaFrame) -> Optional[str]:
+    def _label_tier_from_frame(frame: GrafanaFrame) -> str | None:
         """Prefer labels on the value field; fall back to any field."""
         fields = frame.schema_.fields
         if len(fields) > GrafanaClient.VALUE_FIELD_INDEX:
@@ -740,7 +739,7 @@ class GrafanaClient:
 
     @staticmethod
     def _ns_gpu_value_map(
-        gpu_bundle: Optional[GrafanaResponse],
+        gpu_bundle: GrafanaResponse | None,
         ref_id: str,
     ) -> dict[str, float]:
         """
@@ -777,7 +776,7 @@ class GrafanaClient:
 
     @staticmethod
     def _parse_gpu_per_app(
-        gpu_per_app_data: Optional[GrafanaResponse],
+        gpu_per_app_data: GrafanaResponse | None,
     ) -> dict[str, float]:
         """
         Parse the per-app GPU attribution response (panel 18) into a
@@ -790,7 +789,7 @@ class GrafanaClient:
 
     @staticmethod
     def _parse_gpu_tier_totals(
-        gpu_tier_data: Optional[GrafanaResponse],
+        gpu_tier_data: GrafanaResponse | None,
     ) -> dict[str, float]:
         """
         Parse tier-total GPU response (refId A) into ``{label_tier: value}``.
@@ -828,9 +827,9 @@ class GrafanaClient:
         cpu_data: GrafanaResponse,
         memory_data: GrafanaResponse,
         gpu_data: GrafanaResponse,
-        cpu_total_data: Optional[GrafanaResponse] = None,
-        gpu_per_app_data: Optional[GrafanaResponse] = None,
-    ) -> tuple[dict[str, Optional[list[Instance]]], dict[str, Optional[float]]]:
+        cpu_total_data: GrafanaResponse | None = None,
+        gpu_per_app_data: GrafanaResponse | None = None,
+    ) -> tuple[dict[str, list[Instance] | None], dict[str, float | None]]:
         """
         Combine CPU, memory, and GPU responses into per-tier Instance lists,
         also returning per-tier GPU totals.
@@ -857,13 +856,13 @@ class GrafanaClient:
         cpu_cap = _cpu_cores_cap()
         mem_cap = _memory_gb_cap()
 
-        tiers: dict[str, Optional[list[Instance]]] = {
+        tiers: dict[str, list[Instance] | None] = {
             "Tier 1": [],
             "Tier 2": [],
             "Tier 3": [],
             "Tier 4": None,
         }
-        gpu_totals: dict[str, Optional[float]] = {
+        gpu_totals: dict[str, float | None] = {
             "Tier 1": None,
             "Tier 2": None,
             "Tier 3": None,
@@ -961,8 +960,8 @@ class GrafanaClient:
         return tiers, gpu_totals
 
     async def get_all_metrics(
-        self, tier: Optional[int] = None
-    ) -> tuple[dict[str, Optional[list[Instance]]], dict[str, Optional[float]]]:
+        self, tier: int | None = None
+    ) -> tuple[dict[str, list[Instance] | None], dict[str, float | None]]:
         """
         Fetch all metrics from Grafana in parallel and return combined data.
 

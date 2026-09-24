@@ -3,7 +3,7 @@ Pydantic models for Grafana API requests and responses.
 """
 
 from enum import Enum
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -42,9 +42,9 @@ class Instance(BaseModel):
     id: int
     name: str
     nodename: str
-    client_name: Optional[str] = None
-    instance_name: Optional[str] = None
-    version: Optional[str] = None
+    client_name: str | None = None
+    instance_name: str | None = None
+    version: str | None = None
     cpu: float = 0.0
     memory: float = 0.0
     gpu: float = 0.0
@@ -60,8 +60,8 @@ class TierMetrics(BaseModel):
 class TiersResponse(BaseModel):
     """Response containing metrics for all tiers."""
 
-    tiers: dict[str, Optional[list[Instance]]]
-    tier_gpu_totals: dict[str, Optional[float]] = Field(default_factory=dict)
+    tiers: dict[str, list[Instance] | None]
+    tier_gpu_totals: dict[str, float | None] = Field(default_factory=dict)
 
 
 # Grafana API Response Models
@@ -84,26 +84,26 @@ class GrafanaFieldLabels(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    namespace: Optional[str] = None
-    exported_namespace: Optional[str] = None
+    namespace: str | None = None
+    exported_namespace: str | None = None
     # Standard Kubernetes Deployment workloads (from RS→Deployment join)
-    deployment: Optional[str] = None
-    label_app: Optional[str] = None
+    deployment: str | None = None
+    label_app: str | None = None
     # RayCluster workloads (from kube_pod_owner join)
-    owner_name: Optional[str] = None
+    owner_name: str | None = None
     # GPU series
-    ray_io_cluster: Optional[str] = None
+    ray_io_cluster: str | None = None
     # Tier-total GPU instant query (avg by label_tier after label_replace)
-    label_tier: Optional[str] = None
+    label_tier: str | None = None
     # LLM gateway usage dashboard groups token counters by caller namespace.
-    source_namespace: Optional[str] = None
+    source_namespace: str | None = None
     # Public-API token counters are additionally grouped by the upstream the
     # gateway routed to and the model it billed.
-    provider: Optional[str] = None
-    model: Optional[str] = None
+    provider: str | None = None
+    model: str | None = None
     # Pod-IP lookup used to attribute LLM gateway counters to applications.
-    pod: Optional[str] = None
-    pod_ip: Optional[str] = None
+    pod: str | None = None
+    pod_ip: str | None = None
 
 
 class GrafanaField(BaseModel):
@@ -111,9 +111,9 @@ class GrafanaField(BaseModel):
 
     name: str
     type: str
-    labels: Optional[GrafanaFieldLabels] = None
-    config: Optional[dict[str, Any]] = None
-    typeInfo: Optional[dict[str, Any]] = None
+    labels: GrafanaFieldLabels | None = None
+    config: dict[str, Any] | None = None
+    typeInfo: dict[str, Any] | None = None
 
 
 class GrafanaFrameSchema(BaseModel):
@@ -121,7 +121,7 @@ class GrafanaFrameSchema(BaseModel):
 
     refId: str
     fields: list[GrafanaField]
-    meta: Optional[dict[str, Any]] = None
+    meta: dict[str, Any] | None = None
 
 
 class GrafanaFrameData(BaseModel):

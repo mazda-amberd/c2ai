@@ -1,6 +1,6 @@
 """Tests for registered-application persistence operations."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID
 
@@ -8,9 +8,15 @@ import pytest
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 
-from c2ai.models.registered_application import (
-    ContainerApplicationSecret,
-    RegisteredApplication,
+from c2ai.core.exceptions import (
+    ContainerApplicationSecretInUse,
+    ContainerSecretsNotSupported,
+    DuplicateContainerApplicationSecret,
+    DuplicateRegisteredApplication,
+    RegisteredApplicationHasManagedSecrets,
+    RegisteredApplicationHasRunningInstances,
+    RegisteredApplicationNotFound,
+    ServiceUnavailableError,
 )
 from c2ai.crud.registered_application import (
     complete_container_application_secret_write,
@@ -24,15 +30,9 @@ from c2ai.crud.registered_application import (
     prepare_container_application_secret_delete,
     resolve_container_registry_credentials,
 )
-from c2ai.core.exceptions import (
-    ContainerApplicationSecretInUse,
-    ContainerSecretsNotSupported,
-    DuplicateContainerApplicationSecret,
-    DuplicateRegisteredApplication,
-    RegisteredApplicationHasManagedSecrets,
-    RegisteredApplicationHasRunningInstances,
-    RegisteredApplicationNotFound,
-    ServiceUnavailableError,
+from c2ai.models.registered_application import (
+    ContainerApplicationSecret,
+    RegisteredApplication,
 )
 from c2ai.schemas.registered_application import (
     ContainerApplicationSecretCreate,
@@ -318,7 +318,7 @@ async def test_create_container_application_rejects_existing_name():
 
 
 def _catalog_application(identifier: str, name: str) -> RegisteredApplication:
-    created_at = datetime(2026, 8, 13, 12, 0, tzinfo=timezone.utc)
+    created_at = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
     return RegisteredApplication(
         id=UUID(identifier),
         name=name,

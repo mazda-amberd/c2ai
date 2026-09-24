@@ -18,22 +18,22 @@ instances onto the same ``PipelineStatusOut`` shape:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from c2ai.models.registered_application import DeploymentInstance
 from c2ai.constants.registered_application import DeploymentInstanceStatus
+from c2ai.models.registered_application import DeploymentInstance
+from c2ai.schemas.deployment import PipelineStatusOut
 from c2ai.services.github_workflow_progress import (
     get_registered_deployment_workflow_progress,
 )
 from c2ai.services.registered_application_deployment import (
     resolve_github_workflow_subdomain,
 )
-from c2ai.schemas.deployment import PipelineStatusOut
 
 # Statuses that mean "the pipeline is still running".
 ACTIVE_STATUSES = frozenset(
@@ -236,7 +236,7 @@ async def _status_for_instance(
     instance: DeploymentInstance,
 ) -> PipelineStatusOut:
     cache_key = str(instance.id)
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     is_active = instance.status in ACTIVE_STATUSES
     cached = _status_cache.get(cache_key)
     # Finished deployments are never served from the cache, so their terminal
@@ -264,7 +264,7 @@ async def _status_for_instance(
 
 
 async def _load_visible_instances(db: AsyncSession) -> list[DeploymentInstance]:
-    cutoff = datetime.now(tz=timezone.utc) - TERMINAL_VISIBILITY_WINDOW
+    cutoff = datetime.now(tz=UTC) - TERMINAL_VISIBILITY_WINDOW
     result = await db.execute(
         select(DeploymentInstance)
         .where(
@@ -287,7 +287,7 @@ async def _load_visible_instances(db: AsyncSession) -> list[DeploymentInstance]:
 
 def _prune_cache() -> None:
     """Drop entries for deployments that stopped being polled (e.g. deleted)."""
-    stale_before = datetime.now(tz=timezone.utc) - STATUS_CACHE_TTL
+    stale_before = datetime.now(tz=UTC) - STATUS_CACHE_TTL
     for key in [k for k, (_, at) in _status_cache.items() if at < stale_before]:
         _status_cache.pop(key, None)
 

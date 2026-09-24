@@ -3,9 +3,9 @@
 import logging
 from typing import Any
 
+from c2ai.core.exceptions import ServiceUnavailableError
 from c2ai.llm.config import Model
 from c2ai.llm.model_switcher import create_runtime_chat_model
-from c2ai.core.exceptions import ServiceUnavailableError
 
 logger = logging.getLogger(__name__)
 

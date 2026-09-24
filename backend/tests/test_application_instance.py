@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from c2ai.schemas.grafana import Instance, Status
 from c2ai.crud.application_instance import replace_application_instances_for_tiers
+from c2ai.schemas.grafana import Instance, Status
 
 
 @pytest.mark.asyncio

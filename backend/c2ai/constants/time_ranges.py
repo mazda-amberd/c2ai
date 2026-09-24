@@ -10,8 +10,8 @@ Step is floored at the 60-second scrape interval; anything finer would interpola
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
-from typing import NamedTuple, Optional
+from datetime import UTC, datetime, timedelta
+from typing import NamedTuple
 
 RANGE_PRESETS: dict[str, tuple[timedelta, int]] = {
     "1m": (timedelta(minutes=1), 60),
@@ -38,7 +38,7 @@ class Window(NamedTuple):
 
     start: datetime
     end: datetime
-    preset: Optional[str]
+    preset: str | None
     step_seconds: int
 
 
@@ -55,13 +55,13 @@ def _step_for(duration: timedelta) -> int:
 
 
 def resolve_window(
-    range_key: Optional[str] = None,
-    start: Optional[datetime] = None,
-    end: Optional[datetime] = None,
-    now: Optional[datetime] = None,
+    range_key: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    now: datetime | None = None,
 ) -> Window:
     """Resolve a preset key or an explicit from/to pair into a Window."""
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
 
     if start or end:
         if range_key:
@@ -91,5 +91,5 @@ def resolve_window(
 
 def _as_utc(value: datetime) -> datetime:
     """Treat naive datetimes as UTC so comparisons never raise."""
-    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 

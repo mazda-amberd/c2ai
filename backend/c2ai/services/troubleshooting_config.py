@@ -9,8 +9,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from c2ai.models.troubleshooting_config import TroubleshootingConfig
 from c2ai.db.session import get_db_session
+from c2ai.models.troubleshooting_config import TroubleshootingConfig
 
 DEFAULT_TROUBLESHOOTING_LOOKBACK_HOURS = 4
 MAX_TROUBLESHOOTING_LOOKBACK_HOURS = 168

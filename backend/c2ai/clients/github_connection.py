@@ -8,8 +8,8 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from c2ai.crud.github_connection import github_api_base_url
 from c2ai.core.exceptions import ServiceUnavailableError
+from c2ai.crud.github_connection import github_api_base_url
 
 logger = logging.getLogger(__name__)
 

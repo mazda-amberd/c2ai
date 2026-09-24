@@ -1,7 +1,7 @@
 """Tests for server-rendered troubleshooting metric charts."""
 
 import base64
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from c2ai.schemas.troubleshooting import (
     TroubleshootingMetric,
@@ -20,7 +20,7 @@ def _decode(data_url: str) -> str:
 
 
 def test_build_metric_plot_data_url_renders_complete_time_series():
-    start = datetime(2026, 8, 24, 8, tzinfo=timezone.utc)
+    start = datetime(2026, 8, 24, 8, tzinfo=UTC)
     metric = TroubleshootingMetric(
         name="request_latency_seconds",
         label="Request Latency Seconds",

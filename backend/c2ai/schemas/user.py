@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, constr
@@ -25,9 +25,9 @@ class UserBase(BaseModel):
     identifier: constr(min_length=1)
     first_name: constr(min_length=1)
     last_name: constr(min_length=1)
-    metadata_: Dict[str, Any] = Field(default_factory=dict)
+    metadata_: dict[str, Any] = Field(default_factory=dict)
     created_by: constr(min_length=1)
-    updated_by: Optional[str] = None
+    updated_by: str | None = None
     model_config = ConfigDict(from_attributes=True)
 
 # pylint: disable=too-few-public-methods
@@ -44,7 +44,7 @@ class UserCreate(BaseModel):
     identifier: constr(min_length=1)
     first_name: constr(min_length=1)
     last_name: constr(min_length=1)
-    metadata_: Dict[str, Any] = Field(default_factory=dict)
+    metadata_: dict[str, Any] = Field(default_factory=dict)
     model_config = ConfigDict(from_attributes=True)
 
 # pylint: disable=too-few-public-methods
@@ -61,11 +61,11 @@ class UserUpdate(BaseModel):
         updated_by (Optional[str]): Identifier of the last updater.
     """
 
-    password: Optional[constr(min_length=1)] = None
-    first_name: Optional[constr(min_length=1)] = None
-    last_name: Optional[constr(min_length=1)] = None
-    metadata_: Optional[Dict[str, Any]] = None
-    updated_by: Optional[constr(min_length=1)] = None
+    password: constr(min_length=1) | None = None
+    first_name: constr(min_length=1) | None = None
+    last_name: constr(min_length=1) | None = None
+    metadata_: dict[str, Any] | None = None
+    updated_by: constr(min_length=1) | None = None
     model_config = ConfigDict(from_attributes=True)
 
 

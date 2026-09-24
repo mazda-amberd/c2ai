@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -40,9 +39,9 @@ class MetricUnit(str, Enum):
 class MetricValue(BaseModel):
     """One metric for one scope; ``value`` is null when Grafana did not return it."""
 
-    value: Optional[float] = None
+    value: float | None = None
     unit: MetricUnit = MetricUnit.PERCENT
-    status: Optional[str] = None
+    status: str | None = None
     available: bool = True
 
 
@@ -52,10 +51,10 @@ class Scope(BaseModel):
     kind: str
     id: str
     name: str
-    tier: Optional[int] = None
-    subdomain: Optional[str] = None
-    client_name: Optional[str] = None
-    instance_name: Optional[str] = None
+    tier: int | None = None
+    subdomain: str | None = None
+    client_name: str | None = None
+    instance_name: str | None = None
 
 
 class MetricSeries(BaseModel):
@@ -72,7 +71,7 @@ class WindowOut(BaseModel):
 
     start: datetime = Field(alias="from")
     end: datetime = Field(alias="to")
-    preset: Optional[str] = None
+    preset: str | None = None
     step_seconds: int
 
 

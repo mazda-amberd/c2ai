@@ -1,7 +1,7 @@
 """Tests for LLM-selected PromQL from the configured JSON catalog."""
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -57,7 +57,7 @@ class FakeMetricClient:
 
 
 def _configured_queries(*, tier: int | None = 1):
-    end = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
     return load_configured_metric_queries(
         namespace="amberd-acme-ada",
         deployment="ada",
@@ -129,7 +129,7 @@ def test_rejects_an_invalid_or_unresolved_catalog(tmp_path: Path):
         ),
         encoding="utf-8",
     )
-    end = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
 
     with pytest.raises(ValueError, match="unresolved variables"):
         load_configured_metric_queries(
@@ -155,7 +155,7 @@ def test_metric_selection_only_accepts_ids_from_configured_catalog():
 
 async def test_executes_four_exact_model_selected_configured_queries():
     client = FakeMetricClient()
-    end = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
     start = end - timedelta(hours=4)
     queries = _configured_queries()[2:6]
 
@@ -186,7 +186,7 @@ async def test_executes_four_exact_model_selected_configured_queries():
 
 async def test_does_not_call_grafana_when_no_query_was_selected():
     client = FakeMetricClient()
-    end = datetime(2026, 8, 21, 12, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 21, 12, 0, tzinfo=UTC)
 
     metrics = await query_application_metrics(
         client,

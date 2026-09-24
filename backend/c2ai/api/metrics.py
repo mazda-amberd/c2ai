@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from c2ai.schemas.metrics import MetricLevel, MetricsResponse
 from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token
 from c2ai.clients.grafana import GrafanaClient
 from c2ai.constants.time_ranges import (
@@ -18,8 +16,9 @@ from c2ai.constants.time_ranges import (
     InvalidWindow,
     resolve_window,
 )
-from c2ai.db.session import get_db_session
 from c2ai.core.exceptions import ServiceUnavailableError, ValidationFailed
+from c2ai.db.session import get_db_session
+from c2ai.schemas.metrics import MetricLevel, MetricsResponse
 from c2ai.services.instance_metadata import load_instance_metadata_map
 from c2ai.services.metrics import MetricsUnavailable, build_metrics
 
@@ -27,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Metrics"])
 
-_grafana_client: Optional[GrafanaClient] = None
+_grafana_client: GrafanaClient | None = None
 
 
 def get_metrics_grafana_client() -> GrafanaClient:
@@ -50,14 +49,14 @@ def get_metrics_grafana_client() -> GrafanaClient:
 )
 async def get_metrics_v2(
     level: MetricLevel = Query(..., description="Aggregation level."),
-    range_: Optional[str] = Query(
+    range_: str | None = Query(
         None,
         alias="range",
         description=f"Preset window ({', '.join(RANGE_PRESETS)}). Defaults to {DEFAULT_RANGE}.",
     ),
-    from_: Optional[datetime] = Query(None, alias="from", description="Custom window start (ISO8601)."),
-    to: Optional[datetime] = Query(None, description="Custom window end (ISO8601)."),
-    tier: Optional[int] = Query(None, ge=1, le=3, description="Restrict to one tier."),
+    from_: datetime | None = Query(None, alias="from", description="Custom window start (ISO8601)."),
+    to: datetime | None = Query(None, description="Custom window end (ISO8601)."),
+    tier: int | None = Query(None, ge=1, le=3, description="Restrict to one tier."),
     _user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(get_db_session),
 ) -> MetricsResponse:
@@ -107,9 +106,9 @@ async def get_application_metrics_v2(
         max_length=317,
         description="Application scope ID (namespace/deployment).",
     ),
-    range_: Optional[str] = Query(None, alias="range"),
-    from_: Optional[datetime] = Query(None, alias="from"),
-    to: Optional[datetime] = Query(None),
+    range_: str | None = Query(None, alias="range"),
+    from_: datetime | None = Query(None, alias="from"),
+    to: datetime | None = Query(None),
     _user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(get_db_session),
 ) -> MetricsResponse:

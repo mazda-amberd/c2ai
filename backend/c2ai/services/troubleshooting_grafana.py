@@ -8,20 +8,20 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from c2ai.clients.grafana import GrafanaClient
 from c2ai.core.exceptions import ServiceUnavailableError
-from c2ai.services.loki_logs import (
-    escape_logql_label_value,
-    iter_loki_rows_from_ds_query_payload,
-    loki_row_to_deployment_entry,
-)
 from c2ai.schemas.troubleshooting import (
     TroubleshootingEvent,
     TroubleshootingMetric,
     TroubleshootingMetricQuery,
+)
+from c2ai.services.loki_logs import (
+    escape_logql_label_value,
+    iter_loki_rows_from_ds_query_payload,
+    loki_row_to_deployment_entry,
 )
 from c2ai.services.troubleshooting_metrics import (
     load_configured_metric_queries,
@@ -104,7 +104,7 @@ def _event_id(timestamp_ns: int, line: str, labels: dict[str, str]) -> str:
 
 
 def _timestamp_from_ns(timestamp_ns: int) -> datetime:
-    return datetime.fromtimestamp(timestamp_ns / 1e9, tz=timezone.utc)
+    return datetime.fromtimestamp(timestamp_ns / 1e9, tz=UTC)
 
 
 def _parse_json_event(line: str) -> dict[str, str] | None:

@@ -1,7 +1,6 @@
 # pylint: disable=import-error
 """SQLAlchemy model for the `deployments` table."""
 
-from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Integer, String
 from sqlalchemy.sql import func

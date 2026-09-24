@@ -1,6 +1,6 @@
 """Tests for server-side troubleshooting PDF rendering."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 
 from pypdf import PdfReader
@@ -28,7 +28,7 @@ def test_pdf_metric_value_is_not_rounded():
 
 
 def test_pdf_contains_all_report_sections_and_multiple_pages():
-    end = datetime(2026, 8, 23, 18, 46, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 23, 18, 46, tzinfo=UTC)
     start = end - timedelta(hours=4)
     points = [
         TroubleshootingMetricPoint(

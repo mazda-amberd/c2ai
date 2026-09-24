@@ -13,25 +13,19 @@ import httpx
 from fastapi import APIRouter, Depends, Header, Path, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from c2ai.models.registered_application import RegisteredApplicationVersion
-from c2ai.clients.github_actions import GitHubActionsClient
 from c2ai.auth.jwt import AthenaTokenUser, require_admin
 from c2ai.clients.container_registry import (
     ContainerRegistryClient,
     build_image_reference,
 )
 from c2ai.clients.container_secret_provider import ContainerSecretProviderClient
+from c2ai.clients.github_actions import GitHubActionsClient
 from c2ai.constants.registered_application import (
     ApplicationStatus,
     ApplicationType,
     DeploymentInstanceStatus,
     DeploymentStep,
 )
-from c2ai.crud import (
-    github_connection as crud_github_connection,
-    registered_application as crud_registered_application,
-)
-from c2ai.db.session import get_db_session as db_session
 from c2ai.core.exceptions import (
     ContainerDeploymentNotSupported,
     ContainerImageTagsNotSupported,
@@ -46,27 +40,12 @@ from c2ai.core.exceptions import (
     UnauthorizedError,
     UnprocessableEntityError,
 )
-from c2ai.services.github_workflow_progress import (
-    get_registered_deployment_workflow_progress,
+from c2ai.crud import (
+    github_connection as crud_github_connection,
+    registered_application as crud_registered_application,
 )
-from c2ai.services.llm_models import (
-    PRIVATE_MODEL_NAMES,
-    PUBLIC_MODEL_NAMES,
-    is_supported_model,
-    normalize_model_name,
-    pricing_unavailable_message,
-    resolve_llm_provider,
-)
-from c2ai.services.registered_application_deployment import (
-    build_container_deployment_configuration,
-    build_deployment_configuration,
-    configured_version,
-    default_github_instance_name,
-    dispatch_registered_application_deployment,
-    dispatch_registered_application_termination,
-    dispatch_registered_application_upgrade,
-    resolve_github_deployment_instance_name,
-)
+from c2ai.db.session import get_db_session as db_session
+from c2ai.models.registered_application import RegisteredApplicationVersion
 from c2ai.schemas.registered_application import (
     ContainerApplicationSecretCreate,
     ContainerApplicationSecretList,
@@ -99,6 +78,27 @@ from c2ai.schemas.registered_application import (
     RegisteredContainerParameterValue,
     RegisteredParameterDefinition,
     TierDeploymentSummary,
+)
+from c2ai.services.github_workflow_progress import (
+    get_registered_deployment_workflow_progress,
+)
+from c2ai.services.llm_models import (
+    PRIVATE_MODEL_NAMES,
+    PUBLIC_MODEL_NAMES,
+    is_supported_model,
+    normalize_model_name,
+    pricing_unavailable_message,
+    resolve_llm_provider,
+)
+from c2ai.services.registered_application_deployment import (
+    build_container_deployment_configuration,
+    build_deployment_configuration,
+    configured_version,
+    default_github_instance_name,
+    dispatch_registered_application_deployment,
+    dispatch_registered_application_termination,
+    dispatch_registered_application_upgrade,
+    resolve_github_deployment_instance_name,
 )
 
 logger = logging.getLogger(__name__)

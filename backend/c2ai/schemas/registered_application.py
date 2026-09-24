@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -428,7 +428,7 @@ class ContainerRegisteredApplicationCreate(_RegisteredApplicationCreateBase):
 
 
 RegisteredApplicationCreate = Annotated[
-    Union[GitHubRegisteredApplicationCreate, ContainerRegisteredApplicationCreate],
+    GitHubRegisteredApplicationCreate | ContainerRegisteredApplicationCreate,
     Field(discriminator="application_type"),
 ]
 
@@ -496,7 +496,7 @@ class ContainerRegisteredApplicationDetail(_RegisteredApplicationDetailBase):
 
 
 RegisteredApplicationDetail = Annotated[
-    Union[GitHubRegisteredApplicationDetail, ContainerRegisteredApplicationDetail],
+    GitHubRegisteredApplicationDetail | ContainerRegisteredApplicationDetail,
     Field(discriminator="application_type"),
 ]
 

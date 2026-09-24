@@ -1,6 +1,6 @@
 """Tests for stored cluster, tier, and application cost aggregation."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock
 
@@ -8,8 +8,8 @@ import pytest
 
 from c2ai.crud.financial import get_financial_cost_summary
 
-START = datetime(2026, 8, 1, tzinfo=timezone.utc)
-END = datetime(2026, 9, 1, tzinfo=timezone.utc)
+START = datetime(2026, 8, 1, tzinfo=UTC)
+END = datetime(2026, 9, 1, tzinfo=UTC)
 
 
 def _scalar_result(value):

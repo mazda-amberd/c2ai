@@ -9,9 +9,9 @@ from c2ai.clients.github_connection import (
     GitHubConnectionValidationResult,
     validate_github_repository_connection,
 )
+from c2ai.core.exceptions import GitHubConnectionValidationFailed
 from c2ai.crud import github_connection as crud_github_connection
 from c2ai.db.session import get_db_session as db_session
-from c2ai.core.exceptions import GitHubConnectionValidationFailed
 from c2ai.schemas.github_connection import (
     GitHubConnectionCreate,
     GitHubConnectionCredentials,

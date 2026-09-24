@@ -2,17 +2,17 @@
 Tests for the Grafana API client.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
-from c2ai.schemas.grafana import MetricType
 from c2ai.clients.grafana import (
     GrafanaClient,
     _build_grafana_query_body as build_grafana_query_body,
 )
+from c2ai.schemas.grafana import MetricType
 
 
 class TestBuildQueryBody:
@@ -105,8 +105,9 @@ class TestBuildQueryBody:
 
 def test_prometheus_datasource_uid_default():
     """Default datasource UID is 'prometheus' (correct for k8s cluster)."""
-    from c2ai.constants.prometheus import get_grafana_prometheus_datasource
     import os
+
+    from c2ai.constants.prometheus import get_grafana_prometheus_datasource
 
     os.environ.pop("GRAFANA_PROMETHEUS_DATASOURCE_UID", None)
     ds = get_grafana_prometheus_datasource()
@@ -486,7 +487,7 @@ class TestGpuQueryBuilders:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
-        start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        start = datetime(2026, 8, 1, tzinfo=UTC)
         end = start + timedelta(hours=1)
 
         with patch.object(
@@ -520,7 +521,7 @@ class TestGpuQueryBuilders:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
-        start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        start = datetime(2026, 8, 1, tzinfo=UTC)
         end = start + timedelta(hours=6)
 
         with patch.object(
@@ -556,7 +557,7 @@ class TestGpuQueryBuilders:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
-        start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        start = datetime(2026, 8, 1, tzinfo=UTC)
         end = start + timedelta(hours=6)
 
         with patch.object(
@@ -590,7 +591,7 @@ class TestGpuQueryBuilders:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
-        start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        start = datetime(2026, 8, 1, tzinfo=UTC)
         end = start + timedelta(hours=2)
 
         with patch.object(
@@ -647,7 +648,7 @@ class TestGpuTierTotals:
         self, sample_gpu_tier_totals_response
     ):
         """_parse_gpu_tier_totals maps tier1/tier2/tier3 frame labels to values."""
-        client = GrafanaClient(
+        GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
         out = GrafanaClient._parse_gpu_tier_totals(sample_gpu_tier_totals_response)
@@ -659,7 +660,7 @@ class TestGpuTierTotals:
 class TestGatewayCounterQueries:
     """Tests for the LLM gateway cost queries by caller namespace."""
 
-    PERIOD_START = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    PERIOD_START = datetime(2026, 8, 1, tzinfo=UTC)
     PERIOD_END = PERIOD_START + timedelta(hours=1)
 
     def _body(self, **overrides) -> dict:

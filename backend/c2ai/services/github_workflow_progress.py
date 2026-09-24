@@ -3,23 +3,23 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from c2ai.models.registered_application import (
-    DeploymentInstance,
-    DeploymentInstanceEvent,
-)
 from c2ai.clients.github_actions import GitHubActionsClient
 from c2ai.constants.registered_application import (
     DeploymentInstanceStatus,
     DeploymentStep,
 )
-from c2ai.crud import github_connection as crud_github_connection
 from c2ai.core.exceptions import ServiceUnavailableError
+from c2ai.crud import github_connection as crud_github_connection
+from c2ai.models.registered_application import (
+    DeploymentInstance,
+    DeploymentInstanceEvent,
+)
 from c2ai.services.registered_application_deployment import (
     resolve_github_workflow_subdomain,
 )
@@ -76,7 +76,7 @@ def _github_completed_at(progress: dict[str, Any]) -> datetime:
             return datetime.fromisoformat(value.replace("Z", "+00:00"))
         except ValueError:
             pass
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 async def _synchronize_terminal_state(

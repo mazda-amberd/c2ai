@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -128,7 +128,7 @@ class TestValidation:
 
     def test_future_window_rejected(self, metrics_client):
         """A future window would otherwise return zeros that look like an idle cluster."""
-        future = datetime.now(timezone.utc) + timedelta(days=365)
+        future = datetime.now(UTC) + timedelta(days=365)
         response = _get(
             metrics_client, _fake_grafana(), level="cluster",
             **{"from": future.isoformat(), "to": (future + timedelta(hours=1)).isoformat()},
@@ -150,8 +150,8 @@ class TestValidation:
 class TestWindowIsSentToGrafana:
     def test_custom_window_drives_the_evaluation_time(self, metrics_client):
         """A custom from/to must be the Grafana eval range, not `now`."""
-        start = datetime(2026, 7, 1, 0, 0, tzinfo=timezone.utc)
-        end = datetime(2026, 7, 1, 6, 0, tzinfo=timezone.utc)
+        start = datetime(2026, 7, 1, 0, 0, tzinfo=UTC)
+        end = datetime(2026, 7, 1, 6, 0, tzinfo=UTC)
         bodies = []
         _get(
             metrics_client, _fake_grafana(bodies=bodies), level="cluster",

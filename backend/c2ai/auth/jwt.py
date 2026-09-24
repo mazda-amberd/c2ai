@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import jwt as pyjwt
 from fastapi import Depends
@@ -78,15 +79,15 @@ def get_jwt_secret() -> str:
 def parse_athena_datetime(value: str) -> datetime:
     """Parse the legacy ``DD-MM-YYYY_HH:MM:SS`` string as a UTC datetime."""
 
-    return datetime.strptime(value, ATHENA_DATETIME_FMT).replace(tzinfo=timezone.utc)
+    return datetime.strptime(value, ATHENA_DATETIME_FMT).replace(tzinfo=UTC)
 
 
 def format_athena_datetime(dt: datetime) -> str:
     """Format a datetime (naive values are treated as UTC) in the legacy format."""
 
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc).strftime(ATHENA_DATETIME_FMT)
+        dt = dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC).strftime(ATHENA_DATETIME_FMT)
 
 
 def create_jwt(
@@ -97,7 +98,7 @@ def create_jwt(
 ) -> str:
     """Sign ``payload`` with standard and legacy issue/expiry claims."""
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     expires_at = now + expires_in
     claims: dict[str, Any] = {
         **payload,
@@ -160,7 +161,7 @@ def decode_jwt(token: str, *, algorithms: list[str] | None = None) -> AthenaToke
             expires_at = parse_athena_datetime(expired)
         except ValueError as error:
             raise InvalidTokenExpirationFormat() from error
-        if datetime.now(timezone.utc) >= expires_at:
+        if datetime.now(UTC) >= expires_at:
             raise TokenExpired()
 
     return AthenaTokenUser.model_validate(decoded)

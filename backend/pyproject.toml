@@ -61,7 +61,17 @@ line-length = 100
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "ISC", "Q", "RUF"]
-ignore = ["E501", "RUF012", "B008"]
+ignore = [
+    "E501",    # long lines are allowed (PromQL, messages)
+    "B008",    # FastAPI Depends()/Query() defaults are idiomatic
+    "RUF001", "RUF002", "RUF003",  # typographic dashes/arrows in prose are intentional
+    "RUF012",
+    "UP042",   # str+Enum -> StrEnum changes str() output; keep explicit
+    "UP041",   # asyncio.TimeoutError is kept explicit in the scheduler
+    "ISC004",
+    "B905",
+    "Q000", "Q003",  # quote style is not enforced
+]
 
 [tool.ruff.lint.isort]
 combine-as-imports = true

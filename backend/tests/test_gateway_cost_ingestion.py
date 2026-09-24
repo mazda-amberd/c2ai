@@ -1,11 +1,12 @@
 """Tests for Grafana source-namespace gateway cost pricing."""
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
+from c2ai.crud.financial import FinancialRateNotFoundError
 from c2ai.models.financial import FinancialCostRecord, LlmGatewayTokenCheckpoint
 from c2ai.schemas.grafana import (
     GrafanaField,
@@ -16,7 +17,6 @@ from c2ai.schemas.grafana import (
     GrafanaQueryResult,
     GrafanaResponse,
 )
-from c2ai.crud.financial import FinancialRateNotFoundError
 from c2ai.services.gateway_cost_ingestion import (
     PublicModelUsageKey,
     combine_public_token_usage,
@@ -28,7 +28,7 @@ from c2ai.services.gateway_cost_ingestion import (
     tokens_to_whole_count,
 )
 
-START = datetime(2026, 8, 1, tzinfo=timezone.utc)
+START = datetime(2026, 8, 1, tzinfo=UTC)
 END = START + timedelta(hours=1)
 
 

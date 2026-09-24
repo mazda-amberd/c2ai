@@ -7,7 +7,7 @@ import logging
 import os
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import and_, exists, func, or_, select
@@ -15,17 +15,6 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, joinedload, selectinload
 
-from c2ai.models.registered_application import (
-    ApplicationLLMConfiguration,
-    ApplicationParameterDefinition,
-    ContainerApplicationConfiguration,
-    ContainerApplicationSecret,
-    DeploymentInstance,
-    DeploymentInstanceEvent,
-    GitHubApplicationConfiguration,
-    RegisteredApplication,
-    RegisteredApplicationVersion,
-)
 from c2ai.constants.registered_application import (
     ACTIVE_DEPLOYMENT_INSTANCE_STATUSES,
     DEPLOYMENT_STEP_ORDER,
@@ -56,7 +45,17 @@ from c2ai.core.exceptions import (
     RegisteredApplicationNotFound,
     ServiceUnavailableError,
 )
-from c2ai.services.registered_application_deployment import configured_version
+from c2ai.models.registered_application import (
+    ApplicationLLMConfiguration,
+    ApplicationParameterDefinition,
+    ContainerApplicationConfiguration,
+    ContainerApplicationSecret,
+    DeploymentInstance,
+    DeploymentInstanceEvent,
+    GitHubApplicationConfiguration,
+    RegisteredApplication,
+    RegisteredApplicationVersion,
+)
 from c2ai.schemas.registered_application import (
     ContainerApplicationSecretCreate,
     ContainerApplicationSecretUpdate,
@@ -64,6 +63,7 @@ from c2ai.schemas.registered_application import (
     GitHubRegisteredApplicationCreate,
     RegisteredApplicationDeploymentProgressUpdate,
 )
+from c2ai.services.registered_application_deployment import configured_version
 
 logger = logging.getLogger(__name__)
 
@@ -782,7 +782,7 @@ async def complete_container_application_secret_delete(
 ) -> None:
     """Soft-delete metadata after its provider material has been removed."""
 
-    secret.deleted_at = datetime.now(tz=timezone.utc)
+    secret.deleted_at = datetime.now(tz=UTC)
     secret.updated_by = deleted_by
     db.add(secret)
     try:
@@ -888,7 +888,7 @@ async def delete_registered_application(
             managed_secret_count,
         )
 
-    application.deleted_at = datetime.now(tz=timezone.utc)
+    application.deleted_at = datetime.now(tz=UTC)
     application.updated_by = deleted_by
     db.add(application)
     try:
@@ -1364,7 +1364,7 @@ async def update_registered_application_deployment_progress(
             "Containerized deployments must configure DNS before completion."
         )
 
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     instance.current_step = next_step
     instance.status = next_status
     instance.failure_reason = payload.failure_reason

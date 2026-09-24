@@ -2,8 +2,8 @@
 
 import pytest
 
-from c2ai.llm import provider as llm_provider
 from c2ai.core.exceptions import ServiceUnavailableError
+from c2ai.llm import provider as llm_provider
 
 
 def test_provider_creates_and_reuses_one_model(monkeypatch):

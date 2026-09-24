@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 async def replace_application_instances_for_tiers(
     db: AsyncSession,
-    tiers: dict[str, Optional[list[Instance]]],
+    tiers: dict[str, list[Instance] | None],
 ) -> None:
     """
     For each tier key in ``tiers``, delete existing rows for that tier and insert the

@@ -38,13 +38,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
 
 from c2ai.core.exceptions import BadRequestError, ServiceUnavailableError
-from c2ai.utils.host_labels import workflow_prepare_subdomain  # re-exported for callers
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +206,7 @@ async def check_repo_branch_exists(owner: str, repo: str, branch: str) -> bool:
     Result is cached for BRANCH_CACHE_TTL seconds per (owner, repo, branch).
     """
     cache_key = f"{owner}/{repo}@{branch}"
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     if cache_key in _branch_cache:
         exists, cached_at = _branch_cache[cache_key]
         if now - cached_at < BRANCH_CACHE_TTL:
@@ -236,7 +235,7 @@ async def check_repo_tag_exists(owner: str, repo: str, tag: str) -> bool:
     Uses the git refs API endpoint; result is cached for BRANCH_CACHE_TTL seconds.
     """
     cache_key = f"{owner}/{repo}@tag:{tag}"
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     if cache_key in _branch_cache:
         exists, cached_at = _branch_cache[cache_key]
         if now - cached_at < BRANCH_CACHE_TTL:
@@ -311,7 +310,7 @@ async def dispatch_github_workflow(
     env_instance: str,
     tier: int,
     triggered_by: str,
-    slack_user: Optional[str] = None,
+    slack_user: str | None = None,
 ) -> None:
     """Dispatch ada-deploy via workflow_dispatch.
 
@@ -402,11 +401,11 @@ async def dispatch_github_move_tier_workflow(
 async def dispatch_github_terminate_workflow(
     subdomain: str,
     *,
-    correlation_id: Optional[str] = None,
+    correlation_id: str | None = None,
     triggered_by: str = "athena",
     # Legacy params kept for backward compat with old tests / callers
-    deployment_id: Optional[str] = None,
-    callback_base_url: Optional[str] = None,
+    deployment_id: str | None = None,
+    callback_base_url: str | None = None,
 ) -> None:
     """Dispatch ada-terminate via workflow_dispatch."""
     inputs: dict[str, str] = {
@@ -430,7 +429,7 @@ async def dispatch_github_terminate_workflow(
 async def list_workflow_runs(
     workflow_file: str,
     *,
-    created_after: Optional[datetime] = None,
+    created_after: datetime | None = None,
     per_page: int = 20,
 ) -> list[dict[str, Any]]:
     """
@@ -505,7 +504,7 @@ async def cancel_workflow_run(run_id: int) -> None:
     )
 
 
-async def get_workflow_run(run_id: int) -> Optional[dict[str, Any]]:
+async def get_workflow_run(run_id: int) -> dict[str, Any] | None:
     """Fetch a single run by run_id."""
     pat = _require_github_pat()
     url = (
@@ -552,8 +551,8 @@ async def get_workflow_run_jobs(run_id: int) -> list[dict[str, Any]]:
 def expected_run_name(
     workflow_file: str,
     subdomain: str,
-    customer_name: Optional[str] = None,
-    env_instance: Optional[str] = None,
+    customer_name: str | None = None,
+    env_instance: str | None = None,
 ) -> str:
     """
     Construct the expected ``run-name`` for name-based matching.
@@ -578,9 +577,9 @@ async def resolve_run_id(
     subdomain: str,
     dispatched_at: datetime,
     *,
-    customer_name: Optional[str] = None,
-    env_instance: Optional[str] = None,
-) -> Optional[int]:
+    customer_name: str | None = None,
+    env_instance: str | None = None,
+) -> int | None:
     """
     Try to find the GH run_id that corresponds to our dispatch.
 
@@ -640,7 +639,7 @@ async def resolve_run_id(
 
 def _extract_active_job_and_step(
     jobs: list[dict],
-) -> tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """
     From a list of job objects return (active_job_name, current_step_name).
 
@@ -650,7 +649,7 @@ def _extract_active_job_and_step(
     for job in jobs:
         if job.get("status") == "in_progress":
             job_name = job.get("name")
-            step_name: Optional[str] = None
+            step_name: str | None = None
             for step in job.get("steps", []):
                 if step.get("status") == "in_progress":
                     step_name = step.get("name")
@@ -689,7 +688,7 @@ async def get_run_status_cached(run_id: int) -> dict[str, Any]:
 
     Completed runs are not cached so their final state is always fresh.
     """
-    now = datetime.now(tz=timezone.utc)
+    now = datetime.now(tz=UTC)
     if run_id in _run_status_cache:
         data, fetched_at = _run_status_cache[run_id]
         if now - fetched_at < RUN_STATUS_CACHE_TTL:
