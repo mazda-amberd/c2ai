@@ -15,6 +15,10 @@ potentially inside the customer's own data center.
 
 Prerequisites: Python 3.11+, Node 20.19+ (or 22.12+), PostgreSQL 14+.
 
+No database server handy? `scripts/local-db.sh start` runs a project-local
+PostgreSQL on port 55432 (data in `.local/`, git-ignored); use
+`DATABASE_URL=postgresql+asyncpg://c2ai@127.0.0.1:55432/c2ai`.
+
 ```bash
 # Backend
 cd backend

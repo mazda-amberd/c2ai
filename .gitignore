@@ -39,3 +39,6 @@ frontend/dist/
 
 # Local database backups may contain sensitive application data
 backend/db/backups/
+
+# Local development database (scripts/local-db.sh)
+.local/
