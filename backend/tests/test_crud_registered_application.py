@@ -352,8 +352,12 @@ async def test_list_registered_applications_returns_active_tier_aggregates():
         (first.id, 1, 2),
         (first.id, 3, 1),
     ]
+    secret_result = MagicMock()
+    secret_result.all.return_value = [(second.id, 1)]
     db = MagicMock()
-    db.execute = AsyncMock(side_effect=[count_result, rows_result, tier_result])
+    db.execute = AsyncMock(
+        side_effect=[count_result, rows_result, tier_result, secret_result]
+    )
 
     page = await list_registered_applications(
         db,
@@ -372,7 +376,12 @@ async def test_list_registered_applications_returns_active_tier_aggregates():
     assert page.items[0].total_deployed_instances == 3
     assert page.items[0].tiers_deployed_to == {1: 2, 3: 1}
     assert page.items[1].tiers_deployed_to == {}
-    assert db.execute.await_count == 3
+    # Deletion needs no instances *and* no provider-held secrets.
+    assert page.items[0].can_delete is False
+    assert page.items[1].total_deployed_instances == 0
+    assert page.items[1].managed_secret_count == 1
+    assert page.items[1].can_delete is False
+    assert db.execute.await_count == 4
     compiled_statements = [
         str(call.args[0].compile(dialect=postgresql.dialect()))
         for call in db.execute.await_args_list
@@ -380,6 +389,7 @@ async def test_list_registered_applications_returns_active_tier_aggregates():
     assert "EXISTS" in compiled_statements[0]
     assert "deployment_instances" in compiled_statements[1]
     assert "GROUP BY" in compiled_statements[2]
+    assert "container_application_secrets" in compiled_statements[3]
 
 
 @pytest.mark.asyncio
@@ -406,7 +416,7 @@ async def test_delete_registered_application_soft_deletes_when_no_active_instanc
     application_result = MagicMock()
     application_result.scalar_one_or_none.return_value = application
     instance_result = MagicMock()
-    instance_result.scalar_one.return_value = 0
+    instance_result.all.return_value = []
     secret_result = MagicMock()
     secret_result.scalar_one.return_value = 0
     db = MagicMock()
@@ -437,7 +447,7 @@ async def test_delete_registered_application_blocks_active_instances():
     application_result = MagicMock()
     application_result.scalar_one_or_none.return_value = application
     instance_result = MagicMock()
-    instance_result.scalar_one.return_value = 2
+    instance_result.all.return_value = [("chat-dev", 1), ("chat-prod", 3)]
     db = MagicMock()
     db.execute = AsyncMock(side_effect=[application_result, instance_result])
     db.add = MagicMock()
@@ -451,7 +461,10 @@ async def test_delete_registered_application_blocks_active_instances():
             deleted_by="admin-user",
         )
 
+    # The PRD requires naming the remaining instances and their tiers.
     assert "2 active deployment" in exc_info.value.detail
+    assert "'chat-dev' (Tier 1)" in exc_info.value.detail
+    assert "'chat-prod' (Tier 3)" in exc_info.value.detail
     db.add.assert_not_called()
     db.commit.assert_not_awaited()
     db.rollback.assert_awaited_once()
@@ -466,7 +479,7 @@ async def test_delete_registered_application_blocks_managed_secrets():
     application_result = MagicMock()
     application_result.scalar_one_or_none.return_value = application
     instance_result = MagicMock()
-    instance_result.scalar_one.return_value = 0
+    instance_result.all.return_value = []
     secret_result = MagicMock()
     secret_result.scalar_one.return_value = 2
     db = MagicMock()

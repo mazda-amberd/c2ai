@@ -56,6 +56,7 @@ from c2ai.core.exceptions import (
     RegisteredApplicationNotFound,
     ServiceUnavailableError,
 )
+from c2ai.services.registered_application_deployment import configured_version
 from c2ai.schemas.registered_application import (
     ContainerApplicationSecretCreate,
     ContainerApplicationSecretUpdate,
@@ -68,6 +69,7 @@ logger = logging.getLogger(__name__)
 
 _APPLICATION_NAME_CONSTRAINT = "uq_registered_applications_name_ci"
 _DEPLOYMENT_SUBDOMAIN_CONSTRAINT = "uq_deployment_instances_dns_subdomain_active"
+_DEPLOYMENT_NAME_CONSTRAINT = "uq_deployment_instances_tier_instance_name"
 _CONTAINER_SECRET_CONSTRAINTS = {
     "uq_container_application_secrets_name_active",
     "uq_container_application_secrets_env_active",
@@ -92,6 +94,13 @@ class RegisteredApplicationCatalogRecord:
     description: str | None
     total_deployed_instances: int
     tiers_deployed_to: dict[int, int]
+    managed_secret_count: int = 0
+
+    @property
+    def can_delete(self) -> bool:
+        """Deletion needs no active instances and no provider-held secrets."""
+
+        return self.total_deployed_instances == 0 and self.managed_secret_count == 0
 
 
 @dataclass(frozen=True)
@@ -425,6 +434,7 @@ async def list_registered_applications(
         "instances": instance_count,
         "tiers": tier_count,
         "created": RegisteredApplication.created_at,
+        "created_at": RegisteredApplication.created_at,
     }
     sort_expression = sort_expressions.get(sort_by, sort_expressions["name"])
     ordered = sort_expression.desc() if sort_order == "desc" else sort_expression.asc()
@@ -461,12 +471,28 @@ async def list_registered_applications(
             deployment_count
         )
 
+    secret_result = await db.execute(
+        select(
+            ContainerApplicationSecret.application_id,
+            func.count(ContainerApplicationSecret.id),
+        )
+        .where(
+            ContainerApplicationSecret.application_id.in_(application_ids),
+            ContainerApplicationSecret.deleted_at.is_(None),
+        )
+        .group_by(ContainerApplicationSecret.application_id)
+    )
+    secrets_by_application = {
+        application_id: int(count) for application_id, count in secret_result.all()
+    }
+
     records = [
         RegisteredApplicationCatalogRecord(
             application=application,
             description=description,
             total_deployed_instances=int(deployment_count),
             tiers_deployed_to=tiers_by_application[application.id],
+            managed_secret_count=secrets_by_application.get(application.id, 0),
         )
         for application, description, deployment_count, _ in rows
     ]
@@ -766,6 +792,27 @@ async def complete_container_application_secret_delete(
         raise
 
 
+async def list_active_container_application_secrets(
+    db: AsyncSession,
+    application_id: UUID,
+) -> list[ContainerApplicationSecret]:
+    """Every active secret with a provider reference, oldest first."""
+
+    result = await db.execute(
+        select(ContainerApplicationSecret)
+        .where(
+            ContainerApplicationSecret.application_id == application_id,
+            ContainerApplicationSecret.deleted_at.is_(None),
+            ContainerApplicationSecret.secret_reference.is_not(None),
+        )
+        .order_by(
+            ContainerApplicationSecret.created_at.asc(),
+            ContainerApplicationSecret.id.asc(),
+        )
+    )
+    return list(result.scalars().all())
+
+
 async def get_container_application_secrets_by_ids(
     db: AsyncSession,
     application_id: UUID,
@@ -812,17 +859,19 @@ async def delete_registered_application(
         raise RegisteredApplicationNotFound(application_id)
 
     instance_result = await db.execute(
-        select(func.count(DeploymentInstance.id)).where(
+        select(DeploymentInstance.instance_name, DeploymentInstance.tier)
+        .where(
             DeploymentInstance.application_id == application_id,
             DeploymentInstance.status.in_(ACTIVE_DEPLOYMENT_INSTANCE_STATUSES),
         )
+        .order_by(DeploymentInstance.tier.asc(), DeploymentInstance.instance_name.asc())
     )
-    active_instance_count = int(instance_result.scalar_one())
-    if active_instance_count:
+    remaining_instances = [(str(name), int(tier)) for name, tier in instance_result.all()]
+    if remaining_instances:
         await db.rollback()
         raise RegisteredApplicationHasRunningInstances(
             application.name,
-            active_instance_count,
+            remaining_instances,
         )
 
     secret_result = await db.execute(
@@ -887,12 +936,14 @@ async def create_registered_application_deployment(
         await db.flush()
     except IntegrityError as error:
         await db.rollback()
-        if _violated_constraint(error) == _DEPLOYMENT_SUBDOMAIN_CONSTRAINT:
+        constraint = _violated_constraint(error)
+        if constraint == _DEPLOYMENT_SUBDOMAIN_CONSTRAINT:
             raise DuplicateDeploymentSubdomain(instance.subdomain) from error
-        raise DuplicateDeploymentInstance(
-            instance_name,
-            tier,
-        ) from error
+        if constraint in (_DEPLOYMENT_NAME_CONSTRAINT, None):
+            # ``None``: the driver did not report a name; the tier/name pair is
+            # the only unique constraint a new instance row can violate.
+            raise DuplicateDeploymentInstance(instance_name, tier) from error
+        raise
     return instance
 
 
@@ -972,9 +1023,6 @@ async def prepare_registered_application_upgrade(
             raise ServiceUnavailableError(
                 "The deployment has no upgradeable container configuration."
             )
-        if container["image_tag"] == target_version and not retrying_failed_upgrade:
-            await db.rollback()
-            raise DeploymentAlreadyAtVersion(target_version)
         container["image_tag"] = target_version
     else:
         github = configuration.get("github")
@@ -983,10 +1031,17 @@ async def prepare_registered_application_upgrade(
             raise ServiceUnavailableError(
                 "The deployment has no upgradeable GitHub configuration."
             )
-        if github.get("version") == target_version and not retrying_failed_upgrade:
-            await db.rollback()
-            raise DeploymentAlreadyAtVersion(target_version)
         github["version"] = target_version
+    current = configured_version(instance.configuration, application_type)
+    if current == target_version and not retrying_failed_upgrade:
+        await db.rollback()
+        raise DeploymentAlreadyAtVersion(target_version)
+    # Keep the last configuration that ran successfully for rollback. Retrying
+    # a failed upgrade must not replace it with the failed attempt.
+    if instance.status == DeploymentInstanceStatus.RUNNING.value or (
+        instance.previous_configuration is None
+    ):
+        instance.previous_configuration = deepcopy(instance.configuration)
     instance.configuration = configuration
     instance.status = DeploymentInstanceStatus.UPDATING.value
     instance.current_step = DeploymentStep.VALIDATING_CONFIGURATION.value
@@ -1014,22 +1069,22 @@ async def complete_registered_application_upgrade_dispatch(
     db: AsyncSession,
     instance: DeploymentInstance,
     dispatch_reference: dict,
+    *,
+    event_message: str | None = None,
 ) -> DeploymentInstance:
     """Commit a version change after its update pipeline is dispatched."""
 
     instance.status = DeploymentInstanceStatus.UPDATING.value
     instance.dispatch_reference = dispatch_reference
-    if instance.application.application_type == ApplicationType.CONTAINERIZED.value:
-        target_version = instance.configuration["container"]["image_tag"]
-    else:
-        target_version = instance.configuration["github"]["version"]
+    target_version = configured_version(
+        instance.configuration, instance.application.application_type
+    )
     instance.events.append(
         DeploymentInstanceEvent(
             step=DeploymentStep.VALIDATING_CONFIGURATION.value,
             status=DeploymentInstanceStatus.UPDATING.value,
-            message=(
-                f"Application upgrade pipeline dispatched for version '{target_version}'."
-            ),
+            message=event_message
+            or f"Application upgrade pipeline dispatched for version '{target_version}'.",
             created_by=instance.triggered_by,
         )
     )
@@ -1185,6 +1240,9 @@ async def get_registered_application_deployment(
         .where(DeploymentInstance.id == deployment_id)
         .options(
             joinedload(DeploymentInstance.application),
+            joinedload(DeploymentInstance.application_version).joinedload(
+                RegisteredApplicationVersion.application
+            ),
             joinedload(DeploymentInstance.application_version).joinedload(
                 RegisteredApplicationVersion.github_configuration
             ),
@@ -1379,19 +1437,38 @@ async def prepare_registered_application_rollback(
         await db.rollback()
         raise DeploymentRollbackNotAvailable(instance.status)
 
-    instance.status = DeploymentInstanceStatus.DEPLOYING.value
+    application_type = instance.application.application_type
     instance.current_step = DeploymentStep.VALIDATING_CONFIGURATION.value
     instance.failure_reason = None
     instance.completed_at = None
     instance.rollback_count += 1
-    if instance.subdomain:
-        instance.dns_status = "pending"
     instance.triggered_by = triggered_by
+
+    previous = instance.previous_configuration
+    previous_version = (
+        configured_version(previous, application_type) if isinstance(previous, dict) else None
+    )
+    if previous_version is not None:
+        # Return to the configuration that ran before the latest upgrade. The
+        # in-place upgrade pipeline performs the change, so progress follows
+        # the upgrade rules (status "updating"); swapping keeps a roll-forward.
+        instance.previous_configuration = deepcopy(instance.configuration)
+        instance.configuration = deepcopy(previous)
+        instance.status = DeploymentInstanceStatus.UPDATING.value
+        message = (
+            f"Rollback #{instance.rollback_count} to version '{previous_version}' requested."
+        )
+    else:
+        # Never upgraded: a rollback re-applies the stored configuration.
+        instance.status = DeploymentInstanceStatus.DEPLOYING.value
+        if instance.subdomain:
+            instance.dns_status = "pending"
+        message = f"Rollback #{instance.rollback_count} requested."
     instance.events.append(
         DeploymentInstanceEvent(
             step=DeploymentStep.VALIDATING_CONFIGURATION.value,
-            status=DeploymentInstanceStatus.DEPLOYING.value,
-            message=f"Rollback #{instance.rollback_count} requested.",
+            status=instance.status,
+            message=message,
             created_by=triggered_by,
         )
     )

@@ -60,6 +60,7 @@ from c2ai.services.llm_models import (
 from c2ai.services.registered_application_deployment import (
     build_container_deployment_configuration,
     build_deployment_configuration,
+    configured_version,
     default_github_instance_name,
     dispatch_registered_application_deployment,
     dispatch_registered_application_termination,
@@ -138,6 +139,55 @@ def _require_deployment_callback_token(
             "Invalid deployment callback token.",
             code="InvalidDeploymentCallbackToken",
         )
+
+
+async def _dispatch_deployment(
+    db: AsyncSession,
+    version: RegisteredApplicationVersion,
+    *,
+    deployment_id: UUID,
+    instance_name: str,
+    tier: int,
+    configuration: dict,
+    triggered_by: str,
+) -> dict:
+    """Dispatch a deploy pipeline with the credentials its application type needs.
+
+    Used for both first deployments and rollbacks, so a redeploy always sends
+    the same registry, LLM, and GitHub credentials the original did.
+    """
+
+    options: dict = {}
+    if version.application.application_type == ApplicationType.GITHUB_WORKFLOW.value:
+        github = version.github_configuration
+        if github is not None:
+            runtime = await crud_github_connection.resolve_github_connection(
+                db, github.github_connection_id
+            )
+            if runtime is not None:
+                options["github_token"] = runtime.token
+                options["github_api_base_url"] = runtime.api_base_url
+    else:
+        template = version.container_configuration
+        if template is not None and template.registry_password_encrypted is not None:
+            registry = await crud_registered_application.resolve_container_registry_credentials(
+                db, version.id
+            )
+            if registry is not None:
+                options["registry_username"] = registry.username
+                options["registry_token"] = registry.password
+        options["llm_api_token"] = await crud_registered_application.resolve_llm_api_token(
+            db, version.id
+        )
+    return await dispatch_registered_application_deployment(
+        version,
+        deployment_id=deployment_id,
+        instance_name=instance_name,
+        tier=tier,
+        configuration=configuration,
+        triggered_by=triggered_by,
+        **options,
+    )
 
 
 def _github_registration_detail(
@@ -260,7 +310,7 @@ def _catalog_item(
             TierDeploymentSummary(tier=f"Tier {tier}", instances=count)
             for tier, count in sorted(record.tiers_deployed_to.items())
         ],
-        can_delete=record.total_deployed_instances == 0,
+        can_delete=record.can_delete,
         created_at=application.created_at,
         updated_at=application.updated_at,
     )
@@ -909,33 +959,44 @@ async def rollback_registered_application_deployment(
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
 ) -> RegisteredApplicationDeploymentDetail:
-    """Redispatch the instance's last stored immutable configuration."""
+    """Return the instance to its previous version, or redeploy it.
+
+    After an upgrade the instance keeps the configuration it ran before; a
+    rollback dispatches the in-place upgrade pipeline back to that version.
+    An instance that was never upgraded has nothing to return to, so its
+    stored configuration is deployed again (a retry of a failed deployment).
+    """
 
     instance = await crud_registered_application.prepare_registered_application_rollback(
         db,
         deployment_id,
         triggered_by=current_user.identifier,
     )
+    application_type = instance.application.application_type
+    restoring_version = instance.status == DeploymentInstanceStatus.UPDATING.value
     try:
-        github_runtime = None
-        github_configuration = instance.application_version.github_configuration
-        if github_configuration is not None:
-            github_runtime = await crud_github_connection.resolve_github_connection(
-                db,
-                github_configuration.github_connection_id,
+        if restoring_version:
+            target_version = configured_version(instance.configuration, application_type)
+            dispatch_reference = await dispatch_registered_application_upgrade(
+                instance.application_version,
+                deployment_id=instance.id,
+                instance_name=instance.instance_name,
+                tier=instance.tier,
+                target_version=target_version,
+                configuration=instance.configuration,
+                triggered_by=current_user.identifier,
+                rollback=True,
             )
-        dispatch_reference = await dispatch_registered_application_deployment(
-            instance.application_version,
-            deployment_id=instance.id,
-            instance_name=instance.instance_name,
-            tier=instance.tier,
-            configuration=instance.configuration,
-            triggered_by=current_user.identifier,
-            github_token=github_runtime.token if github_runtime else None,
-            github_api_base_url=(
-                github_runtime.api_base_url if github_runtime else None
-            ),
-        )
+        else:
+            dispatch_reference = await _dispatch_deployment(
+                db,
+                instance.application_version,
+                deployment_id=instance.id,
+                instance_name=instance.instance_name,
+                tier=instance.tier,
+                configuration=instance.configuration,
+                triggered_by=current_user.identifier,
+            )
     except Exception as error:
         await db.rollback()
         logger.exception("Deployment rollback dispatch failed id=%s", deployment_id)
@@ -943,11 +1004,29 @@ async def rollback_registered_application_deployment(
             "The rollback pipeline could not be triggered."
         ) from error
 
-    instance = await crud_registered_application.complete_registered_application_dispatch(
-        db,
-        instance,
-        dispatch_reference,
-        event_message=f"Rollback #{instance.rollback_count} pipeline dispatched.",
+    if restoring_version:
+        instance = await crud_registered_application.complete_registered_application_upgrade_dispatch(
+            db,
+            instance,
+            dispatch_reference,
+            event_message=(
+                f"Rollback #{instance.rollback_count} pipeline dispatched for version "
+                f"'{target_version}'."
+            ),
+        )
+    else:
+        instance = await crud_registered_application.complete_registered_application_dispatch(
+            db,
+            instance,
+            dispatch_reference,
+            event_message=f"Rollback #{instance.rollback_count} pipeline dispatched.",
+        )
+    logger.info(
+        "Rollback #%s dispatched id=%s mode=%s by=%s",
+        instance.rollback_count,
+        instance.id,
+        "version" if restoring_version else "redeploy",
+        current_user.identifier,
     )
     return _deployment_out(instance, include_events=True)
 
@@ -1191,6 +1270,9 @@ async def deploy_registered_container_application(
         version,
         payload,
         tier=tier,
+        managed_secrets=await crud_registered_application.list_active_container_application_secrets(
+            db, application_id
+        ),
     )
     instance = await crud_registered_application.create_registered_application_deployment(
         db,
@@ -1201,19 +1283,14 @@ async def deploy_registered_container_application(
         triggered_by=current_user.identifier,
     )
     try:
-        dispatch_reference = await dispatch_registered_application_deployment(
+        dispatch_reference = await _dispatch_deployment(
+            db,
             version,
             deployment_id=instance.id,
             instance_name=instance.instance_name,
             tier=instance.tier,
             configuration=configuration,
             triggered_by=current_user.identifier,
-            registry_username=registry_runtime.username if registry_runtime else None,
-            registry_token=registry_runtime.password if registry_runtime else None,
-            llm_api_token=await crud_registered_application.resolve_llm_api_token(
-                db,
-                version.id,
-            ),
         )
     except Exception as error:
         await db.rollback()
@@ -1298,23 +1375,14 @@ async def deploy_registered_application(
         triggered_by=current_user.identifier,
     )
     try:
-        github_runtime = None
-        if version.github_configuration is not None:
-            github_runtime = await crud_github_connection.resolve_github_connection(
-                db,
-                version.github_configuration.github_connection_id,
-            )
-        dispatch_reference = await dispatch_registered_application_deployment(
+        dispatch_reference = await _dispatch_deployment(
+            db,
             version,
             deployment_id=instance.id,
             instance_name=instance.instance_name,
             tier=instance.tier,
             configuration=configuration,
             triggered_by=current_user.identifier,
-            github_token=github_runtime.token if github_runtime else None,
-            github_api_base_url=(
-                github_runtime.api_base_url if github_runtime else None
-            ),
         )
     except Exception as error:
         await db.rollback()

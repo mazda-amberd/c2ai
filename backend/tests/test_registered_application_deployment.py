@@ -185,6 +185,7 @@ def test_build_container_deployment_uses_registered_template_as_source_of_truth(
             "hostname": "billing-tier-3.amberd.ai",
             "managed_by": "athena",
         },
+        "managed_secrets": [],
     }
     serialized = str(configuration)
     assert "encrypted-password" not in serialized
@@ -656,6 +657,7 @@ async def test_dispatches_container_configuration_to_pipeline():
         "persistent_volume",
         "namespace",
         "env_vars",
+        "managed_secrets",
         "llm_endpoint",
         "llm_api_token",
         "llm_model_name",

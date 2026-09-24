@@ -186,3 +186,20 @@ async def test_successful_terminal_state_is_removed_from_active_results():
 
     assert progress.await_count == 3
     assert statuses == []
+
+
+@pytest.mark.parametrize(
+    ("configuration", "expected"),
+    [
+        ({"container": {"image_tag": "2.1.0"}}, "2.1.0"),
+        ({"github": {"version": "v3"}, "parameters": {"branch": "v2"}}, "v3"),
+        ({"github": {}, "parameters": {"branch": "release/7"}}, "release/7"),
+        ({"parameters": {}}, "main"),  # only the workflow ref is known
+    ],
+)
+def test_version_reads_where_snapshots_store_it(configuration, expected):
+    instance = _instance(
+        configuration=configuration,
+        dispatch_reference={"ref": "main", "operation": "deploy"},
+    )
+    assert module._version(instance) == expected

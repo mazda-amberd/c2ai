@@ -390,13 +390,22 @@ class RegisteredApplicationNotFound(NotFoundError):
 
 
 class RegisteredApplicationHasRunningInstances(ConflictError):
-    """Raised when deletion would orphan active deployment instances."""
+    """Raised when deletion would orphan active deployment instances.
 
-    def __init__(self, name: str, instance_count: int):
+    The message names every remaining instance and its tier, so the user knows
+    exactly what to terminate first.
+    """
+
+    def __init__(self, name: str, instances: "list[tuple[str, int]] | int"):
+        if isinstance(instances, int):
+            listing = f"{instances} active deployment instance(s)"
+        else:
+            described = ", ".join(f"'{instance}' (Tier {tier})" for instance, tier in instances)
+            listing = f"{len(instances)} active deployment instance(s): {described}"
         super().__init__(
             detail=(
                 f"Registered application '{name}' cannot be deleted while it has "
-                f"{instance_count} active deployment instance(s)."
+                f"{listing}. Terminate them first."
             ),
             code="RegisteredApplicationHasRunningInstances",
         )

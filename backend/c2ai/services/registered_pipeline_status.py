@@ -112,16 +112,34 @@ def _event_type(instance: DeploymentInstance) -> str:
     return f"registered-application-{_operation(instance)}"
 
 
+def _text(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def _version(instance: DeploymentInstance) -> str | None:
-    """The deployed ref/tag — rendered where the direct flow shows a branch."""
+    """The deployed ref/tag — rendered where the direct flow shows a branch.
+
+    Looks where deployment snapshots actually store it: the container image
+    tag, a GitHub upgrade target, or the GitHub ``branch`` input chosen at
+    deploy time. The dispatch ``ref`` (the workflow's own branch, usually
+    ``main``) is only a last resort.
+    """
     configuration = instance.configuration or {}
-    for key in ("version", "tag", "ref"):
-        value = configuration.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    reference = instance.dispatch_reference or {}
-    ref = reference.get("ref")
-    return ref.strip() if isinstance(ref, str) and ref.strip() else None
+    container = configuration.get("container")
+    github = configuration.get("github")
+    parameters = configuration.get("parameters")
+    candidates = (
+        container.get("image_tag") if isinstance(container, dict) else None,
+        github.get("version") if isinstance(github, dict) else None,
+        parameters.get("branch") if isinstance(parameters, dict) else None,
+        # Top-level keys written by early snapshots.
+        configuration.get("version"),
+        configuration.get("tag"),
+    )
+    for candidate in candidates:
+        if _text(candidate):
+            return _text(candidate)
+    return _text((instance.dispatch_reference or {}).get("ref"))
 
 
 def _subdomain(instance: DeploymentInstance) -> str:

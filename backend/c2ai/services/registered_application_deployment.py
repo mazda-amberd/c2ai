@@ -6,6 +6,7 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from collections.abc import Iterable
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
@@ -67,6 +68,46 @@ _CONTAINER_REGISTRY_LABELS = {
 SLACK_USER_PARAMETER = "slack_user"
 _DEFAULT_SLACK_USER_REPO_OWNERS = "amberd-ai"
 _INSTANCE_NAME_SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+
+def configured_version(configuration: dict[str, Any], application_type: str) -> str | None:
+    """The version a deployment snapshot runs, or ``None`` when it records none.
+
+    Containers run ``container.image_tag``. GitHub workflows record an upgrade
+    target as ``github.version``; an initial deployment's selected ref is the
+    workflow's ``branch`` input.
+    """
+
+    if application_type == ApplicationType.CONTAINERIZED.value:
+        container = configuration.get("container")
+        tag = container.get("image_tag") if isinstance(container, dict) else None
+        return tag if isinstance(tag, str) and tag else None
+    github = configuration.get("github")
+    version = github.get("version") if isinstance(github, dict) else None
+    if isinstance(version, str) and version:
+        return version
+    parameters = configuration.get("parameters")
+    branch = parameters.get("branch") if isinstance(parameters, dict) else None
+    return branch if isinstance(branch, str) and branch else None
+
+
+def managed_secret_references(secrets: Iterable[Any]) -> list[dict[str, str]]:
+    """Reference-only view of managed secrets for a deployment snapshot.
+
+    Values never leave the secret provider; the pipeline resolves each
+    ``reference`` into a Kubernetes Secret exposed as ``environment_variable``.
+    """
+
+    return [
+        {
+            "id": str(secret.id),
+            "name": secret.name,
+            "environment_variable": secret.environment_variable,
+            "reference": secret.secret_reference,
+        }
+        for secret in secrets
+        if secret.secret_reference
+    ]
 
 
 def resolve_tier_llm_endpoint(endpoint: str, tier: int) -> str:
@@ -136,6 +177,7 @@ def build_container_deployment_configuration(
     payload: ContainerRegisteredApplicationDeploymentCreate,
     *,
     tier: int,
+    managed_secrets: Iterable[Any] = (),
 ) -> dict[str, Any]:
     """Build a safe container deployment snapshot from its registered template."""
 
@@ -230,6 +272,7 @@ def build_container_deployment_configuration(
             "hostname": hostname,
             "managed_by": "athena",
         },
+        "managed_secrets": managed_secret_references(managed_secrets),
     }
 
 
@@ -530,6 +573,16 @@ def build_container_pipeline_payload(
         # value as app_name rather than the Tier the instance runs in.
         "namespace": instance_name,
         "env_vars": env_vars,
+        # Provider references only; the pipeline materialises Kubernetes
+        # Secrets from them and injects each as its environment variable.
+        "managed_secrets": [
+            {
+                "name": secret["name"],
+                "environment_variable": secret["environment_variable"],
+                "reference": secret["reference"],
+            }
+            for secret in configuration.get("managed_secrets") or []
+        ],
         "llm_endpoint": llm_endpoint,
         "llm_api_token": llm_api_token or "",
         "llm_model_name": llm_model_name,
@@ -687,8 +740,30 @@ async def dispatch_registered_application_upgrade(
     target_version: str,
     configuration: dict[str, Any],
     triggered_by: str,
+    rollback: bool = False,
 ) -> dict[str, Any]:
     """Dispatch the type-specific predefined in-place update workflow."""
+
+    reference = await _dispatch_upgrade(
+        version,
+        deployment_id=deployment_id,
+        instance_name=instance_name,
+        target_version=target_version,
+        configuration=configuration,
+        triggered_by=triggered_by,
+    )
+    return {**reference, "rollback": True} if rollback else reference
+
+
+async def _dispatch_upgrade(
+    version: RegisteredApplicationVersion,
+    *,
+    deployment_id: UUID,
+    instance_name: str,
+    target_version: str,
+    configuration: dict[str, Any],
+    triggered_by: str,
+) -> dict[str, Any]:
 
     application_type = version.application.application_type
     if application_type == ApplicationType.GITHUB_WORKFLOW.value:

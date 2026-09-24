@@ -296,6 +296,19 @@ def _upgradeable_github_instance() -> DeploymentInstance:
     return instance
 
 
+@pytest.fixture(autouse=True)
+def _no_managed_secrets():
+    """Container deploys look up managed secrets; none exist unless a test says so."""
+
+    with patch(
+        "c2ai.api.registered_applications.crud_registered_application."
+        "list_active_container_application_secrets",
+        new_callable=AsyncMock,
+        return_value=[],
+    ) as secrets_mock:
+        yield secrets_mock
+
+
 @pytest.fixture
 def registered_applications_admin_client(test_client):
     def _admin_override():
@@ -973,6 +986,7 @@ def test_deploy_registered_container_uses_path_tier_and_stored_template(
             "hostname": "chat-service-tier-3.amberd.ai",
             "managed_by": "athena",
         },
+        "managed_secrets": [],
     }
     instance = DeploymentInstance(
         id=UUID("eeeeeeee-0000-0000-0000-000000000003"),

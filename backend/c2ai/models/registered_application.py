@@ -496,6 +496,8 @@ class DeploymentInstance(Base):
     tier = Column(Integer, nullable=False)
     status = Column(String(32), nullable=False, default="pending")
     configuration = Column(JSONB, nullable=False, default=dict)
+    # Configuration in effect before the latest upgrade; rollback restores it.
+    previous_configuration = Column(JSONB, nullable=True)
     triggered_by = Column(String(255), nullable=False)
     dispatch_reference = Column(JSONB, nullable=True)
     current_step = Column(
