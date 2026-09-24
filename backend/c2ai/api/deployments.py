@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -55,6 +56,7 @@ from c2ai.clients.github import (
     list_repo_tags,
     resolve_run_id,
 )
+from c2ai.core.background import spawn
 from c2ai.crud import pipeline_run as crud_pipeline
 from c2ai.services.registered_pipeline_status import (
     list_active_registered_pipeline_statuses,
@@ -207,8 +209,25 @@ async def _guard_instance_exists(db: AsyncSession, subdomain: str, operation: st
 
 
 def _schedule_resolve(coro) -> None:
-    """Schedule a background coroutine. Thin wrapper for test patching."""
-    asyncio.create_task(coro)
+    """Resolve the GitHub run id in the background (kept alive until done)."""
+    spawn(coro, name="pipeline-run-id-resolver")
+
+
+async def _dispatch_or_release(db: AsyncSession, run, dispatch: Awaitable[None]) -> None:
+    """Await a GitHub dispatch; if it fails, end the run so it stops blocking.
+
+    The pipeline_runs row is committed before dispatching. Without this, a
+    failed dispatch left an "active" row that blocked every further operation
+    on the subdomain until the 10-minute orphan timeout.
+    """
+    try:
+        await dispatch
+    except BaseException:
+        try:
+            await crud_pipeline.mark_run_ended(db, run.id)
+        except Exception:
+            logger.exception("Could not release pipeline_run=%s after a failed dispatch", run.id)
+        raise
 
 
 async def _background_resolve(
@@ -294,18 +313,27 @@ async def trigger_deployment(
         triggered_by=current_user.identifier,
         tier=body.tier,
         branch=body.branch,
+        deployment_metadata={
+            "customer_name": body.customer_name,
+            "env_instance": body.env_instance,
+            "domain": body.domain,
+        },
     )
 
-    await dispatch_github_workflow(
-        correlation_id=correlation_id,
-        branch=body.branch,
-        customer_name=body.customer_name,
-        subdomain=subdomain,
-        domain=body.domain,
-        env_instance=body.env_instance,
-        tier=body.tier,
-        triggered_by=current_user.identifier,
-        slack_user=current_user.metadata.get("slack_username") or None,
+    await _dispatch_or_release(
+        db,
+        run,
+        dispatch_github_workflow(
+            correlation_id=correlation_id,
+            branch=body.branch,
+            customer_name=body.customer_name,
+            subdomain=subdomain,
+            domain=body.domain,
+            env_instance=body.env_instance,
+            tier=body.tier,
+            triggered_by=current_user.identifier,
+            slack_user=current_user.metadata.get("slack_username") or None,
+        ),
     )
 
     _schedule_resolve(
@@ -368,12 +396,16 @@ async def move_deployment_to_tier(
         tier=body.tier,
     )
 
-    await dispatch_github_move_tier_workflow(
-        correlation_id=correlation_id,
-        subdomain=subdomain,
-        tier=body.tier,
-        triggered_by=current_user.metadata.get("slack_username")
-        or current_user.identifier,
+    await _dispatch_or_release(
+        db,
+        run,
+        dispatch_github_move_tier_workflow(
+            correlation_id=correlation_id,
+            subdomain=subdomain,
+            tier=body.tier,
+            triggered_by=current_user.metadata.get("slack_username")
+            or current_user.identifier,
+        ),
     )
 
     _schedule_resolve(
@@ -419,11 +451,15 @@ async def trigger_deployment_update(
         branch=body.branch,
     )
 
-    await dispatch_github_update_workflow(
-        correlation_id=correlation_id,
-        branch=body.branch,
-        subdomain=subdomain,
-        triggered_by=current_user.identifier,
+    await _dispatch_or_release(
+        db,
+        run,
+        dispatch_github_update_workflow(
+            correlation_id=correlation_id,
+            branch=body.branch,
+            subdomain=subdomain,
+            triggered_by=current_user.identifier,
+        ),
     )
 
     _schedule_resolve(
@@ -466,10 +502,14 @@ async def terminate_deployment(
         triggered_by=current_user.identifier,
     )
 
-    await dispatch_github_terminate_workflow(
-        subdomain,
-        correlation_id=correlation_id,
-        triggered_by=current_user.identifier,
+    await _dispatch_or_release(
+        db,
+        run,
+        dispatch_github_terminate_workflow(
+            subdomain,
+            correlation_id=correlation_id,
+            triggered_by=current_user.identifier,
+        ),
     )
 
     _schedule_resolve(
@@ -545,12 +585,12 @@ async def list_active_pipelines(
     Also writes back ``ended_at`` when a run transitions to completed.
     """
     runs = await crud_pipeline.get_all_active_runs(db)
-    results = []
+    # The session is not safe for concurrent use, so ended_at writebacks run
+    # one at a time; the GitHub lookups they depend on are cached per run.
     for run in runs:
         await _writeback_ended_if_complete(db, run)
-        status_out = await _pipeline_status_out(run)
-        if not _is_successfully_completed(status_out):
-            results.append(status_out)
+    statuses = await asyncio.gather(*(_pipeline_status_out(run) for run in runs))
+    results = [status_out for status_out in statuses if not _is_successfully_completed(status_out)]
     registered_statuses = await list_active_registered_pipeline_statuses(db)
     results.extend(
         status_out

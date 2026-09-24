@@ -57,6 +57,16 @@ class FakePipelineRun:
         }
 
 
+@pytest.fixture(autouse=True)
+def release_mock():
+    """A failed dispatch releases its run; never let that reach a real database."""
+
+    with patch(
+        "c2ai.api.deployments.crud_pipeline.mark_run_ended", new_callable=AsyncMock
+    ) as mock:
+        yield mock
+
+
 @pytest.fixture
 def deploy_body() -> dict:
     return {
@@ -979,3 +989,85 @@ class TestQueryParamValidation:
                 "/api/github/branches?repo=dealership_new"
             )
         assert response.status_code == 200
+
+
+class TestDispatchFailureReleasesRun:
+    """A committed run whose dispatch fails must not block the subdomain."""
+
+    def test_failed_deploy_dispatch_ends_the_run(
+        self, deploy_auth_client, deploy_body, release_mock, monkeypatch
+    ):
+        monkeypatch.delenv("GITHUB_PAT", raising=False)
+        run = FakePipelineRun(id="run-to-release")
+        with (
+            patch(
+                "c2ai.api.deployments.crud_pipeline.get_active_run_for_subdomain",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch("c2ai.api.deployments._guard_instance_not_running", new_callable=AsyncMock),
+            patch("c2ai.api.deployments._guard_branch_exists", new_callable=AsyncMock),
+            patch(
+                "c2ai.api.deployments.crud_pipeline.create_pipeline_run",
+                new_callable=AsyncMock,
+                return_value=run,
+            ) as create_mock,
+            patch("c2ai.api.deployments._schedule_resolve") as schedule_mock,
+        ):
+            response = deploy_auth_client.post("/api/deploy", json=deploy_body)
+
+        assert response.status_code == 503
+        assert release_mock.await_args.args[1] == "run-to-release"
+        schedule_mock.assert_not_called()
+        # The deployment request metadata is recorded with the run.
+        assert create_mock.await_args.kwargs["deployment_metadata"] == {
+            "customer_name": deploy_body["customer_name"],
+            "env_instance": deploy_body["env_instance"],
+            "domain": deploy_body["domain"],
+        }
+
+    def test_successful_dispatch_does_not_end_the_run(
+        self, deploy_auth_client, release_mock
+    ):
+        with (
+            patch(
+                "c2ai.api.deployments.crud_pipeline.get_active_run_for_subdomain",
+                new_callable=AsyncMock,
+                return_value=None,
+            ),
+            patch("c2ai.api.deployments._guard_instance_exists", new_callable=AsyncMock),
+            patch(
+                "c2ai.api.deployments.crud_pipeline.create_pipeline_run",
+                new_callable=AsyncMock,
+                return_value=FakePipelineRun(operation="terminate"),
+            ),
+            patch(
+                "c2ai.api.deployments.dispatch_github_terminate_workflow",
+                new_callable=AsyncMock,
+            ),
+            patch("c2ai.api.deployments._schedule_resolve", side_effect=lambda c: c.close()),
+        ):
+            response = deploy_auth_client.post(
+                "/api/deploy/terminate", json={"subdomain": "amberd-acme-ada"}
+            )
+
+        assert response.status_code == 201
+        release_mock.assert_not_awaited()
+
+
+async def test_background_tasks_are_retained_until_finished():
+    import asyncio
+
+    from c2ai.core import background
+
+    gate = asyncio.Event()
+
+    async def work():
+        await gate.wait()
+
+    task = background.spawn(work())
+    assert task in background._tasks  # strong reference held while running
+    gate.set()
+    await task
+    await asyncio.sleep(0)
+    assert task not in background._tasks

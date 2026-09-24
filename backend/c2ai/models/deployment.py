@@ -10,26 +10,12 @@ from .base import Base
 
 
 class Deployment(Base):
-    """
-    SQLAlchemy model for the `deployments` table.
+    """Who a legacy ADA deployment was requested for.
 
-    Tracks deployments triggered from the Athena UI. A deployment is created
-    with status 'deploying' when the GitHub Actions workflow is dispatched and
-    updated to a terminal status (success, failed, or cancelled) via the inbound
-    webhook once the pipeline finishes or is cancelled.
-
-    Attributes:
-        id (int): Auto-increment primary key.
-        subdomain (str): Computed subdomain, e.g. amberd-{customer}.
-        customer_name (str): Customer identifier provided by the user.
-        env_instance (str): Environment / instance label for the deploy workflow.
-        tier (int): Numeric tier index (1-4) for dashboard filtering.
-            Provider string (e.g. "tier1") is derived as f"tier{tier}" when needed.
-        branch (str): Git branch to deploy.
-        domain (str): Target domain, e.g. "amberd.ai".
-        status (str): One of "deploying", "success", "failed", "cancelled".
-        created_at (datetime): When the deployment was triggered.
-        completed_at (datetime | None): When the pipeline finished (set by webhook).
+    One row is written per ``POST /api/deploy`` together with its
+    ``pipeline_runs`` row. The metrics views read the newest row per subdomain
+    to label a namespace with its client and instance names. Pipeline progress
+    lives in ``pipeline_runs``/GitHub; ``status`` here is ``dispatched``.
     """
 
     __tablename__ = "deployments"
@@ -43,7 +29,7 @@ class Deployment(Base):
     branch = Column(String, nullable=False)
     domain = Column(String, nullable=False)
 
-    status = Column(String, nullable=False, default="deploying")
+    status = Column(String, nullable=False, default="dispatched")
 
     created_at = Column(
         DateTime(timezone=False),

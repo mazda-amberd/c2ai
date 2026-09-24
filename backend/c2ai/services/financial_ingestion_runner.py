@@ -155,7 +155,7 @@ async def financial_ingestion_loop(stop_event: asyncio.Event) -> None:
 
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=poll_seconds)
-        except TimeoutError:
+        except asyncio.TimeoutError:  # the poll interval elapsed; poll again
             continue
 
 

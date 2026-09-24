@@ -10,6 +10,7 @@ from typing import Optional
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from c2ai.models.deployment import Deployment
 from c2ai.models.pipeline_run import PipelineRun
 
 logger = logging.getLogger(__name__)
@@ -29,7 +30,14 @@ async def create_pipeline_run(
     triggered_by: str,
     tier: Optional[int] = None,
     branch: Optional[str] = None,
+    deployment_metadata: Optional[dict] = None,
 ) -> PipelineRun:
+    """Insert a pipeline run; for new deployments also record who the instance is for.
+
+    ``deployment_metadata`` (customer_name, env_instance, domain) is written to
+    ``deployments`` in the same transaction; the metrics views read it to show
+    client and instance names for each namespace.
+    """
     run = PipelineRun(
         id=id,
         subdomain=subdomain,
@@ -40,6 +48,18 @@ async def create_pipeline_run(
         branch=branch,
     )
     db.add(run)
+    if deployment_metadata is not None:
+        db.add(
+            Deployment(
+                subdomain=subdomain,
+                customer_name=deployment_metadata["customer_name"],
+                env_instance=deployment_metadata["env_instance"],
+                domain=deployment_metadata["domain"],
+                tier=tier,
+                branch=branch,
+                status="dispatched",
+            )
+        )
     await db.commit()
     await db.refresh(run)
     logger.info("Created pipeline_run id=%s subdomain=%s op=%s", id, subdomain, operation)
