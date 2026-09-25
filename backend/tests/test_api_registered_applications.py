@@ -19,7 +19,7 @@ from c2ai.api.registered_applications.repositories import (
     secrets_repository,
 )
 from c2ai.app import app
-from c2ai.auth.jwt import AthenaTokenUser, require_admin
+from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token, require_admin
 from c2ai.clients.container_registry import (
     ContainerRegistryTag,
     ContainerRegistryTagPage,
@@ -374,8 +374,11 @@ def registered_applications_admin_client(test_client):
         )
 
     app.dependency_overrides[require_admin] = _admin_override
+    # Reading the catalog is open to any signed-in user.
+    app.dependency_overrides[get_current_user_token] = _admin_override
     yield test_client
     app.dependency_overrides.pop(require_admin, None)
+    app.dependency_overrides.pop(get_current_user_token, None)
 
 
 @pytest.fixture

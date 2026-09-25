@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,6 +6,9 @@ import { AuthProvider } from "@/auth/AuthContext";
 import { ToastProvider } from "@components/Toast";
 import * as financeApi from "@/utils/financeApi";
 import * as registeredAppsApi from "@/utils/registeredAppsApi";
+import type { RegisteredApp } from "@/utils/registeredAppsApi";
+import * as registeredApplicationsApi from "@api/services/registeredApplications";
+import * as registrationApi from "@/utils/registrationApi";
 import { signInAs } from "@/test-utils/auth";
 
 import Applications from "./Applications";
@@ -19,6 +22,19 @@ vi.mock("@hooks/useDeployments", () => ({ useInvalidateDeploymentsForTierIndex: 
 vi.mock("@components/ApplicationList", () => ({ default: () => <p>Applications list</p> }));
 vi.mock("@components/Cube", () => ({ default: () => null }));
 vi.mock("@components/registerApp/DeployApplicationModal", () => ({ default: () => null }));
+
+const ADA: RegisteredApp = {
+  id: "ada00000-0000-4000-8000-000000000001",
+  name: "ADA",
+  desc: "Amberd ADA",
+  type: "github",
+  status: "active",
+  version: 1,
+  instances: 0,
+  tiers: {},
+  canDelete: true,
+  created: "2026-09-24",
+};
 
 async function visit(path: string, role: "Admin" | "User") {
   signInAs(role);
@@ -43,12 +59,12 @@ describe("tier page and catalog by role", () => {
     vi.spyOn(financeApi, "fetchTierCost").mockResolvedValue(financeApi.COST_UNAVAILABLE);
   });
 
-  it("shows a User the tier and its metrics, but not Deploy or the catalog", async () => {
+  it("shows a User the tier, its metrics and the catalog, but not Deploy", async () => {
     await visit("/apps/1", "User");
     expect(await screen.findByText("Applications list")).toBeTruthy();
     expect(screen.getByRole("button", { name: /Tier Metrics/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Registered Applications" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "Deploy" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Registered Applications" })).toBeNull();
   });
 
   it("gives an Admin Deploy and the catalog", async () => {
@@ -57,10 +73,32 @@ describe("tier page and catalog by role", () => {
     expect(screen.getByRole("button", { name: "Registered Applications" })).toBeTruthy();
   });
 
-  it("sends a User away from the catalog of templates", async () => {
-    const catalog = vi.spyOn(registeredAppsApi, "fetchRegisteredApps");
+  it("lets a User browse the catalog and open a summary, without Register or Delete", async () => {
+    vi.spyOn(registeredAppsApi, "fetchRegisteredApps").mockResolvedValue([ADA]);
+    const detail = vi
+      .spyOn(registeredApplicationsApi, "getRegisteredApplication")
+      .mockRejectedValue(new Error("not needed here"));
+    vi.spyOn(registrationApi, "fetchGithubConnections").mockResolvedValue([]);
     await visit("/registered-applications", "User");
-    expect(await screen.findByText("Home page")).toBeTruthy();
-    expect(catalog).not.toHaveBeenCalled();
+
+    expect(await screen.findByText("ADA")).toBeTruthy();
+    expect(screen.getByText("View only")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Register Application" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete ADA" })).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("ADA"));
+    });
+    expect(detail).toHaveBeenCalledWith(ADA.id);
+  });
+
+  it("gives an Admin Register and Delete in the catalog", async () => {
+    vi.spyOn(registeredAppsApi, "fetchRegisteredApps").mockResolvedValue([ADA]);
+    await visit("/registered-applications", "Admin");
+
+    expect(await screen.findByText("ADA")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Register Application" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Delete ADA" })).toBeTruthy();
+    expect(screen.queryByText("View only")).toBeNull();
   });
 });

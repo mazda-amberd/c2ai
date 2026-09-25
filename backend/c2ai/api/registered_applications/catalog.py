@@ -18,7 +18,7 @@ from c2ai.api.registered_applications.repositories import (
     credentials_repository,
     github_connections_repository,
 )
-from c2ai.auth.jwt import AthenaTokenUser, require_admin
+from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token, require_admin
 from c2ai.clients.container_registry import (
     ContainerRegistryClient,
     build_image_reference,
@@ -214,11 +214,15 @@ async def list_registered_applications(
     sort_order: Literal["asc", "desc"] = Query(default="asc"),
     offset: int = Query(default=0, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
-    _current_user: AthenaTokenUser = Depends(require_admin),
+    _current_user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(db_session),
     applications: ModuleType = Depends(applications_repository),
 ) -> RegisteredApplicationCatalogResponse:
-    """Search, filter, sort, and paginate the global application catalog."""
+    """Search, filter, sort, and paginate the global application catalog.
+
+    Any signed-in user may read the catalog; registering and deleting are
+    for Admins.
+    """
 
     page = await applications.list_registered_applications(
         db,
@@ -491,7 +495,7 @@ async def list_github_application_tags(
 )
 async def get_registered_application(
     application_id: UUID,
-    _current_user: AthenaTokenUser = Depends(require_admin),
+    _current_user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(db_session),
     applications: ModuleType = Depends(applications_repository),
 ) -> RegisteredApplicationDetail:

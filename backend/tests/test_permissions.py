@@ -2,7 +2,8 @@
 
 Admins create and delete application templates, deploy, update, move,
 terminate and cancel, and manage GitHub connections and people. A User
-sees what runs on the tiers, reads metrics and logs, and troubleshoots.
+sees what runs on the tiers, browses the catalog of templates, reads
+metrics and logs, and troubleshoots.
 
 The table is every route the API has. A new route fails this test until it
 is placed in one of the three sets - so the question is always asked.
@@ -11,6 +12,7 @@ is placed in one of the three sets - so the question is always asked.
 from __future__ import annotations
 
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -18,10 +20,12 @@ import pytest
 from argon2 import PasswordHasher
 from fastapi.routing import APIRoute
 
+from c2ai.api.registered_applications.repositories import applications_repository
 from c2ai.app import app
 from c2ai.auth import jwt
 from c2ai.auth.jwt import create_jwt
 from c2ai.models.user import User
+from c2ai.registration.repository import RegisteredApplicationCatalogPage
 
 ADMIN = {
     # Deploying and everything after it.
@@ -41,11 +45,9 @@ ADMIN = {
     ("GET", "/api/registered-applications/deployments/{deployment_id}"),
     ("GET", "/api/registered-applications/{application_id}/github-tags"),
     ("GET", "/api/registered-applications/{application_id}/image-tags"),
-    # Application templates.
-    ("GET", "/api/registered-applications"),
+    # Application templates: registering, deleting, their secrets.
     ("POST", "/api/registered-applications/github"),
     ("POST", "/api/registered-applications/container"),
-    ("GET", "/api/registered-applications/{application_id}"),
     ("DELETE", "/api/registered-applications/{application_id}"),
     ("GET", "/api/registered-applications/{application_id}/secrets"),
     ("POST", "/api/registered-applications/{application_id}/secrets"),
@@ -53,7 +55,6 @@ ADMIN = {
     ("DELETE", "/api/registered-applications/{application_id}/secrets/{secret_id}"),
     ("GET", "/api/registered-applications/llm-models"),
     ("GET", "/api/registered-applications/llm-models/pricing"),
-    ("GET", "/api/github-connections"),
     ("POST", "/api/github-connections"),
     ("POST", "/api/github-connections/validate"),
     # People.
@@ -76,6 +77,10 @@ SIGNED_IN = {
     ("GET", "/api/pipeline/status"),
     ("GET", "/api/pipeline/history"),
     ("GET", "/api/financial/costs"),
+    # The catalog of templates, read-only (names only for connections).
+    ("GET", "/api/registered-applications"),
+    ("GET", "/api/registered-applications/{application_id}"),
+    ("GET", "/api/github-connections"),
     # Metrics, logs and troubleshooting.
     ("GET", "/api/metrics"),
     ("GET", "/api/v2/metrics"),
@@ -198,3 +203,22 @@ def test_a_user_is_refused_what_changes_things(test_client, signed_in_user, meth
     response = getattr(test_client, method)(path, **kwargs)
     assert response.status_code == 403  # not 401: they stay signed in
     assert response.json()["code"] == "AdminPrivilegesRequired"
+
+
+def test_a_user_browses_the_catalog_but_cannot_register(test_client, signed_in_user):
+    catalog = SimpleNamespace(
+        list_registered_applications=AsyncMock(
+            return_value=RegisteredApplicationCatalogPage(items=[], total=0)
+        )
+    )
+    app.dependency_overrides[applications_repository] = lambda: catalog
+    try:
+        listed = test_client.get("/api/registered-applications", headers=signed_in_user)
+        register = test_client.post(
+            "/api/registered-applications/github", json={}, headers=signed_in_user
+        )
+    finally:
+        app.dependency_overrides.pop(applications_repository, None)
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["total"] == 0
+    assert register.status_code == 403

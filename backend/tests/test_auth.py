@@ -143,9 +143,7 @@ class TestAuthorization:
     def test_admin_endpoint_rejects_non_admin_with_403_not_401(self, test_client):
         # 401 would make the UI sign the user out; lacking rights is a 403.
         with patch(_LOOKUP, new_callable=AsyncMock, return_value=_user(user_type="User")):
-            response = test_client.get(
-                "/api/registered-applications", headers=_auth(_token())
-            )
+            response = test_client.get("/api/users", headers=_auth(_token()))
         assert response.status_code == 403
         assert response.json()["code"] == "AdminPrivilegesRequired"
 
@@ -153,7 +151,7 @@ class TestAuthorization:
         # The token still claims Admin, but the stored account was demoted.
         token = _token(metadata={"user_type": "Admin"})
         with patch(_LOOKUP, new_callable=AsyncMock, return_value=_user(user_type="User")):
-            response = test_client.get("/api/registered-applications", headers=_auth(token))
+            response = test_client.get("/api/users", headers=_auth(token))
         assert response.status_code == 403
 
     def test_deleted_user_token_is_rejected(self, test_client):

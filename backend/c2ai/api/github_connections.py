@@ -4,7 +4,7 @@
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from c2ai.auth.jwt import AthenaTokenUser, require_admin
+from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token, require_admin
 from c2ai.clients.github_connection import (
     GitHubConnectionValidationResult,
     validate_github_repository_connection,
@@ -45,10 +45,14 @@ def _connection_out(connection) -> GitHubConnectionOut:
 
 @router.get("", response_model=GitHubConnectionList)
 async def list_github_connections(
-    _current_user: AthenaTokenUser = Depends(require_admin),
+    _current_user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(db_session),
 ) -> GitHubConnectionList:
-    """List managed connections plus IDs referenced by existing applications."""
+    """List managed connections plus IDs referenced by existing applications.
+
+    Names and URLs only (never a token), so any signed-in user may read them:
+    the read-only catalog names each application's connection.
+    """
 
     stored, legacy = await crud_github_connection.list_github_connections(db)
     items = [_connection_out(connection) for connection in stored]

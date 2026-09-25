@@ -1,16 +1,12 @@
 import { Library } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
-import { useAuth } from "@auth/AuthContext";
-
 /** Purple "Registered Applications" action from the template — opens the
  *  catalog page. Shown next to the cost chip on Tier Management and between
- *  the cost chip and Deploy on tier pages. Admins only: the catalog is where
- *  templates are created and deleted. */
+ *  the cost chip and Deploy on tier pages. Everyone may browse the catalog;
+ *  only Admins see its Register and Delete controls. */
 export default function RegisteredAppsButton() {
   const navigate = useNavigate();
-  const { isAdmin } = useAuth();
-  if (!isAdmin) return null;
 
   return (
     <button

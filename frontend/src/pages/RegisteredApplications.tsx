@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
-import { ArrowLeft, Box, Github, Loader2, Plus, Search, Trash2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { ArrowLeft, Box, Eye, Github, Loader2, Plus, Search, Trash2 } from "lucide-react";
 
 import { useAuth } from "@auth/AuthContext";
 import { Button } from "@ui/button";
@@ -64,8 +64,9 @@ function TypeIcon({ type, className }: { type: RegisteredAppType; className?: st
 
 export default function RegisteredApplications() {
   const navigate = useNavigate();
-  // Creating and deleting templates is for Admins (the API refuses the rest).
-  const { isAdmin, checkingAuth } = useAuth();
+  // Everyone may browse the catalog; registering and deleting templates is
+  // for Admins (the API refuses the rest).
+  const { isAdmin } = useAuth();
 
   const [apps, setApps] = useState<RegisteredApp[]>([]);
   const [loading, setLoading] = useState(true);
@@ -119,8 +120,8 @@ export default function RegisteredApplications() {
   };
 
   useEffect(() => {
-    if (isAdmin) loadApps();
-  }, [isAdmin]);
+    loadApps();
+  }, []);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -156,9 +157,6 @@ export default function RegisteredApplications() {
     }
   };
 
-  if (checkingAuth) return null;
-  if (!isAdmin) return <Navigate to="/" replace />;
-
   return (
     <div className="p-6">
       <button
@@ -187,10 +185,20 @@ export default function RegisteredApplications() {
           </span>
           {/* Template's plain .btn — the app's standard primary action
               button (same style as other default-variant buttons). */}
-          <Button onClick={() => setRegisterOpen(true)}>
-            <Plus className="h-4 w-4" />
-            Register Application
-          </Button>
+          {isAdmin ? (
+            <Button onClick={() => setRegisterOpen(true)}>
+              <Plus className="h-4 w-4" />
+              Register Application
+            </Button>
+          ) : (
+            <span
+              title="Ask an Admin to register or delete applications"
+              className="inline-flex items-center gap-1.5 rounded-full border border-[#1c2836] px-2.5 py-1 text-[11.5px] text-[#8b97a5]"
+            >
+              <Eye className="h-3.5 w-3.5" />
+              View only
+            </span>
+          )}
         </div>
       </div>
 
@@ -346,28 +354,30 @@ export default function RegisteredApplications() {
                         {app.created || "—"}
                       </td>
                       <td className="px-3.5 py-3.5">
-                        <div className="flex items-center justify-end">
-                          {/* aria-disabled (not `disabled`) so the click still
-                              lands and can explain why deletion is blocked. */}
-                          <button
-                            type="button"
-                            aria-disabled={app.instances > 0}
-                            aria-label={`Delete ${app.name}`}
-                            title={
-                              app.instances > 0
-                                ? "Delete its deployed instances first"
-                                : "Delete application"
-                            }
-                            onClick={(e) => handleDeleteClick(e, app)}
-                            className={`grid h-7 w-7 place-items-center rounded-[6px] transition-colors ${
-                              app.instances > 0
-                                ? "cursor-not-allowed text-[#57606c]/50"
-                                : "text-[#f0655f]/70 hover:bg-[rgba(240,101,95,0.12)] hover:text-[#f0655f]"
-                            }`}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
-                        </div>
+                        {isAdmin && (
+                          <div className="flex items-center justify-end">
+                            {/* aria-disabled (not `disabled`) so the click still
+                                lands and can explain why deletion is blocked. */}
+                            <button
+                              type="button"
+                              aria-disabled={app.instances > 0}
+                              aria-label={`Delete ${app.name}`}
+                              title={
+                                app.instances > 0
+                                  ? "Delete its deployed instances first"
+                                  : "Delete application"
+                              }
+                              onClick={(e) => handleDeleteClick(e, app)}
+                              className={`grid h-7 w-7 place-items-center rounded-[6px] transition-colors ${
+                                app.instances > 0
+                                  ? "cursor-not-allowed text-[#57606c]/50"
+                                  : "text-[#f0655f]/70 hover:bg-[rgba(240,101,95,0.12)] hover:text-[#f0655f]"
+                              }`}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
@@ -382,11 +392,13 @@ export default function RegisteredApplications() {
         </div>
       </div>
 
-      <RegisterApplicationModal
-        open={registerOpen}
-        onOpenChange={setRegisterOpen}
-        onRegistered={loadApps}
-      />
+      {isAdmin && (
+        <RegisterApplicationModal
+          open={registerOpen}
+          onOpenChange={setRegisterOpen}
+          onRegistered={loadApps}
+        />
+      )}
 
       <ApplicationSummaryModal app={summaryApp} onOpenChange={(o) => !o && setSummaryApp(null)} />
 
