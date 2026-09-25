@@ -8,6 +8,7 @@ import type { Application } from "@/types/application";
 import NewDeploymentModal from "./NewDeploymentModal";
 import { TIER_DISPLAY_NAMES } from "@/constants/deployment";
 import { useTierDeploymentActions } from "@hooks/useDeployments";
+import { useAuth } from "@auth/AuthContext";
 import { useDismissedDeployments } from "@hooks/useDismissedDeployments";
 import {
   Dialog,
@@ -33,6 +34,8 @@ export default function ApplicationList({
 }: ApplicationListProps) {
   const appStyle = appsColors[tierIndex] || appsColors[0];
   const activeTier = TIER_DISPLAY_NAMES[tierIndex];
+  // Users see what runs and how it is doing; Admins also change it.
+  const { isAdmin } = useAuth();
 
   const [terminateStep, setTerminateStep] = useState<1 | 2>(1);
   const { dismiss, isDismissed } = useDismissedDeployments();
@@ -343,7 +346,7 @@ export default function ApplicationList({
                 deployment={d}
                 appStyle={appStyle}
                 onCancel={
-                  d.run_id != null
+                  isAdmin && d.run_id != null
                     ? () => void cancelPipelineRun(d.id)
                     : undefined
                 }
@@ -367,9 +370,9 @@ export default function ApplicationList({
                   key={app.id}
                   app={app}
                   tierIndex={tierIndex}
-                  onMoveTier={() => openMoveTier(app)}
-                  onUpdate={() => openUpdate(app)}
-                  onBomb={() => handleOpenTerminate(app)}
+                  onMoveTier={isAdmin ? () => openMoveTier(app) : undefined}
+                  onUpdate={isAdmin ? () => openUpdate(app) : undefined}
+                  onBomb={isAdmin ? () => handleOpenTerminate(app) : undefined}
                   isMigrating={isAppMigrating(app)}
                   isTerminating={isAppTerminating(app)}
                   isUpdating={isAppUpdating(app)}
@@ -377,7 +380,7 @@ export default function ApplicationList({
                   updatePipeline={uP}
                   terminatePipeline={tP}
                   onCancelPipeline={
-                    cancellable?.run_id != null
+                    isAdmin && cancellable?.run_id != null
                       ? () => void cancelPipelineRun(cancellable.id)
                       : undefined
                   }

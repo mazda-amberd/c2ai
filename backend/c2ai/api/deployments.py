@@ -15,6 +15,10 @@ GET  /api/github/branches|tags — Refs of an ADA source repository
 All of them operate on the one deployment model (``c2ai.deployments``): ADA
 is a registered GitHub Workflow application and every operation is a row of
 the operation log, whichever API started it.
+
+Starting, changing or cancelling an operation (and the GitHub lookups that
+only the deploy forms use) is for Admins; any signed-in user may read what is
+running and what happened.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token
+from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token, require_admin
 from c2ai.core.exceptions import UnprocessableEntityError
 from c2ai.db.session import get_db_session as db_session
 from c2ai.deployments import ada, operations
@@ -77,7 +81,7 @@ def _out(run) -> PipelineRunOut:
 )
 async def trigger_deployment(
     body: DeployRequest,
-    current_user: AthenaTokenUser = Depends(get_current_user_token),
+    current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
     store: JobStore = Depends(get_job_store),
 ) -> PipelineRunOut:
@@ -100,7 +104,7 @@ async def trigger_deployment(
 )
 async def trigger_deployment_update(
     body: DeployRequest,
-    current_user: AthenaTokenUser = Depends(get_current_user_token),
+    current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
     store: JobStore = Depends(get_job_store),
 ) -> PipelineRunOut:
@@ -115,7 +119,7 @@ async def trigger_deployment_update(
 )
 async def move_deployment_to_tier(
     body: MoveTierRequest,
-    current_user: AthenaTokenUser = Depends(get_current_user_token),
+    current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
     store: JobStore = Depends(get_job_store),
 ) -> PipelineRunOut:
@@ -130,7 +134,7 @@ async def move_deployment_to_tier(
 )
 async def terminate_deployment(
     body: TerminateRequest,
-    current_user: AthenaTokenUser = Depends(get_current_user_token),
+    current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
     store: JobStore = Depends(get_job_store),
 ) -> PipelineRunOut:
@@ -145,7 +149,7 @@ async def terminate_deployment(
 )
 async def cancel_pipeline(
     body: PipelineCancelRequest,
-    current_user: AthenaTokenUser = Depends(get_current_user_token),
+    current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
 ) -> PipelineRunOut:
     """Only the user who started the operation may cancel it."""
@@ -204,7 +208,7 @@ async def get_pipeline_history(
 )
 async def get_repo_branches(
     repo: _REPO_QUERY,
-    _user: AthenaTokenUser = Depends(get_current_user_token),
+    _user: AthenaTokenUser = Depends(require_admin),
 ) -> list[str]:
     return await ada.list_source_refs(repo, "branches")
 
@@ -217,6 +221,6 @@ async def get_repo_branches(
 )
 async def get_repo_tags(
     repo: _REPO_QUERY,
-    _user: AthenaTokenUser = Depends(get_current_user_token),
+    _user: AthenaTokenUser = Depends(require_admin),
 ) -> list[str]:
     return await ada.list_source_refs(repo, "tags")

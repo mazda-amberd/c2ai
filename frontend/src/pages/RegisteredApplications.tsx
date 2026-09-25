@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Navigate, useNavigate } from "react-router-dom";
 import { ArrowLeft, Box, Github, Loader2, Plus, Search, Trash2 } from "lucide-react";
 
+import { useAuth } from "@auth/AuthContext";
 import { Button } from "@ui/button";
 import { Dialog, DialogContent } from "@ui/dialog";
 import { useToast } from "@components/Toast";
@@ -63,6 +64,8 @@ function TypeIcon({ type, className }: { type: RegisteredAppType; className?: st
 
 export default function RegisteredApplications() {
   const navigate = useNavigate();
+  // Creating and deleting templates is for Admins (the API refuses the rest).
+  const { isAdmin, checkingAuth } = useAuth();
 
   const [apps, setApps] = useState<RegisteredApp[]>([]);
   const [loading, setLoading] = useState(true);
@@ -116,8 +119,8 @@ export default function RegisteredApplications() {
   };
 
   useEffect(() => {
-    loadApps();
-  }, []);
+    if (isAdmin) loadApps();
+  }, [isAdmin]);
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -152,6 +155,9 @@ export default function RegisteredApplications() {
       setSortDir("asc");
     }
   };
+
+  if (checkingAuth) return null;
+  if (!isAdmin) return <Navigate to="/" replace />;
 
   return (
     <div className="p-6">

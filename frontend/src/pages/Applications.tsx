@@ -20,6 +20,7 @@ import DeployApplicationModal from "@components/registerApp/DeployApplicationMod
 import CostChip from "@components/CostChip";
 import RegisteredAppsButton from "@components/RegisteredAppsButton";
 import { useInvalidateDeploymentsForTierIndex } from "@hooks/useDeployments";
+import { useAuth } from "@auth/AuthContext";
 import { fetchTierCost, useFinanceFilter, type CostValue } from "@/utils/financeApi";
 
 export type { AppsFilterState } from "@/types/appsFilter";
@@ -42,6 +43,8 @@ export default function Applications() {
     useAppsFilter(apps);
 
   const [deployModalOpen, setDeployModalOpen] = useState(false);
+  // Deploying is for Admins; a User sees the tier, its metrics and logs.
+  const { isAdmin } = useAuth();
   const invalidateDeployments = useInvalidateDeploymentsForTierIndex(index);
 
   // Tier-level cost for the shared finance date filter (Epic 10).
@@ -69,12 +72,14 @@ export default function Applications() {
 
   return (
     <>
-    <DeployApplicationModal
-      open={deployModalOpen}
-      onOpenChange={setDeployModalOpen}
-      tierIndex={index}
-      onDeployed={invalidateDeployments}
-    />
+    {isAdmin && (
+      <DeployApplicationModal
+        open={deployModalOpen}
+        onOpenChange={setDeployModalOpen}
+        tierIndex={index}
+        onDeployed={invalidateDeployments}
+      />
+    )}
     <div className="p-6 h-[calc(100vh-60px)]">
       <div className="w-full h-full relative border rounded-md flex flex-col overflow-hidden pt-6">
         {/* Single-row toolbar. overflow-x keeps the buttons on one line on
@@ -142,14 +147,16 @@ export default function Applications() {
             )}
             <CostChip cost={tierCost} />
             <RegisteredAppsButton />
-            <Button
-              variant="healthy"
-              className="h-9 px-3.5 py-2 text-sm"
-              onClick={() => setDeployModalOpen(true)}
-            >
-              <Rocket className="h-4 w-4" />
-              Deploy
-            </Button>
+            {isAdmin && (
+              <Button
+                variant="healthy"
+                className="h-9 px-3.5 py-2 text-sm"
+                onClick={() => setDeployModalOpen(true)}
+              >
+                <Rocket className="h-4 w-4" />
+                Deploy
+              </Button>
+            )}
             <AppsFilter
               filters={filters}
               options={{

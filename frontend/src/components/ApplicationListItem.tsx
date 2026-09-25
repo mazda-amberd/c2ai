@@ -39,9 +39,11 @@ import {
 type Props = {
   app: Application;
   tierIndex: number;
-  onMoveTier: () => void;
-  onUpdate: () => void;
-  onBomb: () => void;
+  /* Changing an instance is for Admins: without these the menu offers only
+     Go to URL and View logs. */
+  onMoveTier?: () => void;
+  onUpdate?: () => void;
+  onBomb?: () => void;
   isMigrating?: boolean;
   isTerminating?: boolean;
   isUpdating?: boolean;
@@ -190,16 +192,24 @@ export default function ApplicationListItem({
                     <ExternalLink className="h-4 w-4" />
                     Go to URL
                   </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onSelect={onMoveTier} disabled={isOperating}>
-                    <ArrowRightLeft className="h-4 w-4" />
-                    Move to Tier
-                  </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem onSelect={onUpdate} disabled={isOperating}>
-                    <RefreshCw className="h-4 w-4" />
-                    Update
-                  </DropdownMenuItem>
+                  {onMoveTier && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={onMoveTier} disabled={isOperating}>
+                        <ArrowRightLeft className="h-4 w-4" />
+                        Move to Tier
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                  {onUpdate && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={onUpdate} disabled={isOperating}>
+                        <RefreshCw className="h-4 w-4" />
+                        Update
+                      </DropdownMenuItem>
+                    </>
+                  )}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
                     disabled={isOperating}
@@ -208,14 +218,18 @@ export default function ApplicationListItem({
                     <ScrollText className="h-4 w-4" />
                     View logs
                   </DropdownMenuItem>
-                  <DropdownMenuSeparator />
-                  <DropdownMenuItem
-                    onSelect={onBomb}
-                    className="text-destructive focus:text-destructive"
-                  >
-                    <Bomb className="h-4 w-4" />
-                    Terminate
-                  </DropdownMenuItem>
+                  {onBomb && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onSelect={onBomb}
+                        className="text-destructive focus:text-destructive"
+                      >
+                        <Bomb className="h-4 w-4" />
+                        Terminate
+                      </DropdownMenuItem>
+                    </>
+                  )}
                 </DropdownMenuContent>
               </DropdownMenu>
               </div>

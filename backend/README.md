@@ -155,6 +155,15 @@ when a signed-in user lacks admin rights. Admin rights are the
 `metadata.user_type` (`Admin` | `User`); the last administrator cannot be
 demoted or deleted.
 
+**What each role can do.** A **User** sees what runs on the tiers (and what
+is being deployed), reads application and cluster metrics, costs and logs,
+and runs troubleshooting. Only an **Admin** creates or deletes application
+templates (Registered Applications), deploys, updates, moves, terminates or
+cancels, manages GitHub connections and secrets, and manages people. The
+interface hides those controls from Users; the API refuses them with 403.
+`tests/test_permissions.py` holds the full table and fails when a new route
+has not been placed in it.
+
 | Method | Path | Access |
 |---|---|---|
 | `POST` | `/auth/login`, `/auth/logout`, `/auth/forgot-password` | public |

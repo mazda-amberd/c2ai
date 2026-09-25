@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import text
 
 from c2ai.app import app
-from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token
+from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token, require_admin
 from c2ai.db.session import get_db_session
 from c2ai.jobs import PostgresJobStore, get_job_store
 from c2ai.jobs.handlers.deployments import track_open_operations
@@ -131,7 +131,11 @@ def github(http_mock, monkeypatch):
 
 @pytest.fixture
 def user():
-    return {"identity": AthenaTokenUser(identifier="alice", metadata={"slack_username": "alice.s"})}
+    return {"identity": _admin("alice", slack_username="alice.s")}
+
+
+def _admin(identifier: str, **metadata) -> AthenaTokenUser:
+    return AthenaTokenUser(identifier=identifier, metadata={"user_type": "Admin", **metadata})
 
 
 @pytest.fixture
@@ -142,12 +146,14 @@ def client(session_factory, clean, github, user):
 
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_current_user_token] = lambda: user["identity"]
+    app.dependency_overrides[require_admin] = lambda: user["identity"]
     app.dependency_overrides[get_job_store] = lambda: PostgresJobStore(session_factory)
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(get_db_session, None)
         app.dependency_overrides.pop(get_current_user_token, None)
+        app.dependency_overrides.pop(require_admin, None)
         app.dependency_overrides.pop(get_job_store, None)
 
 
@@ -301,11 +307,11 @@ async def test_failed_run_is_reported_then_retryable(client, github, session_fac
 async def test_cancel_is_limited_to_the_requester(client, github, session_factory, user):
     deployed = client.post("/api/deploy", json=DEPLOY_BODY).json()
 
-    user["identity"] = AthenaTokenUser(identifier="bob")
+    user["identity"] = _admin("bob")
     forbidden = client.post("/api/pipeline/cancel", json={"pipeline_run_id": deployed["id"]})
     assert forbidden.status_code == 403
 
-    user["identity"] = AthenaTokenUser(identifier="alice")
+    user["identity"] = _admin("alice")
     cancelled = client.post("/api/pipeline/cancel", json={"pipeline_run_id": deployed["id"]})
     assert cancelled.status_code == 200, cancelled.text
     assert cancelled.json()["ended_at"] is not None

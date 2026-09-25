@@ -29,7 +29,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from c2ai.app import app
-from c2ai.auth.jwt import AthenaTokenUser, get_access_token, get_current_user_token
+from c2ai.auth.jwt import AthenaTokenUser, get_access_token, get_current_user_token, require_admin
 from c2ai.clients.http import use_http_transport
 from c2ai.config import get_settings
 from c2ai.schemas.grafana import (
@@ -43,6 +43,9 @@ from c2ai.schemas.grafana import (
 )
 
 _FAKE_USER = AthenaTokenUser(identifier="test-user", service="athena")
+_FAKE_ADMIN = AthenaTokenUser(
+    identifier="test-user", service="athena", metadata={"user_type": "Admin"}
+)
 
 
 @pytest.fixture(autouse=True)
@@ -95,7 +98,7 @@ def test_client():
 
 @pytest.fixture
 def deploy_auth_client(test_client):
-    """Test client with JWT dependencies bypassed (deploy routes require a token)."""
+    """Test client signed in as an Admin (deploy routes are for Admins)."""
 
     async def _token_override():
         return "test-token"
@@ -105,9 +108,11 @@ def deploy_auth_client(test_client):
 
     app.dependency_overrides[get_access_token] = _token_override
     app.dependency_overrides[get_current_user_token] = _user_override
+    app.dependency_overrides[require_admin] = lambda: _FAKE_ADMIN
     yield test_client
     app.dependency_overrides.pop(get_access_token, None)
     app.dependency_overrides.pop(get_current_user_token, None)
+    app.dependency_overrides.pop(require_admin, None)
 
 
 def _make_raycluster_frame(ref_id: str, owner_name: str, namespace: str, value: float) -> GrafanaFrame:
