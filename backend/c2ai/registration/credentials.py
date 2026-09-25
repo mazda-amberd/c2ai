@@ -6,10 +6,9 @@ import logging
 from dataclasses import dataclass
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from c2ai.config import get_settings
 from c2ai.core.exceptions import (
     ServiceUnavailableError,
 )
@@ -17,18 +16,9 @@ from c2ai.models.registered_application import (
     ApplicationLLMConfiguration,
     ContainerApplicationConfiguration,
 )
+from c2ai.security import crypto
 
 logger = logging.getLogger(__name__)
-
-
-def credential_encryption_key() -> str:
-    key = get_settings().credential_encryption_key.strip()
-    if not key:
-        raise ServiceUnavailableError(
-            "Credential storage is not configured. Set "
-            "ATHENA_CREDENTIAL_ENCRYPTION_KEY."
-        )
-    return key
 
 
 @dataclass(frozen=True)
@@ -48,10 +38,7 @@ async def resolve_container_registry_credentials(
     result = await db.execute(
         select(
             ContainerApplicationConfiguration.registry_username,
-            func.pgp_sym_decrypt(
-                ContainerApplicationConfiguration.registry_password_encrypted,
-                credential_encryption_key(),
-            ),
+            ContainerApplicationConfiguration.registry_password_encrypted,
         ).where(
             ContainerApplicationConfiguration.application_version_id
             == application_version_id,
@@ -61,7 +48,8 @@ async def resolve_container_registry_credentials(
     row = result.one_or_none()
     if row is None:
         return None
-    username, password = row
+    username, encrypted = row
+    password = await crypto.decrypt_stored(db, encrypted, column=crypto.REGISTRY_PASSWORD)
     if (
         not isinstance(username, str)
         or not username
@@ -79,17 +67,14 @@ async def resolve_llm_api_token(
     """Decrypt the stored LLM token for one outbound pipeline dispatch."""
 
     result = await db.execute(
-        select(
-            func.pgp_sym_decrypt(
-                ApplicationLLMConfiguration.api_token_encrypted,
-                credential_encryption_key(),
-            )
-        ).where(
+        select(ApplicationLLMConfiguration.api_token_encrypted).where(
             ApplicationLLMConfiguration.application_version_id == application_version_id,
             ApplicationLLMConfiguration.api_token_encrypted.is_not(None),
         )
     )
-    token = result.scalar_one_or_none()
+    token = await crypto.decrypt_stored(
+        db, result.scalar_one_or_none(), column=crypto.LLM_API_TOKEN
+    )
     if not isinstance(token, str) or not token:
         return None
     return token

@@ -15,7 +15,7 @@ import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import jwt as pyjwt
 from fastapi import Depends
@@ -32,6 +32,7 @@ from c2ai.core.exceptions import (
     MissingToken,
     TokenExpired,
 )
+from c2ai.crud.session import is_token_revoked
 from c2ai.crud.user import Viewer, get_user_by_identifier
 from c2ai.db.session import get_db_session
 
@@ -94,12 +95,30 @@ def create_jwt(
     expires_at = now + expires_in
     claims: dict[str, Any] = {
         **payload,
+        # A unique id lets one token be signed out (revoked_tokens).
+        "jti": uuid4().hex,
         "iat": int(now.timestamp()),
         "exp": int(expires_at.timestamp()),
         "created": format_athena_datetime(now),
         "expired": format_athena_datetime(expires_at),
     }
     return pyjwt.encode(claims, get_jwt_secret(), algorithm=algorithm)
+
+
+def issue_session_token(user, *, ttl_seconds: int) -> str:
+    """A signed session token for a stored ``User`` (login, password change)."""
+
+    return create_jwt(
+        payload={
+            "identifier": user.identifier,
+            "service": "athena",
+            "email": None,
+            "metadata": user.public_metadata,
+            "tz_location": "UTC",
+            "tv": user.token_version or 0,
+        },
+        expires_in=timedelta(seconds=ttl_seconds),
+    )
 
 
 class AthenaTokenUser(BaseModel):
@@ -112,6 +131,10 @@ class AthenaTokenUser(BaseModel):
     tz_location: str | None = None
     created: str | None = None
     expired: str | None = None
+    # Session claims: which token this is and the account version it was issued for.
+    jti: str | None = Field(default=None, exclude=True)
+    tv: int = Field(default=0, exclude=True)
+    exp: int | None = Field(default=None, exclude=True)
     # Filled from the database on every request, never from the token.
     user_id: UUID | None = Field(default=None, exclude=True)
     is_superuser: bool = Field(default=False, exclude=True)
@@ -184,6 +207,10 @@ async def _resolve_current_user(request: Request, db: AsyncSession) -> AthenaTok
     user = await get_user_by_identifier(db, claims.identifier)
     if user is None:
         raise InvalidToken("The account for this token no longer exists")
+    # A password change or reset bumps the account's token version, which
+    # signs out every session issued before it; logout revokes one token.
+    if claims.tv != (user.token_version or 0) or await is_token_revoked(db, claims.jti):
+        raise InvalidToken("This session has been signed out")
     # Authorization decisions use the stored account, not the token snapshot.
     return claims.model_copy(
         update={

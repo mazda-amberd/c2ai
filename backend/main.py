@@ -21,4 +21,13 @@ if __name__ == "__main__":
     settings = get_settings()
     host, port = settings.app_host, settings.app_port
     logger.info("Starting C2AI Athena service on %s:%s", host, port)
-    uvicorn.run(app=app, host=host, port=port, access_log=False)
+    uvicorn.run(
+        app=app,
+        host=host,
+        port=port,
+        access_log=False,
+        # The client address used for login throttling comes from
+        # X-Forwarded-For only when the request arrives through these proxies.
+        proxy_headers=True,
+        forwarded_allow_ips=settings.forwarded_allow_ips,
+    )

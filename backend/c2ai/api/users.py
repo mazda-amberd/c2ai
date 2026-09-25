@@ -12,7 +12,14 @@ import logging
 from fastapi import APIRouter, Depends, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token, require_admin
+from c2ai.auth.cookie import set_auth_cookie
+from c2ai.auth.jwt import (
+    AthenaTokenUser,
+    default_token_ttl_seconds,
+    get_current_user_token,
+    issue_session_token,
+    require_admin,
+)
 from c2ai.core.exceptions import (
     CannotDeleteLastAdminUser,
     CannotUpdateLastAdminToUser,
@@ -150,10 +157,15 @@ async def update_existing_user(
 )
 async def update_user_password(
     payload: schemas_user.UpdatePasswordPayload,
+    response: Response,
     current_user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(get_db_session),
 ):
-    """Change the caller's own password and clear ``needs_password_reset``."""
+    """Change the caller's own password and clear ``needs_password_reset``.
+
+    Every other session of the account is signed out; this browser gets a
+    fresh session cookie so it stays signed in.
+    """
 
     user = await crud_user.get_user_by_identifier(db, current_user.identifier)
     if not user:
@@ -168,6 +180,8 @@ async def update_user_password(
         needs_password_reset=False,
         updated_by=current_user.identifier,
     )
+    ttl_seconds = default_token_ttl_seconds()
+    set_auth_cookie(response, issue_session_token(user, ttl_seconds=ttl_seconds), max_age=ttl_seconds)
     logger.info("Password updated by '%s'.", current_user.identifier)
     return {"message": "Password updated successfully."}
 

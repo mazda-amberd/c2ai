@@ -3,7 +3,6 @@ terminate, progress callbacks, and history."""
 
 from __future__ import annotations
 
-import hmac
 import logging
 from typing import Annotated
 from uuid import UUID
@@ -14,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from c2ai.api.registered_applications import clients
 from c2ai.api.registered_applications.clients import PREFIX, TAGS
 from c2ai.auth.jwt import AthenaTokenUser, require_admin
-from c2ai.config import get_settings
 from c2ai.constants.registered_application import (
     ApplicationType,
     DeploymentInstanceStatus,
@@ -30,11 +28,11 @@ from c2ai.core.exceptions import (
     DeploymentUpgradeNotSupported,
     RegisteredApplicationNotFound,
     ServiceUnavailableError,
-    UnauthorizedError,
     UnprocessableEntityError,
 )
 from c2ai.db.session import get_db_session as db_session
 from c2ai.deployments import repository as instances
+from c2ai.deployments.callbacks import verify_callback
 from c2ai.deployments.configuration import (
     build_container_deployment_configuration,
     build_deployment_configuration,
@@ -68,24 +66,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix=PREFIX, tags=TAGS)
 
 
-def _require_deployment_callback_token(
-    callback_token: str | None = Header(
-        default=None,
-        alias="X-Athena-Deployment-Token",
-    ),
+async def _require_deployment_callback_token(
+    deployment_id: UUID,
+    callback_token: str | None = Header(default=None, alias="X-Athena-Deployment-Token"),
+    db: AsyncSession = Depends(db_session),
 ) -> None:
-    """Authenticate progress callbacks from the external deployment pipeline."""
+    """Authenticate a pipeline callback for the deployment's open operation."""
 
-    expected_token = get_settings().deployment_callback_token
-    if not expected_token:
-        raise ServiceUnavailableError(
-            "Deployment progress callbacks are not configured."
-        )
-    if not callback_token or not hmac.compare_digest(callback_token, expected_token):
-        raise UnauthorizedError(
-            "Invalid deployment callback token.",
-            code="InvalidDeploymentCallbackToken",
-        )
+    await verify_callback(db, deployment_id, callback_token)
 
 
 def _deployment_out(

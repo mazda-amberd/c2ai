@@ -46,7 +46,11 @@ async def app_exception_handler(request: Request, exc: AppException):
         JSONResponse: Formatted error response.
     """
     logger.warning("AppException: %s %s", exc.code, exc.detail)
-    return JSONResponse(status_code=exc.status_code, content=_json_error(exc.detail, exc.code))
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=_json_error(exc.detail, exc.code),
+        headers=getattr(exc, "headers", None),
+    )
 
 
 async def http_exception_handler(request: Request, exc: StarletteHTTPException):

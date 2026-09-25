@@ -28,6 +28,7 @@ from c2ai.schemas.github_connection import (
     GitHubConnectionCreate,
     GitHubConnectionOut,
 )
+from c2ai.security import crypto
 
 
 @pytest.fixture
@@ -93,7 +94,7 @@ def test_connection_url_requires_an_owner():
 
 
 @pytest.mark.asyncio
-async def test_create_encrypts_token_with_pgcrypto(monkeypatch):
+async def test_create_encrypts_token_in_the_application(monkeypatch):
     monkeypatch.setenv("ATHENA_CREDENTIAL_ENCRYPTION_KEY", "encryption-key")
     db = MagicMock()
     db.add = MagicMock()
@@ -114,8 +115,10 @@ async def test_create_encrypts_token_with_pgcrypto(monkeypatch):
     assert isinstance(connection, GitHubConnection)
     assert connection.display_name == "Amberd DevOps"
     assert connection.connection_url == "https://github.com/amberd-ai/devops"
-    assert not isinstance(connection.access_token_encrypted, bytes)
-    assert "github_pat_secret" not in str(connection.access_token_encrypted)
+    blob = connection.access_token_encrypted
+    assert crypto.key_id(blob) == crypto.DERIVED_KEY_ID
+    assert b"github_pat_secret" not in blob
+    assert crypto.decrypt(blob, column=crypto.GITHUB_TOKEN) == "github_pat_secret"
     db.add.assert_called_once_with(connection)
     db.commit.assert_awaited_once()
 
@@ -141,7 +144,7 @@ async def test_resolve_decrypts_managed_token_and_selects_api_url(monkeypatch):
     result = MagicMock()
     result.one_or_none.return_value = (
         "https://github.enterprise.example/platform",
-        "github_pat_secret",
+        crypto.encrypt("github_pat_secret", column=crypto.GITHUB_TOKEN),
     )
     db = MagicMock()
     db.execute = AsyncMock(return_value=result)

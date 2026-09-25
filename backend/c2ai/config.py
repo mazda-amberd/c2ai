@@ -64,6 +64,19 @@ class Settings(BaseSettings):
     credential_encryption_key: str = Field(
         "", validation_alias="ATHENA_CREDENTIAL_ENCRYPTION_KEY"
     )
+    # "kid:base64-32-byte-key,..." — the first key encrypts, all decrypt.
+    encryption_keys: str = Field("", validation_alias="C2AI_ENCRYPTION_KEYS")
+    login_max_failures_per_account: int = Field(
+        5, ge=1, validation_alias="C2AI_LOGIN_MAX_FAILURES_PER_ACCOUNT"
+    )
+    login_max_failures_per_client: int = Field(
+        20, ge=1, validation_alias="C2AI_LOGIN_MAX_FAILURES_PER_CLIENT"
+    )
+    login_failure_window_seconds: int = Field(
+        900, ge=60, validation_alias="C2AI_LOGIN_FAILURE_WINDOW_SECONDS"
+    )
+    # Proxies whose X-Forwarded-For is trusted for the client address.
+    forwarded_allow_ips: str = Field("127.0.0.1", validation_alias="C2AI_FORWARDED_ALLOW_IPS")
 
     # --- Passwords and identifiers ----------------------------------------
     password_prefix: str = Field("", validation_alias="PASSWORD_PREFIX")
@@ -107,6 +120,15 @@ class Settings(BaseSettings):
         "https://athena.amberd.ai", validation_alias="ATHENA_CALLBACK_BASE_URL"
     )
     deployment_callback_token: str = Field("", validation_alias="DEPLOYMENT_CALLBACK_TOKEN")
+    callback_accept_shared_token: bool = Field(
+        True, validation_alias="C2AI_CALLBACK_ACCEPT_SHARED_TOKEN"
+    )
+    # Send callback_token to the container update/terminate workflows. They
+    # use workflow_dispatch, which rejects inputs a workflow does not declare,
+    # so enable this once the workflows declare it.
+    container_workflows_accept_callback_token: bool = Field(
+        False, validation_alias="CONTAINER_WORKFLOWS_ACCEPT_CALLBACK_TOKEN"
+    )
     instance_domain: str = Field("amberd.ai", validation_alias="ATHENA_INSTANCE_DOMAIN")
 
     # --- Container registries and secrets ---------------------------------
@@ -246,6 +268,13 @@ def check_startup_settings(settings: Settings | None = None) -> None:
         )
         if not value.strip()
     ]
+    if settings.encryption_keys.strip():
+        from c2ai.security.crypto import parse_keys
+
+        try:
+            parse_keys(settings.encryption_keys)
+        except ValueError as error:
+            raise RuntimeError(f"C2AI_ENCRYPTION_KEYS: {error}") from error
     if missing:
         raise RuntimeError(
             "Missing required configuration: " + ", ".join(missing) + ". See backend/.env.example."

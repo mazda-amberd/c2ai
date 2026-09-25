@@ -35,11 +35,11 @@ from c2ai.models.registered_application import (
     RegisteredApplication,
     RegisteredApplicationVersion,
 )
-from c2ai.registration.credentials import credential_encryption_key
 from c2ai.schemas.registered_application import (
     ContainerRegisteredApplicationCreate,
     GitHubRegisteredApplicationCreate,
 )
+from c2ai.security import crypto
 
 logger = logging.getLogger(__name__)
 
@@ -141,10 +141,8 @@ async def create_github_registered_application(
     )
     application_version.llm_configuration = ApplicationLLMConfiguration(
         endpoint=payload.llm.endpoint,
-        api_token_encrypted=func.pgp_sym_encrypt(
-            payload.llm.api_token.get_secret_value(),
-            credential_encryption_key(),
-            "cipher-algo=aes256",
+        api_token_encrypted=crypto.encrypt(
+            payload.llm.api_token.get_secret_value(), column=crypto.LLM_API_TOKEN
         ),
         model_name=payload.llm.model_name,
     )
@@ -200,10 +198,9 @@ async def create_container_registered_application(
         registry=payload.container.registry,
         registry_credential_id=None,
         registry_username=payload.container.registry_username,
-        registry_password_encrypted=func.pgp_sym_encrypt(
+        registry_password_encrypted=crypto.encrypt(
             payload.container.registry_password.get_secret_value(),
-            credential_encryption_key(),
-            "cipher-algo=aes256",
+            column=crypto.REGISTRY_PASSWORD,
         ),
         image_repository=payload.container.image_registry,
         default_image_tag=payload.container.tag,
@@ -219,10 +216,8 @@ async def create_container_registered_application(
     )
     application_version.llm_configuration = ApplicationLLMConfiguration(
         endpoint=payload.llm.endpoint,
-        api_token_encrypted=func.pgp_sym_encrypt(
-            payload.llm.api_token.get_secret_value(),
-            credential_encryption_key(),
-            "cipher-algo=aes256",
+        api_token_encrypted=crypto.encrypt(
+            payload.llm.api_token.get_secret_value(), column=crypto.LLM_API_TOKEN
         ),
         model_name=payload.llm.model_name,
     )

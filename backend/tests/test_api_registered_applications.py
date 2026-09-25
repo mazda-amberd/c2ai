@@ -2264,3 +2264,56 @@ def test_catalog_accepts_the_frontend_sort_key(registered_applications_admin_cli
         )
     assert response.status_code == 200
     assert list_mock.await_args.kwargs["sort_by"] == "created_at"
+
+
+class TestPerOperationCallbackTokens:
+    """Pipelines authenticate with a token bound to one open operation."""
+
+    DEPLOYMENT = UUID("aaaaaaaa-0000-0000-0000-00000000c0de")
+
+    def _post(self, test_client, token):
+        return test_client.post(
+            f"/api/registered-applications/deployments/{self.DEPLOYMENT}/progress",
+            headers={"X-Athena-Deployment-Token": token},
+            json={"current_step": "applying_resources", "status": "deploying"},
+        )
+
+    def _open_operation(self, operation_id):
+        run = MagicMock()
+        run.id = operation_id
+        return patch(
+            "c2ai.deployments.operations.active_operation",
+            new_callable=AsyncMock,
+            return_value=run,
+        )
+
+    def test_token_for_another_operation_is_rejected(self, test_client, monkeypatch):
+        from c2ai.deployments.callbacks import callback_token
+
+        monkeypatch.setenv("DEPLOYMENT_CALLBACK_TOKEN", "shared-secret")
+        stale = callback_token(self.DEPLOYMENT, "previous-operation")
+        with self._open_operation("current-operation"):
+            response = self._post(test_client, stale)
+        assert response.status_code == 401
+        assert response.json()["code"] == "InvalidDeploymentCallbackToken"
+
+    def test_token_for_the_open_operation_is_accepted(self, test_client, monkeypatch):
+        from c2ai.deployments.callbacks import callback_token
+
+        monkeypatch.setenv("DEPLOYMENT_CALLBACK_TOKEN", "shared-secret")
+        token = callback_token(self.DEPLOYMENT, "current-operation")
+        with (
+            self._open_operation("current-operation"),
+            patch(
+                "c2ai.deployments.repository.update_registered_application_deployment_progress",
+                new_callable=AsyncMock,
+                side_effect=RuntimeError("authenticated"),
+            ),
+            pytest.raises(RuntimeError, match="authenticated"),
+        ):
+            self._post(test_client, token)
+
+    def test_shared_token_can_be_switched_off(self, test_client, monkeypatch):
+        monkeypatch.setenv("DEPLOYMENT_CALLBACK_TOKEN", "shared-secret")
+        monkeypatch.setenv("C2AI_CALLBACK_ACCEPT_SHARED_TOKEN", "false")
+        assert self._post(test_client, "shared-secret").status_code == 401

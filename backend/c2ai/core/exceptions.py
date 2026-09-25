@@ -35,6 +35,18 @@ class AppException(Exception):
         self.code = code or self.__class__.__name__
 
 
+class TooManyLoginAttempts(AppException):
+    """429: sign-in is paused for this account or client after repeated failures."""
+
+    def __init__(self, retry_after_seconds: int):
+        super().__init__(
+            detail="Too many failed sign-in attempts. Try again later.",
+            status_code=429,
+            code="TooManyLoginAttempts",
+        )
+        self.headers = {"Retry-After": str(retry_after_seconds)}
+
+
 class NotFoundError(AppException):
     """
     Exception for HTTP 404 Not Found errors.

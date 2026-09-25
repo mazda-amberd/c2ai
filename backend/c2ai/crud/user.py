@@ -150,9 +150,13 @@ async def update_user_password(
     needs_password_reset: bool = False,
     updated_by: str | None = None,
 ) -> User:
-    """Replace the password hash and record whether a reset is still required."""
+    """Replace the password hash and sign out every existing session of the user.
+
+    Bumping ``token_version`` invalidates all tokens issued before the change.
+    """
 
     target_user.password = _hasher.hash(new_password)
+    target_user.token_version = (target_user.token_version or 0) + 1
     if updated_by is not None:
         target_user.updated_by = updated_by
     metadata = dict(target_user.metadata_ or {})

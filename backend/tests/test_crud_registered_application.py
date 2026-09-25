@@ -43,6 +43,7 @@ from c2ai.schemas.registered_application import (
     ContainerRegisteredApplicationCreate,
     GitHubRegisteredApplicationCreate,
 )
+from c2ai.security import crypto
 
 
 def _payload() -> GitHubRegisteredApplicationCreate:
@@ -292,7 +293,10 @@ async def test_resolve_container_registry_credentials_decrypts_runtime_values(
 ):
     monkeypatch.setenv("ATHENA_CREDENTIAL_ENCRYPTION_KEY", "encryption-key")
     result = MagicMock()
-    result.one_or_none.return_value = ("amberd", "write-only-registry-password")
+    result.one_or_none.return_value = (
+        "amberd",
+        crypto.encrypt("write-only-registry-password", column=crypto.REGISTRY_PASSWORD),
+    )
     db = MagicMock()
     db.execute = AsyncMock(return_value=result)
 

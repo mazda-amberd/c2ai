@@ -25,6 +25,46 @@ _LOOKUP = "c2ai.auth.jwt.get_user_by_identifier"
 _LOGIN_LOOKUP = "c2ai.api.auth_session.get_user_by_identifier"
 
 
+class FakeSessionStore:
+    """In-memory revocation list and failure counters."""
+
+    def __init__(self):
+        self.revoked: set[str] = set()
+        self.failures: dict[str, int] = {}
+
+    async def is_token_revoked(self, _db, jti):
+        return jti in self.revoked
+
+    async def revoke_token(self, _db, jti, _expires_at):
+        self.revoked.add(jti)
+
+    async def failures_in_window(self, _db, keys, _window):
+        return {key: self.failures[key] for key in keys if key in self.failures}
+
+    async def record_failure(self, _db, keys, _window):
+        for key in keys:
+            self.failures[key] = self.failures.get(key, 0) + 1
+
+    async def clear_failures(self, _db, keys):
+        for key in keys:
+            self.failures.pop(key, None)
+
+
+@pytest.fixture(autouse=True)
+def sessions(monkeypatch):
+    from c2ai.api import auth_session
+    from c2ai.auth import jwt as jwt_module
+    from c2ai.crud import session as session_crud
+
+    store = FakeSessionStore()
+    for name in ("is_token_revoked", "revoke_token", "failures_in_window",
+                 "record_failure", "clear_failures"):
+        monkeypatch.setattr(session_crud, name, getattr(store, name))
+    monkeypatch.setattr(jwt_module, "is_token_revoked", store.is_token_revoked)
+    monkeypatch.setattr(auth_session.session_store, "is_token_revoked", store.is_token_revoked)
+    return store
+
+
 def _user(identifier: str = "alice", user_type: str = "Admin", password: str = "S3cret!pw") -> User:
     return User(
         id=uuid4(),
@@ -34,14 +74,22 @@ def _user(identifier: str = "alice", user_type: str = "Admin", password: str = "
         last_name="Admin",
         user_type=user_type.lower(),
         is_superuser=False,
+        token_version=0,
         metadata_={"role": "Executive", "needs_password_reset": False},
         created_by="system",
     )
 
 
-def _token(identifier: str = "alice", metadata: dict | None = None, ttl: int = 3600) -> str:
+def _token(
+    identifier: str = "alice", metadata: dict | None = None, ttl: int = 3600, tv: int = 0
+) -> str:
     return create_jwt(
-        payload={"identifier": identifier, "service": "athena", "metadata": metadata or {}},
+        payload={
+            "identifier": identifier,
+            "service": "athena",
+            "metadata": metadata or {},
+            "tv": tv,
+        },
         expires_in=timedelta(seconds=ttl),
     )
 
@@ -171,3 +219,45 @@ class TestLogin:
         response = test_client.post("/auth/logout")
         assert response.status_code == 200
         assert "access_token=" in response.headers["set-cookie"]
+
+    def test_logout_revokes_the_token(self, test_client, sessions):
+        token = _token()
+        with patch(_LOOKUP, new_callable=AsyncMock, return_value=_user()):
+            assert test_client.get("/auth/whoami", headers=_auth(token)).status_code == 200
+            test_client.post("/auth/logout", headers=_auth(token))
+            response = test_client.get("/auth/whoami", headers=_auth(token))
+        assert response.status_code == 401
+        assert len(sessions.revoked) == 1
+
+    def test_tokens_from_before_a_password_change_are_rejected(self, test_client):
+        user = _user()
+        old = _token(tv=0)
+        user.token_version = 1  # password changed since the token was issued
+        with patch(_LOOKUP, new_callable=AsyncMock, return_value=user):
+            assert test_client.get("/auth/whoami", headers=_auth(old)).status_code == 401
+            assert test_client.get("/auth/whoami", headers=_auth(_token(tv=1))).status_code == 200
+
+    def test_repeated_failures_pause_sign_in(self, test_client, monkeypatch, sessions):
+        monkeypatch.setenv("C2AI_LOGIN_MAX_FAILURES_PER_ACCOUNT", "3")
+        with patch(_LOGIN_LOOKUP, new_callable=AsyncMock, return_value=_user()):
+            for _ in range(3):
+                bad = test_client.post(
+                    "/auth/login", json={"identifier": "alice", "password": "wrong"}
+                )
+                assert bad.status_code == 401
+            blocked = test_client.post(
+                "/auth/login", json={"identifier": "alice", "password": "S3cret!pw"}
+            )
+        assert blocked.status_code == 429
+        assert blocked.json()["code"] == "TooManyLoginAttempts"
+        assert int(blocked.headers["Retry-After"]) > 0
+
+    def test_success_resets_the_account_counter(self, test_client, sessions):
+        with patch(_LOGIN_LOOKUP, new_callable=AsyncMock, return_value=_user()):
+            test_client.post("/auth/login", json={"identifier": "alice", "password": "wrong"})
+            ok = test_client.post(
+                "/auth/login", json={"identifier": "alice", "password": "S3cret!pw"}
+            )
+        assert ok.status_code == 200
+        assert "account:alice" not in sessions.failures
+        assert sessions.failures["client:testclient"] == 1

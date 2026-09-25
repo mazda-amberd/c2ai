@@ -4,7 +4,7 @@
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.sql import func
 
@@ -54,6 +54,9 @@ class User(Base):
 
     user_type = Column(String, nullable=False, default=USER)
     is_superuser = Column(Boolean, nullable=False, default=False)
+    # Tokens issued before the latest password change/reset carry a lower
+    # version and are rejected.
+    token_version = Column(Integer, nullable=False, default=0)
 
     metadata_ = Column("metadata", JSONB, nullable=False)
 
