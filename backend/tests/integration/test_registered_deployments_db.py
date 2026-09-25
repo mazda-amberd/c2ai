@@ -15,7 +15,6 @@ from c2ai.app import app
 from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token, require_admin
 from c2ai.clients.container_registry import ContainerRegistryTag
 from c2ai.config import get_settings
-from c2ai.constants.registered_application import ADA_APPLICATION_ID
 from c2ai.core.exceptions import ContainerImageTagNotFound
 from c2ai.db.session import get_db_session
 from c2ai.deployments import operations, repository as instances
@@ -616,14 +615,10 @@ async def test_an_edit_waits_until_nothing_of_the_template_is_live(env, monkeypa
     assert edited.json()["version"] == 2
 
 
-async def test_an_edit_keeps_the_type_and_a_free_name_and_leaves_ada_alone(env):
+async def test_an_edit_keeps_the_type_and_needs_a_free_name(env):
     client, _github, _registry, _sf = env
     application_id = _register_github(client)
     _register_container(client)
-
-    ada = client.put(f"{BASE}/{ADA_APPLICATION_ID}", json=_github_edit(name="ADA"))
-    assert (ada.status_code, ada.json()["code"]) == (409, "BuiltInApplicationNotEditable")
-    assert _catalog_entry(client, str(ADA_APPLICATION_ID))["can_edit"] is False
 
     other_type = client.put(f"{BASE}/{application_id}", json=_container_edit())
     assert (other_type.status_code, other_type.json()["code"]) == (

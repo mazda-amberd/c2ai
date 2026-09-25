@@ -3,8 +3,8 @@
 The tier pages still speak the original ``/api/deploy*`` contract (instances
 addressed by subdomain, a free-form branch). These functions translate it onto
 the one deployment model: ADA is a registered GitHub Workflow application
-(seeded by migration 0023, repository and ref kept in sync with settings), and
-each subdomain is a ``deployment_instances`` row with an operation log.
+(seeded by migration 0023, and edited or deleted like any other), and each
+subdomain is a ``deployment_instances`` row with an operation log.
 
 An instance that runs in the cluster but that Athena never deployed (it only
 shows up in the Grafana inventory) is adopted as an ADA instance the first
@@ -47,7 +47,6 @@ from c2ai.models.pipeline_run import PipelineRun
 from c2ai.models.registered_application import (
     DeploymentInstance,
     DeploymentInstanceEvent,
-    GitHubApplicationConfiguration,
     RegisteredApplicationVersion,
 )
 from c2ai.registration import repository as applications
@@ -56,7 +55,6 @@ from c2ai.schemas.registered_application import RegisteredApplicationDeploymentC
 
 logger = logging.getLogger(__name__)
 
-ADA_WORKFLOW_PATH = ".github/workflows/ada-deploy.yaml"
 # With a fresh Grafana inventory, an unknown instance really does not exist;
 # with a stale one the check is advisory.
 _INVENTORY_STALE_AFTER = timedelta(minutes=10)
@@ -68,26 +66,14 @@ _INVENTORY_STALE_AFTER = timedelta(minutes=10)
 
 
 async def ada_version(db: AsyncSession) -> RegisteredApplicationVersion:
-    """ADA's current version, with its GitHub settings synced from configuration."""
+    """ADA's current version, as registered (and perhaps edited) in the catalog."""
 
     version = await applications.get_current_registered_application_version(db, ADA_APPLICATION_ID)
     if version is None or version.github_configuration is None:
         raise ServiceUnavailableError(
-            "The ADA application is not registered. Run `python -m c2ai.db.migrate`."
+            "ADA is not in Registered Applications (it has been deleted), so the tier "
+            "pages cannot deploy, update, move or terminate ADA instances."
         )
-    settings = get_settings()
-    wanted = {
-        "repository": f"{settings.github_repo_owner}/{settings.github_repo_name}",
-        "code_repository": f"{settings.github_repo_owner}/{settings.deploy_source_repo}",
-        "ref": settings.devops_branch,
-        "workflow_file_path": ADA_WORKFLOW_PATH,
-    }
-    config: GitHubApplicationConfiguration = version.github_configuration
-    if any(getattr(config, key) != value for key, value in wanted.items()):
-        for key, value in wanted.items():
-            setattr(config, key, value)
-        db.add(config)
-        await db.flush()
     return version
 
 

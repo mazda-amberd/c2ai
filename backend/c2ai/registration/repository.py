@@ -18,13 +18,11 @@ from sqlalchemy.orm import aliased, joinedload, selectinload
 
 from c2ai.constants.registered_application import (
     ACTIVE_DEPLOYMENT_INSTANCE_STATUSES,
-    ADA_APPLICATION_ID,
     ApplicationStatus,
     ApplicationType,
     ParameterType,
 )
 from c2ai.core.exceptions import (
-    BuiltInApplicationNotEditable,
     DuplicateRegisteredApplication,
     RegisteredApplicationHasManagedSecrets,
     RegisteredApplicationHasRunningInstances,
@@ -76,9 +74,9 @@ class RegisteredApplicationCatalogRecord:
 
     @property
     def can_edit(self) -> bool:
-        """An edit waits until nothing of the template is deployed; ADA is never edited here."""
+        """An edit waits until nothing of the template is deployed."""
 
-        return self.total_deployed_instances == 0 and self.application.id != ADA_APPLICATION_ID
+        return self.total_deployed_instances == 0
 
 
 @dataclass(frozen=True)
@@ -354,10 +352,6 @@ async def update_registered_application(
     """
 
     application = await _locked_application(db, application_id)
-    # ADA's workflow settings are synced from configuration, and the tier
-    # pages deploy it with fixed parameters.
-    if application.id == ADA_APPLICATION_ID:
-        raise BuiltInApplicationNotEditable(application.name)
     if payload.application_type.value != application.application_type:
         raise UnprocessableEntityError(
             "An application's type cannot be changed. Register a new application instead.",

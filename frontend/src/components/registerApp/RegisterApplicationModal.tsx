@@ -580,6 +580,10 @@ export default function RegisterApplicationModal({
   });
   // Whether the template already has an LLM token, which a blank field keeps.
   const [storedLlmToken, setStoredLlmToken] = useState(false);
+  /* A saved template may name a connection that is not a saved one (ADA's
+   * "athena-environment"): its deploys use the server's own GitHub token.
+   * It stays an option, so an edit need not change it. */
+  const [unsavedConnection, setUnsavedConnection] = useState<string | null>(null);
   const editingId = editing?.id;
 
   const githubFormApi = useForm<GithubFormValues>({
@@ -652,8 +656,17 @@ export default function RegisterApplicationModal({
         if (cancelled) return;
         setConnections(saved);
         const { kind: savedKind, ...values } = registrationFromDetail(detail);
-        if (savedKind === "github") githubFormApi.reset(values as GithubFormValues);
-        else containerFormApi.reset(values as ContainerFormValues);
+        // A template saved without LLM settings starts from the house ones,
+        // as a new registration does.
+        if (detail.llm === null) Object.assign(values, DEFAULT_LLM);
+        if (savedKind === "github") {
+          const github = values as GithubFormValues;
+          githubFormApi.reset(github);
+          const known = saved.some((c) => c.id === github.connectionId);
+          setUnsavedConnection(github.connectionId && !known ? github.connectionId : null);
+        } else {
+          containerFormApi.reset(values as ContainerFormValues);
+        }
         setKind(savedKind);
         setStepIndex(0);
         setStoredLlmToken(detail.llm !== null);
@@ -703,6 +716,7 @@ export default function RegisterApplicationModal({
     setValidation({ status: "idle", message: "" });
     setEdit({ status: "ready", message: "" });
     setStoredLlmToken(false);
+    setUnsavedConnection(null);
   };
 
   const handleClose = (next: boolean) => {
@@ -894,6 +908,7 @@ export default function RegisterApplicationModal({
   const selectedConnection = connections.find(
     (c) => c.id === githubForm.connectionId,
   );
+
   const StepIcon = step.icon === "github" ? Github : Box;
 
   return (
@@ -1014,6 +1029,11 @@ export default function RegisterApplicationModal({
               <Field label="GitHub Connection" required>
                 <Select {...githubFormApi.register("connectionId")}>
                   <option value="">Select a connection…</option>
+                  {unsavedConnection && (
+                    <option value={unsavedConnection}>
+                      C2AI server's GitHub token ({unsavedConnection})
+                    </option>
+                  )}
                   {connections.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.name}

@@ -102,17 +102,11 @@ export default function RegisteredApplications() {
    *  says why instead. */
   const handleEditClick = (e: React.MouseEvent, app: RegisteredApp) => {
     e.stopPropagation();
-    if (app.instances > 0) {
+    if (!app.canEdit) {
       showToast(
         `Can't edit '${app.name}' while it's deployed — terminate its ${app.instances} instance${
           app.instances === 1 ? "" : "s"
         } first.`,
-      );
-      return;
-    }
-    if (!app.canEdit) {
-      showToast(
-        `'${app.name}' is C2AI's built-in application — its settings come from C2AI's configuration.`,
       );
       return;
     }
@@ -386,11 +380,9 @@ export default function RegisteredApplications() {
                               aria-disabled={!app.canEdit}
                               aria-label={`Edit ${app.name}`}
                               title={
-                                app.instances > 0
-                                  ? "Terminate its deployed instances to edit it"
-                                  : app.canEdit
-                                    ? "Edit application"
-                                    : "C2AI's built-in application can't be edited"
+                                app.canEdit
+                                  ? "Edit application"
+                                  : "Terminate its deployed instances to edit it"
                               }
                               onClick={(e) => handleEditClick(e, app)}
                               className={`grid h-7 w-7 place-items-center rounded-[6px] transition-colors ${

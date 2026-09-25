@@ -18,6 +18,7 @@ from sqlalchemy import text
 
 from c2ai.app import app
 from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token, require_admin
+from c2ai.constants.registered_application import ADA_APPLICATION_ID
 from c2ai.db.session import get_db_session
 from c2ai.jobs import PostgresJobStore, get_job_store
 from c2ai.jobs.handlers.deployments import track_open_operations
@@ -42,6 +43,8 @@ class FakeGitHub:
     def __init__(self):
         self.refs = {"main", "release-2"}
         self.dispatches: list[tuple[str, dict]] = []
+        # The ref each workflow_dispatch ran on, in order
+        self.dispatch_refs: list[str] = []
         # repository_dispatch events: (event_type, client_payload)
         self.events: list[tuple[str, dict]] = []
         # Authorization header of every dispatch, in order
@@ -81,6 +84,7 @@ class FakeGitHub:
                 return httpx.Response(422, json={"message": "Unexpected inputs"})
             body = json.loads(request.content)
             self.dispatches.append((rest[2], body["inputs"]))
+            self.dispatch_refs.append(body["ref"])
             self.dispatch_auth.append(request.headers.get("Authorization", ""))
             run_id = next(self._ids)
             now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -220,6 +224,91 @@ async def test_ada_deploy_is_a_registered_deployment_with_legacy_inputs(client, 
     assert (await _instance_rows(session_factory))[0][2] == "running"
     history = client.get("/api/pipeline/history", params={"subdomain": SUBDOMAIN}).json()
     assert [h["ended_at"] is not None for h in history] == [True]
+
+
+@pytest.fixture
+async def ada_restored(session_factory):
+    """ADA as migration 0023 left it, afterwards: this module shares one database."""
+
+    async with session_factory() as session:
+        name = (
+            await session.execute(
+                text("SELECT name FROM registered_applications WHERE id = :id"),
+                {"id": ADA_APPLICATION_ID},
+            )
+        ).scalar_one()
+    yield
+    async with session_factory() as session:
+        await session.execute(
+            text(
+                "TRUNCATE pipeline_runs, deployment_instance_events, deployment_instances CASCADE"
+            )
+        )
+        await session.execute(
+            text(
+                "UPDATE registered_applications SET name = :name, current_version = 1,"
+                " deleted_at = NULL, updated_by = NULL WHERE id = :id"
+            ),
+            {"id": ADA_APPLICATION_ID, "name": name},
+        )
+        await session.execute(
+            text(
+                "DELETE FROM registered_application_versions"
+                " WHERE application_id = :id AND version > 1"
+            ),
+            {"id": ADA_APPLICATION_ID},
+        )
+        await session.commit()
+
+
+async def test_ada_is_edited_and_deleted_like_any_other_template(
+    client, github, session_factory, ada_restored, monkeypatch
+):
+    monkeypatch.setenv("ATHENA_CREDENTIAL_ENCRYPTION_KEY", "test passphrase")  # the LLM token
+    url = f"/api/registered-applications/{ADA_APPLICATION_ID}"
+    ada = client.get(url).json()
+    assert ada["github"]["github_connection"] == "athena-environment"
+    edit = {
+        "application_type": "github_workflow",
+        "name": ada["name"],
+        "description": "ADA, edited",
+        "github": {
+            **ada["github"],
+            "ref": "release-2",
+            "workflow_file_path": ".github/workflows/ada-deploy-v2.yaml",
+        },
+        "parameters": ada["parameters"],
+        # ADA was seeded without LLM settings, so an edit gives it some.
+        "llm": {
+            "endpoint": "http://amberd-llm-gateway:8010",
+            "api_token": "EMPTY",
+            "model_name": "qwen3-coder-next",
+        },
+    }
+    edited = client.put(url, json=edit)
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["version"] == 2
+
+    # The tier pages deploy ADA as edited: configuration no longer overrides it.
+    deployed = client.post("/api/deploy", json=DEPLOY_BODY)
+    assert deployed.status_code == 201, deployed.text
+    workflow, inputs = github.dispatches[-1]
+    assert (workflow, github.dispatch_refs[-1]) == ("ada-deploy-v2.yaml", "release-2")
+    assert (inputs["customer_name"], inputs["branch"]) == ("acme", "main")
+    assert client.get(url).json()["github"]["ref"] == "release-2"
+
+    # Deleted while it runs: refused, like any template.
+    assert client.delete(url).status_code == 409
+    github.finish(github.last_run_id(), "failure")
+    await _track(session_factory)
+    assert client.delete(url).status_code == 204
+
+    refused = client.post(
+        "/api/deploy",
+        json={**DEPLOY_BODY, "subdomain": "amberd-beta-ada", "customer_name": "beta"},
+    )
+    assert refused.status_code == 503
+    assert "has been deleted" in refused.json()["detail"]
 
 
 async def test_unknown_branch_is_rejected_before_anything_is_written(client, session_factory):

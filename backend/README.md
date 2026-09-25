@@ -157,7 +157,7 @@ demoted or deleted.
 
 **What each role can do.** A **User** sees what runs on the tiers (and what
 is being deployed), browses Registered Applications read-only, reads
-application and cluster metrics, costs and logs, and runs troubleshooting. Only an **Admin** creates or deletes application
+application and cluster metrics, costs and logs, and runs troubleshooting. Only an **Admin** creates, edits or deletes application
 templates (Registered Applications), deploys, updates, moves, terminates or
 cancels, manages GitHub connections and secrets, and manages people. The
 interface hides those controls from Users; the API refuses them with 403.
@@ -326,9 +326,11 @@ deployed instance is a `deployment_instances` row. `c2ai/deployments/`:
   operation's run snapshot; `/api/pipeline/*` and the deployment detail only
   read it, so browsers never cause GitHub calls.
 * `ada.py` — ADA is a seeded GitHub Workflow application (id
-  `ada00000-0000-4000-8000-000000000001`, repository/ref from settings); the
-  tier pages' `/api/deploy*` routes map onto it. An instance that runs in the
-  cluster but was never deployed through C2AI is adopted on first use.
+  `ada00000-0000-4000-8000-000000000001`), edited and deleted in Registered
+  Applications like any other; the tier pages' `/api/deploy*` routes map onto
+  its current version, and stop working if it is deleted. An instance that
+  runs in the cluster but was never deployed through C2AI is adopted on first
+  use.
 
 ## Tier-page deployment API (ADA)
 

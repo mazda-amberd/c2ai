@@ -425,20 +425,6 @@ class RegisteredApplicationHasRunningInstances(ConflictError):
         )
 
 
-class BuiltInApplicationNotEditable(ConflictError):
-    """Raised when editing ADA, whose settings come from C2AI's configuration."""
-
-    def __init__(self, name: str):
-        super().__init__(
-            detail=(
-                f"'{name}' is C2AI's built-in application: its workflow settings come "
-                "from C2AI's configuration and the tier pages deploy it with fixed "
-                "parameters, so it cannot be edited here."
-            ),
-            code="BuiltInApplicationNotEditable",
-        )
-
-
 class RegisteredApplicationHasManagedSecrets(ConflictError):
     """Raised when deleting a template would orphan provider-held secrets."""
 

@@ -161,4 +161,76 @@ describe("RegisterApplicationModal", () => {
     expect(await screen.findByText('"chat-service" saved as version 4.')).toBeTruthy();
     expect(saved).toHaveBeenCalledOnce();
   });
+
+  it("edits ADA: its server-token connection stays, and it gets the house LLM settings", async () => {
+    vi.spyOn(registeredApplicationsApi, "getRegisteredApplication").mockResolvedValue({
+      id: "ada",
+      name: "ADA",
+      description: "Amberd ADA",
+      status: "active",
+      version: 1,
+      created_by: "system",
+      created_at: "2026-09-24T00:00:00Z",
+      application_type: "github_workflow",
+      github: {
+        github_connection: "athena-environment",
+        trigger_method: "workflow_dispatch",
+        repository: "amberd-ai/devops",
+        code_repository: "amberd-ai/dealership_new",
+        workflow_file_path: ".github/workflows/ada-deploy.yaml",
+        ref: "main",
+      },
+      parameters: [{ key: "customer_name", type: "text" }],
+      llm: null,
+    });
+    const update = vi
+      .spyOn(registeredApplicationsApi, "updateRegisteredApplication")
+      .mockResolvedValue({ version: 2 } as Awaited<
+        ReturnType<typeof registeredApplicationsApi.updateRegisteredApplication>
+      >);
+    const editing = {
+      id: "ada",
+      name: "ADA",
+      desc: "Amberd ADA",
+      type: "github" as const,
+      status: "active" as const,
+      version: 1,
+      instances: 0,
+      tiers: {},
+      canDelete: true,
+      canEdit: true,
+      created: "2026-09-24",
+    };
+    render(
+      <ToastProvider>
+        <RegisterApplicationModal open onOpenChange={() => {}} editing={editing} />
+      </ToastProvider>,
+    );
+
+    expect(await screen.findByDisplayValue("ADA")).toBeTruthy();
+    next(); // -> workflow
+    const connection = field("GitHub Connection") as HTMLSelectElement;
+    expect(connection.value).toBe("athena-environment");
+    expect(
+      screen.getByRole("option", { name: "C2AI server's GitHub token (athena-environment)" }),
+    ).toBeTruthy();
+    // Picking a saved connection and back again is possible.
+    fireEvent.change(connection, { target: { value: "c-1" } });
+    fireEvent.change(connection, { target: { value: "athena-environment" } });
+    fireEvent.change(field("Branch / Ref"), { target: { value: "release-2" } });
+    next(); // -> params
+    next(); // -> llm
+    expect(field("LLM Endpoint").value).toBe("http://amberd-llm-gateway:8010");
+    expect(field("LLM API Token").value).toBe("EMPTY");
+    fireEvent.click(screen.getByRole("button", { name: /Save Changes/ }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    const payload = update.mock.calls[0][1] as registeredApplicationsApi.RegisterGithubApplicationPayload;
+    expect(payload.github).toMatchObject({ github_connection: "athena-environment", ref: "release-2" });
+    expect(payload.llm).toEqual({
+      endpoint: "http://amberd-llm-gateway:8010",
+      api_token: "EMPTY",
+      model_name: "qwen3-coder-next",
+    });
+  });
 });

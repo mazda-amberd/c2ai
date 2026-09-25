@@ -29,7 +29,7 @@ const row = (overrides: Partial<RegisteredApp>): RegisteredApp => ({
 
 const IDLE = row({});
 const LIVE = row({ id: "app-2", name: "billing", instances: 2, tiers: { "Tier 1": 2 }, canEdit: false });
-const ADA = row({ id: "ada", name: "ADA", type: "github", canEdit: false });
+const ADA = row({ id: "ada", name: "ADA", type: "github" });
 
 async function visit(role: "Admin" | "User") {
   signInAs(role);
@@ -58,15 +58,17 @@ describe("editing a registered application", () => {
     expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
   });
 
-  it("opens the wizard on a template with nothing deployed", async () => {
+  it("opens the wizard on a template with nothing deployed, ADA included", async () => {
     const detail = vi
       .spyOn(registeredApplicationsApi, "getRegisteredApplication")
       .mockReturnValue(new Promise(() => {}));
     await visit("Admin");
 
-    expect(screen.getByRole("button", { name: "Edit chat-service" }).getAttribute("aria-disabled")).toBe(
-      "false",
-    );
+    for (const name of ["chat-service", "ADA"]) {
+      expect(screen.getByRole("button", { name: `Edit ${name}` }).getAttribute("aria-disabled")).toBe(
+        "false",
+      );
+    }
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Edit chat-service" }));
     });
@@ -74,7 +76,7 @@ describe("editing a registered application", () => {
     expect(detail).toHaveBeenCalledWith("app-1");
   });
 
-  it("says why a deployed template, or ADA, cannot be edited", async () => {
+  it("says why a deployed template cannot be edited", async () => {
     const detail = vi.spyOn(registeredApplicationsApi, "getRegisteredApplication");
     await visit("Admin");
 
@@ -84,9 +86,6 @@ describe("editing a registered application", () => {
     expect(
       await screen.findByText("Can't edit 'billing' while it's deployed — terminate its 2 instances first."),
     ).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: "Edit ADA" }));
-    expect(await screen.findByText(/'ADA' is C2AI's built-in application/)).toBeTruthy();
     await waitFor(() => expect(detail).not.toHaveBeenCalled());
   });
 });
