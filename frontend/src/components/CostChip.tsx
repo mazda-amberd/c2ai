@@ -6,21 +6,33 @@ import { Calendar, type DateRange } from "@ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@ui/popover";
 import CostAmount from "@components/CostAmount";
 import {
+  fromLocalIsoDate,
   isCostAvailable,
+  toLocalIsoDate as toIso,
   useFinanceFilter,
   type CostValue,
   type FinanceFilter,
 } from "@/utils/financeApi";
 
-function toIso(date: Date): string {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+function startOfToday(): Date {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
-function toRange(filter: FinanceFilter): DateRange {
-  return { from: new Date(filter.start), to: new Date(filter.end) };
+/** Costs only exist up to today, so no date may be later than it. */
+function notAfter(date: Date | undefined, today: Date): Date | undefined {
+  return date && date > today ? today : date;
+}
+
+function toRange(filter: FinanceFilter, today: Date): DateRange {
+  return {
+    from: notAfter(fromLocalIsoDate(filter.start), today),
+    to: notAfter(fromLocalIsoDate(filter.end), today),
+  };
+}
+
+function earlier(a: Date | undefined, b: Date): Date {
+  return a && a < b ? a : b;
 }
 
 type Props = {
@@ -34,12 +46,20 @@ type Props = {
 export default function CostChip({ cost }: Props) {
   const [filter, setFilter] = useFinanceFilter();
   const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState<DateRange>(() => toRange(filter));
+  const [today, setToday] = useState(startOfToday);
+  const [draft, setDraft] = useState<DateRange>(() => toRange(filter, today));
 
   const handleOpenChange = (next: boolean) => {
-    if (next) setDraft(toRange(filter));
+    if (next) {
+      // The page may have stayed open past midnight.
+      const now = startOfToday();
+      setToday(now);
+      setDraft(toRange(filter, now));
+    }
     setOpen(next);
   };
+
+  const typedDate = (value: string) => (value ? notAfter(fromLocalIsoDate(value), today) : undefined);
 
   const applyDisabled = !draft.from || !draft.to;
 
@@ -86,13 +106,8 @@ export default function CostChip({ cost }: Props) {
                 type="date"
                 aria-label="Start date"
                 value={draft.from ? toIso(draft.from) : ""}
-                max={draft.to ? toIso(draft.to) : undefined}
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    from: e.target.value ? new Date(e.target.value) : undefined,
-                  })
-                }
+                max={toIso(earlier(draft.to, today))}
+                onChange={(e) => setDraft({ ...draft, from: typedDate(e.target.value) })}
                 className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm [color-scheme:dark]"
               />
               <span className="text-muted-foreground">–</span>
@@ -101,18 +116,15 @@ export default function CostChip({ cost }: Props) {
                 aria-label="End date"
                 value={draft.to ? toIso(draft.to) : ""}
                 min={draft.from ? toIso(draft.from) : undefined}
-                onChange={(e) =>
-                  setDraft({
-                    ...draft,
-                    to: e.target.value ? new Date(e.target.value) : undefined,
-                  })
-                }
+                max={toIso(today)}
+                onChange={(e) => setDraft({ ...draft, to: typedDate(e.target.value) })}
                 className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm [color-scheme:dark]"
               />
             </div>
             {/* One range calendar: click a start day, then an end day. */}
             <Calendar
               value={draft}
+              maxDate={today}
               onChange={(range) => setDraft(range ?? {})}
             />
             <Button

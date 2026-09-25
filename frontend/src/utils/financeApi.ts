@@ -16,15 +16,27 @@ export type FinanceFilter = {
 const STORAGE_KEY = "athena-finance-filter";
 const FILTER_EVENT = "athena:fin-filter";
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+/** yyyy-mm-dd of the local calendar day (not UTC, which is already
+ *  tomorrow on a US evening). */
+export function toLocalIsoDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/** Local midnight of a yyyy-mm-dd date (`new Date(iso)` would be UTC midnight,
+ *  the previous day west of Greenwich). */
+export function fromLocalIsoDate(iso: string): Date {
+  const [y, m, d] = iso.split("-").map(Number);
+  return new Date(y, m - 1, d);
 }
 
 function defaultFilter(): FinanceFilter {
   const end = new Date();
   const start = new Date();
   start.setDate(end.getDate() - 29);
-  return { start: isoDate(start), end: isoDate(end) };
+  return { start: toLocalIsoDate(start), end: toLocalIsoDate(end) };
 }
 
 export function getFinanceFilter(): FinanceFilter {
@@ -32,7 +44,15 @@ export function getFinanceFilter(): FinanceFilter {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw) as FinanceFilter;
-      if (parsed.start && parsed.end) return parsed;
+      if (parsed.start && parsed.end) {
+        // No future dates; a range saved on an earlier day (or by the old
+        // UTC default) may end after today.
+        const today = toLocalIsoDate(new Date());
+        return {
+          start: parsed.start > today ? today : parsed.start,
+          end: parsed.end > today ? today : parsed.end,
+        };
+      }
     }
   } catch {
     /* fall through to default */

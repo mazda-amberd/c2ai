@@ -25,6 +25,8 @@ export type CalendarProps = {
   style?: React.CSSProperties;
   value?: DateRange;
   onChange?: (range: DateRange | undefined) => void;
+  /** Last selectable day; later days are disabled. */
+  maxDate?: Date;
 };
 
 function toCalendarDate(date: Date): CalendarDate {
@@ -44,7 +46,7 @@ const navBtnClass = cn(
 );
 
 /** Inline date-range calendar backed by react-aria-components RangeCalendar. */
-function Calendar({ className, style, value, onChange }: CalendarProps) {
+function Calendar({ className, style, value, onChange, maxDate }: CalendarProps) {
   const ariaValue: RangeValue<CalendarDate> | null =
     value?.from && value?.to
       ? {
@@ -57,6 +59,7 @@ function Calendar({ className, style, value, onChange }: CalendarProps) {
     <RangeCalendar
       aria-label="Date range"
       value={ariaValue}
+      maxValue={maxDate ? toCalendarDate(maxDate) : undefined}
       onChange={(range: RangeValue<DateValue> | null) => {
         if (!range) {
           onChange?.(undefined);
