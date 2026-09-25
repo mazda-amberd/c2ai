@@ -201,9 +201,12 @@ class Settings(BaseSettings):
     tier1_label_regex: str = Field("tier1", validation_alias="ATHENA_TIER1_LABEL_REGEX")
     tier2_label_regex: str = Field("tier2", validation_alias="ATHENA_TIER2_LABEL_REGEX")
     tier3_label_regex: str = Field("tier3|prod", validation_alias="ATHENA_TIER3_LABEL_REGEX")
+    tier4_label_regex: str = Field("tier4", validation_alias="ATHENA_TIER4_LABEL_REGEX")
     tier1_gpu_cluster: str = Field("qwen-5254d", validation_alias="ATHENA_TIER1_GPU_CLUSTER")
     tier2_gpu_cluster: str = Field("qwen-pq9sc", validation_alias="ATHENA_TIER2_GPU_CLUSTER")
     tier3_gpu_cluster: str = Field("qwen-l8dnl", validation_alias="ATHENA_TIER3_GPU_CLUSTER")
+    # Tier 4 has no Ray GPU cluster of its own: its GPU total is shown blank.
+    tier4_gpu_cluster: str = Field("", validation_alias="ATHENA_TIER4_GPU_CLUSTER")
     excluded_deployments: str = Field("nginx", validation_alias="ATHENA_EXCLUDED_DEPLOYMENTS")
     cpu_cores_cap: float = Field(8.0, ge=1, validation_alias="ATHENA_CPU_CORES_CAP")
     memory_gb_cap: float = Field(80.0, ge=1, validation_alias="ATHENA_MEMORY_GB_CAP")

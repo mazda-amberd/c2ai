@@ -25,6 +25,7 @@ from c2ai.constants.prometheus import (
     excluded_deployment_names,
     get_gpu_per_app_query,
     get_grafana_prometheus_datasource,
+    tier_has_gpu_cluster,
 )
 from c2ai.schemas.grafana import (
     FRAME_VALUE_FIELD_INDEX,
@@ -410,8 +411,9 @@ class TierMetrics:
 
         Returns:
             Tuple of:
-              - tiers: tier name → list of Instance objects (or None for GPU-less tiers).
-              - gpu_totals: tier name → tier-wide GPU % (or None for GPU-less tiers).
+              - tiers: tier name → list of Instance objects (every tier, Tier 4 too).
+              - gpu_totals: tier name → tier-wide GPU % (None for a tier with no
+                GPU cluster, which is Tier 4 by default).
         """
         cpu_cap = _cpu_cores_cap()
         mem_cap = _memory_gb_cap()
@@ -420,7 +422,7 @@ class TierMetrics:
             "Tier 1": [],
             "Tier 2": [],
             "Tier 3": [],
-            "Tier 4": None,
+            "Tier 4": [],
         }
         gpu_totals: dict[str, float | None] = {
             "Tier 1": None,
@@ -451,10 +453,15 @@ class TierMetrics:
                 memory_result.frames if memory_result else []
             )
 
-            # GPU tier total: one Prometheus query keyed by label_tier (tier1–3).
+            # GPU tier total: one Prometheus query keyed by label_tier. A tier
+            # with no Ray GPU cluster has no total, not a 0% one.
             promql_label = TIER_DISPLAY_NAME_TO_GPU_PROMQL_LABEL.get(tier_name, "")
-            tier_gpu_pct = tier_gpu_by_label.get(promql_label, 0.0)
-            gpu_totals[tier_name] = tier_gpu_pct
+            tier_key = TIER_NAMES[REF_IDS.index(ref_id)]
+            gpu_totals[tier_name] = (
+                tier_gpu_by_label.get(promql_label, 0.0)
+                if tier_has_gpu_cluster(tier_key)
+                else None
+            )
 
             instance_map: dict[str, dict] = {}
 

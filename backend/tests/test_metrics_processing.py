@@ -226,7 +226,7 @@ class TestCombineMetrics:
     """Tests for combine_metrics with RayCluster unit normalisation."""
 
     def test_basic_structure(self, sample_grafana_response, sample_cpu_total_response):
-        """All four tier keys are always present; Tier 4 is None."""
+        """All four tiers list instances; Tier 4 has no GPU total (no GPU cluster)."""
         client = GrafanaClient(api_url="https://test.grafana.io/api")
         tiers = TierMetrics(client)
 
@@ -240,7 +240,7 @@ class TestCombineMetrics:
         assert "Tier 1" in tiers
         assert "Tier 2" in tiers
         assert "Tier 3" in tiers
-        assert tiers["Tier 4"] is None
+        assert tiers["Tier 4"] == []
         assert "Tier 1" in gpu_totals
         assert gpu_totals["Tier 4"] is None
 

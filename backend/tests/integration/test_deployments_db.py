@@ -243,6 +243,27 @@ async def test_failed_dispatch_is_undone_and_reported(client, github, session_fa
     assert client.post("/api/deploy", json=DEPLOY_BODY).status_code == 201
 
 
+async def test_an_instance_moves_to_tier_4(client, github, session_factory):
+    """Tier 4 is a tier like the others: the move is accepted, the workflow is
+    asked for tier4, and the instance ends up there."""
+    deployed = client.post("/api/deploy", json=DEPLOY_BODY).json()
+    github.finish(deployed["run_id"])
+    await _track(session_factory)
+
+    move = client.post("/api/deploy/move-tier", json={"subdomain": SUBDOMAIN, "tier": 4})
+
+    assert move.status_code == 201, move.text
+    workflow, inputs = github.dispatches[-1]
+    assert (workflow, inputs["tier"]) == ("ada-move-to-tier.yaml", "tier4")
+    [active] = _active(client)
+    assert (active["operation"], active["tier"]) == ("migration", 4)
+    github.finish(move.json()["run_id"])
+    await _track(session_factory)
+    assert (await _instance_rows(session_factory))[0][1:3] == (4, "running")
+    beyond = client.post("/api/deploy/move-tier", json={"subdomain": SUBDOMAIN, "tier": 5})
+    assert beyond.status_code == 422
+
+
 async def test_update_move_and_terminate_one_at_a_time(client, github, session_factory):
     deployed = client.post("/api/deploy", json=DEPLOY_BODY).json()
     github.finish(deployed["run_id"])

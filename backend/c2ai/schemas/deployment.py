@@ -158,7 +158,7 @@ class MoveTierRequest(BaseModel):
         ...,
         description="Workflow host label of the deployment to migrate",
     )
-    tier: int = Field(..., ge=1, le=3, description="Target numeric tier index (1-3)")
+    tier: int = Field(..., ge=1, le=4, description="Target numeric tier index (1-4)")
 
     @field_validator("subdomain", mode="before")
     @classmethod

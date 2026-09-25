@@ -79,7 +79,7 @@ class TestOtherRequestValidation:
 
     @pytest.mark.parametrize(
         "body",
-        [{"subdomain": "INVALID!!!", "tier": 2}, {"subdomain": "amberd-acme-ada", "tier": 4}],
+        [{"subdomain": "INVALID!!!", "tier": 2}, {"subdomain": "amberd-acme-ada", "tier": 5}],
     )
     def test_move_tier_rejects_bad_input(self, deploy_auth_client, body):
         assert deploy_auth_client.post("/api/deploy/move-tier", json=body).status_code == 422

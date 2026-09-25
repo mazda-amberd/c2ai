@@ -14,6 +14,7 @@ Per-tier label_tier value regex (Prometheus RE2), used for CPU / memory only:
   ATHENA_TIER1_LABEL_REGEX  (default: tier1)
   ATHENA_TIER2_LABEL_REGEX  (default: tier2)
   ATHENA_TIER3_LABEL_REGEX  (default: tier3|prod)
+  ATHENA_TIER4_LABEL_REGEX  (default: tier4)
 
 Per-tier Ray GPU cluster name (``ray_io_cluster`` label) for GPU PromQL
 (``label_replace`` match value, not a regex selector):
@@ -21,6 +22,7 @@ Per-tier Ray GPU cluster name (``ray_io_cluster`` label) for GPU PromQL
   ATHENA_TIER1_GPU_CLUSTER  (default: qwen-5254d)
   ATHENA_TIER2_GPU_CLUSTER  (default: qwen-pq9sc)
   ATHENA_TIER3_GPU_CLUSTER  (default: qwen-l8dnl)
+  ATHENA_TIER4_GPU_CLUSTER  (default: none - Tier 4 has no GPU total)
 
 Panel-18 per-app GPU uses unfiltered ``kube_deployment_labels`` and
 ``llm_total_tokens_total`` so all apps contribute. Tier totals use a single
@@ -60,13 +62,14 @@ def get_grafana_prometheus_datasource() -> dict[str, str]:
 # TIER CONFIGURATION
 # =============================================================================
 
-TIER_NAMES = ["Tier1", "Tier2", "Tier3"]
-REF_IDS = ["A", "B", "C"]
+TIER_NAMES = ["Tier1", "Tier2", "Tier3", "Tier4"]
+REF_IDS = ["A", "B", "C", "D"]
 
 TIER_MAP = {
     "A": "Tier 1",
     "B": "Tier 2",
     "C": "Tier 3",
+    "D": "Tier 4",
 }
 
 # Maps UI tier name → ``label_tier`` value on tier-total GPU instant-query frames.
@@ -74,13 +77,17 @@ TIER_DISPLAY_NAME_TO_GPU_PROMQL_LABEL: dict[str, str] = {
     "Tier 1": "tier1",
     "Tier 2": "tier2",
     "Tier 3": "tier3",
+    "Tier 4": "tier4",
 }
 
+# Every tier lists the applications running in it (applications can be
+# deployed and moved to any of them). Whether a tier has a GPU total is the
+# Ray cluster setting (ATHENA_TIER{N}_GPU_CLUSTER), not this table.
 TIER_CONFIG: dict[str, dict[str, int] | None] = {
     "Tier 1": {"gpus": 2},
     "Tier 2": {"gpus": 2},
     "Tier 3": {"gpus": 2},
-    "Tier 4": None,
+    "Tier 4": {"gpus": 0},
 }
 
 # label_tier regex and Ray GPU cluster per tier come from settings
@@ -181,33 +188,30 @@ def _k8s_memory_by_deployment(tier_label_re: str) -> str:
     )
 
 
+def tier_has_gpu_cluster(tier_key: str) -> bool:
+    """Whether a tier has a Ray GPU cluster (and so a GPU total)."""
+    return bool(_gpu_cluster_name(tier_key))
+
+
 def _tier_ray_gpu_avg_by_label_tier() -> str:
     """
-    Per-tier Ray GPU util (avg by node series), keyed as label_tier (tier1–3).
+    Per-tier Ray GPU util (avg by node series), keyed as label_tier (tier1–4).
 
     One unfiltered ``avg_over_time(ray_node_gpus_utilization[5m])`` per arm;
     ``label_replace`` maps each cluster's ``ray_io_cluster`` literal to a tier
-    label. No regex selectors on metrics.
+    label. No regex selectors on metrics. A tier with no GPU cluster has no
+    arm: an empty cluster name would match every series without the label.
     """
-    c1 = _gpu_cluster_name("Tier1")
-    c2 = _gpu_cluster_name("Tier2")
-    c3 = _gpu_cluster_name("Tier3")
-    return (
-        f'avg by (label_tier) ('
-        f'  label_replace('
+    arms = [
+        f'label_replace('
         f'    avg_over_time(ray_node_gpus_utilization[5m]),'
-        f'    "label_tier", "tier1", "ray_io_cluster", "{c1}"'
+        f'    "label_tier", "{tier_key.lower()}", "ray_io_cluster", "{_gpu_cluster_name(tier_key)}"'
         f'  )'
-        f'  or label_replace('
-        f'    avg_over_time(ray_node_gpus_utilization[5m]),'
-        f'    "label_tier", "tier2", "ray_io_cluster", "{c2}"'
-        f'  )'
-        f'  or label_replace('
-        f'    avg_over_time(ray_node_gpus_utilization[5m]),'
-        f'    "label_tier", "tier3", "ray_io_cluster", "{c3}"'
-        f'  )'
-        f')'
-    )
+        for tier_key in TIER_NAMES
+        if tier_has_gpu_cluster(tier_key)
+    ]
+    return f'avg by (label_tier) (  {"  or ".join(arms)})'
+
 
 
 def _k8s_gpu_util() -> str:
@@ -281,11 +285,9 @@ def _k8s_cpu_total(tier_label_re: str) -> str:
 
 def _tier_key_from_tier_param(tier: str) -> str:
     """Map the METRIC_QUERIES lambda argument (e.g. 'Tier1') to a tier key."""
-    if tier in ("Tier1", "Tier2", "Tier3"):
-        return tier
-    for k in ("Tier1", "Tier2", "Tier3"):
-        if tier.lower() == k.lower():
-            return k
+    for key in TIER_NAMES:
+        if tier.lower() == key.lower():
+            return key
     return "Tier1"
 
 

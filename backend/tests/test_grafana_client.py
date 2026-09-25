@@ -22,7 +22,7 @@ class TestBuildQueryBody:
         body = build_grafana_query_body(MetricType.CPU)
 
         assert "queries" in body
-        assert len(body["queries"]) == 3
+        assert len(body["queries"]) == 4
         assert body["from"] == "now-1m"
         assert body["to"] == "now"
 
@@ -46,6 +46,7 @@ class TestBuildQueryBody:
         assert 'label_tier=~"tier1"' in exprs[0]
         assert 'label_tier=~"tier2"' in exprs[1]
         assert 'label_tier=~"tier3|prod"' in exprs[2]
+        assert 'label_tier=~"tier4"' in exprs[3]
 
     def test_build_memory_query(self):
         """Memory query: working set bytes, pod→deployment join, GB via / 1073741824."""
@@ -60,8 +61,8 @@ class TestBuildQueryBody:
         """GPU query: avg Ray util by label_tier (one expr repeated for A/B/C refIds)."""
         body = build_grafana_query_body(MetricType.GPU)
         exprs = [q["expr"] for q in body["queries"]]
-        assert len(exprs) == 3
-        assert exprs[0] == exprs[1] == exprs[2]
+        assert len(exprs) == 4
+        assert exprs[0] == exprs[1] == exprs[2] == exprs[3]
         expr = exprs[0]
         assert "avg by (label_tier)" in expr
         assert "ray_node_gpus_utilization" in expr
@@ -94,10 +95,10 @@ class TestBuildQueryBody:
         assert "kube_replicaset_owner" in query["expr"]
 
     def test_all_tiers_included(self):
-        """All three refIds A/B/C are present and each tiers via kube_deployment_labels."""
+        """All four refIds A-D are present and each tiers via kube_deployment_labels."""
         body = build_grafana_query_body(MetricType.CPU)
         ref_ids = [q["refId"] for q in body["queries"]]
-        assert ref_ids == ["A", "B", "C"]
+        assert ref_ids == ["A", "B", "C", "D"]
         exprs = [q["expr"] for q in body["queries"]]
         assert all("kube_deployment_labels" in e for e in exprs)
 
@@ -350,14 +351,15 @@ class TestCombineMetrics:
         assert 74 <= inst.cpu <= 76
         assert 74 <= inst.memory <= 76
 
-    def test_combine_tier4_is_null(
+    def test_combine_lists_tier4_without_a_gpu_total(
         self,
         sample_cpu_used_response,
         sample_memory_used_response,
         sample_grafana_response,
         sample_cpu_total_response,
     ):
-        """Tier 4 has no config entry — always None in tiers and gpu_totals."""
+        """Tier 4 lists its applications like any tier (they can be moved there);
+        with no Ray GPU cluster it has no GPU total rather than a 0% one."""
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
@@ -370,8 +372,17 @@ class TestCombineMetrics:
             cpu_total_data=sample_cpu_total_response,
         )
 
-        assert tiers["Tier 4"] is None
+        assert tiers["Tier 4"] == []
         assert gpu_totals["Tier 4"] is None
+        assert gpu_totals["Tier 1"] is not None
+
+    def test_tier4_gets_a_gpu_total_once_it_has_a_gpu_cluster(self, monkeypatch):
+        monkeypatch.setenv("ATHENA_TIER4_GPU_CLUSTER", "qwen-t4")
+        expr = build_grafana_query_body(MetricType.GPU)["queries"][0]["expr"]
+        assert '"label_tier", "tier4", "ray_io_cluster", "qwen-t4"' in expr
+        monkeypatch.delenv("ATHENA_TIER4_GPU_CLUSTER")
+        expr = build_grafana_query_body(MetricType.GPU)["queries"][0]["expr"]
+        assert "tier4" not in expr
 
     def test_status_calculation(self):
         """Status thresholds: Healthy ≤50%, Warning >50% & <76%, Critical ≥76%."""

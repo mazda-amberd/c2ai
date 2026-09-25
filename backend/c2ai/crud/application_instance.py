@@ -23,7 +23,7 @@ async def replace_application_instances_for_tiers(
     current instance list. Tiers not present in ``tiers`` are left unchanged (supports
     ``tier=`` query filter on ``/api/metrics``).
 
-    ``None`` means no instances for that tier (e.g. Tier 4): all rows for that tier
+    ``None`` means no instances for that tier: all rows for that tier
     are removed.
     """
     for tier_name, instances in tiers.items():
