@@ -20,7 +20,7 @@ from c2ai.core.exceptions import ServiceUnavailableError, ValidationFailed
 from c2ai.db.session import get_db_session
 from c2ai.schemas.metrics import MetricLevel, MetricsResponse
 from c2ai.services.instance_metadata import load_instance_metadata_map
-from c2ai.services.metrics import MetricsUnavailable, build_metrics
+from c2ai.services.metrics import TIER_NAMESPACES, MetricsUnavailable, build_metrics
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,9 @@ async def get_metrics_v2(
     ),
     from_: datetime | None = Query(None, alias="from", description="Custom window start (ISO8601)."),
     to: datetime | None = Query(None, description="Custom window end (ISO8601)."),
-    tier: int | None = Query(None, ge=1, le=3, description="Restrict to one tier."),
+    tier: int | None = Query(
+        None, ge=1, le=len(TIER_NAMESPACES), description="Restrict to one tier."
+    ),
     _user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(get_db_session),
     client: GrafanaClient | None = Depends(grafana_client),

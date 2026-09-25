@@ -265,6 +265,15 @@ class TestTierLevel:
         assert body["series"][0]["scope"]["tier"] == 3
         assert all('namespace=~"tier3"' in q["expr"] for q in bodies[0]["queries"])
 
+    def test_tier_4_is_a_tier_like_the_others(self, metrics_client):
+        """The UI has four tiers; its Tier 4 Metrics page asked with tier=4 and got a 422."""
+        bodies = []
+        response = _get(metrics_client, _fake_grafana(bodies=bodies), level="tier", tier=4)
+        assert response.status_code == 200, response.text
+        assert [s["scope"]["id"] for s in response.json()["series"]] == ["tier-4"]
+        assert all('namespace=~"tier4"' in q["expr"] for q in bodies[0]["queries"])
+        assert _get(metrics_client, _fake_grafana(), level="tier", tier=5).status_code == 422
+
     def test_gpu_units_are_not_percent(self, metrics_client):
         body = _get(metrics_client, _fake_grafana(), level="tier", tier=1).json()
         metrics = _metrics(body)

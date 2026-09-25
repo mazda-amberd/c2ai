@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token
 from c2ai.clients.grafana import GrafanaClient, grafana_client
 from c2ai.clients.version import enrich_tiers_with_versions
+from c2ai.constants.prometheus import TIER_CONFIG
 from c2ai.core.exceptions import GrafanaFetchError
 from c2ai.db.session import get_db_session
 from c2ai.metrics.tiers import TierMetrics
@@ -30,7 +31,9 @@ def tier_metrics(client: GrafanaClient | None = Depends(grafana_client)) -> Tier
 
 @router.get("/api/metrics", response_model=TiersResponse)
 async def get_metrics(
-    tier: int | None = Query(None, ge=1, le=3, description="Filter by tier number (1-3)"),
+    tier: int | None = Query(
+        None, ge=1, le=len(TIER_CONFIG), description=f"Filter by tier number (1-{len(TIER_CONFIG)})"
+    ),
     _user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(get_db_session),
     tiers_view: TierMetrics | None = Depends(tier_metrics),

@@ -5,6 +5,7 @@ Tests for the metrics API endpoints.
 from unittest.mock import AsyncMock, patch
 
 from c2ai.api.grafana import tier_metrics
+from c2ai.metrics.tiers import TierMetrics
 from c2ai.schemas.grafana import Instance, Status
 from tests.helpers import override_dependency
 
@@ -171,6 +172,21 @@ class TestMetricsEndpoint:
             data = response.json()
             assert data["tiers"]["Tier 1"][0]["version"] == "26.02.abc1234"
             assert data["tiers"]["Tier 1"][1]["version"] is None
+
+    async def test_tier_filter_covers_tier_4(self):
+        """Tier 4 has no instances yet: asking for it returns just Tier 4, not every tier."""
+        view = TierMetrics(client=AsyncMock())
+        everything = (
+            {"Tier 1": [], "Tier 2": [], "Tier 3": [], "Tier 4": None},
+            {"Tier 1": 1.0, "Tier 2": None, "Tier 3": None, "Tier 4": None},
+        )
+        with (
+            patch.object(view, "fetch_grafana_data", AsyncMock()),
+            patch.object(view, "fetch_gpu_tier_totals", AsyncMock()),
+            patch.object(view, "fetch_gpu_per_app_data", AsyncMock()),
+            patch.object(view, "combine_metrics", return_value=everything),
+        ):
+            assert await view.get_all_metrics(tier=4) == ({"Tier 4": None}, {"Tier 4": None})
 
     def test_get_metrics_invalid_tier(self, deploy_auth_client):
         """Test that invalid tier values are rejected."""

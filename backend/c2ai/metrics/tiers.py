@@ -549,8 +549,8 @@ class TierMetrics:
             cpu_data, memory_data, gpu_tier_data, gpu_per_app_data=gpu_per_app_data
         )
 
-        if tier is not None and 1 <= tier <= 3:
-            tier_name = f"Tier {tier}"
+        tier_name = f"Tier {tier}"
+        if tier is not None and tier_name in tiers:
             return (
                 {tier_name: tiers.get(tier_name, [])},
                 {tier_name: gpu_totals.get(tier_name)},
