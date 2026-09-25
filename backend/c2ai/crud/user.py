@@ -6,12 +6,11 @@ Functions here only flush; the route commits.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
 from argon2 import PasswordHasher
-from sqlalchemy import false, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,22 +30,6 @@ DEFAULT_ADMIN_PASSWORD = "admin@amberd.ai"
 _COLUMN_METADATA_KEYS = frozenset({"user_type"})
 # Only the password endpoints may change these.
 _PROTECTED_METADATA_KEYS = frozenset({"created_by", "needs_password_reset"})
-
-
-@dataclass(frozen=True)
-class Viewer:
-    """Who is asking: superusers see every user, other admins their own."""
-
-    user_id: UUID | None
-    is_superuser: bool
-
-
-def _visible_to(query, viewer: Viewer | None):
-    if viewer is None or viewer.is_superuser:
-        return query
-    if viewer.user_id is None:
-        return query.where(false())
-    return query.where(or_(User.created_by_id == viewer.user_id, User.id == viewer.user_id))
 
 
 def _split_metadata(metadata: dict[str, Any] | None) -> tuple[str | None, dict[str, Any]]:
@@ -72,27 +55,32 @@ async def lock_admin_ids(db: AsyncSession) -> list[UUID]:
     return list(result.scalars().all())
 
 
-async def get_user_by_identifier(
-    db: AsyncSession,
-    identifier: str,
-    *,
-    viewer: Viewer | None = None,
-) -> User | None:
-    """Return a user, restricted to what ``viewer`` may see when given."""
-
-    query = _visible_to(select(User).where(User.identifier == identifier), viewer)
-    result = await db.execute(query)
+async def get_user_by_identifier(db: AsyncSession, identifier: str) -> User | None:
+    result = await db.execute(select(User).where(User.identifier == identifier))
     return result.scalar_one_or_none()
 
 
-async def get_users(
-    db: AsyncSession,
-    *,
-    start: int = 0,
-    limit: int = 100,
-    viewer: Viewer | None = None,
-) -> list[User]:
-    """Page of users visible to ``viewer``, ordered by name."""
+async def get_user_by_id(db: AsyncSession, user_id: UUID) -> User | None:
+    return await db.get(User, user_id)
+
+
+async def get_user_for_sign_in(db: AsyncSession, identifier: str) -> User | None:
+    """The account someone typed: exactly, else the one address that matches
+    ignoring case - an email address is not case-sensitive, and a phone
+    keyboard capitalises its first letter."""
+
+    user = await get_user_by_identifier(db, identifier)
+    if user is not None or "@" not in identifier:
+        return user
+    result = await db.execute(
+        select(User).where(func.lower(User.identifier) == identifier.lower()).limit(2)
+    )
+    matches = list(result.scalars().all())
+    return matches[0] if len(matches) == 1 else None
+
+
+async def get_users(db: AsyncSession, *, start: int = 0, limit: int = 100) -> list[User]:
+    """Page of users, ordered by name. Every administrator sees everyone."""
 
     query = (
         select(User)
@@ -100,7 +88,7 @@ async def get_users(
         .offset(start)
         .limit(limit)
     )
-    result = await db.execute(_visible_to(query, viewer))
+    result = await db.execute(query)
     return list(result.scalars().all())
 
 
@@ -164,13 +152,14 @@ async def ensure_default_admin(db: AsyncSession) -> bool:
 
 
 async def update_user(db: AsyncSession, user: User, updates: dict[str, Any]) -> User:
-    """Update names, user type, and profile metadata.
+    """Update the sign-in identifier, names, user type, and profile metadata.
 
     ``created_by`` and ``needs_password_reset`` are protected. The caller has
-    already checked visibility and the last-admin rule (holding the admin lock).
+    already checked the identifier is free and the last-admin rule (holding
+    the admin lock).
     """
 
-    for field in ("first_name", "last_name", "updated_by"):
+    for field in ("identifier", "first_name", "last_name", "updated_by"):
         if updates.get(field) is not None:
             setattr(user, field, updates[field])
     incoming = updates.get("metadata_")

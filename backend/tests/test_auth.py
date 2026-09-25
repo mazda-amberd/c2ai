@@ -22,7 +22,7 @@ from c2ai.core.exceptions import AppException
 from c2ai.models.user import User
 
 _LOOKUP = "c2ai.auth.jwt.get_user_by_identifier"
-_LOGIN_LOOKUP = "c2ai.api.auth_session.get_user_by_identifier"
+_LOGIN_LOOKUP = "c2ai.api.auth_session.get_user_for_sign_in"
 
 
 class FakeSessionStore:

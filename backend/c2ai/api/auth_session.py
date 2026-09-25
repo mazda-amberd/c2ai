@@ -28,7 +28,7 @@ from c2ai.auth.jwt import (
 from c2ai.config import get_settings
 from c2ai.core.exceptions import AppException, InvalidCredentials, TooManyLoginAttempts
 from c2ai.crud import session as session_store
-from c2ai.crud.user import get_user_by_identifier
+from c2ai.crud.user import get_user_for_sign_in
 from c2ai.db.session import get_db_session
 from c2ai.jobs import JobStore, get_job_notifier, get_job_store
 from c2ai.jobs.handlers.password_reset import (
@@ -69,6 +69,7 @@ class WhoAmIResponse(BaseModel):
     identifier: str
     service: str | None = None
     first_name: str | None = None
+    last_name: str | None = None
     metadata: dict = Field(default_factory=dict)
 
 
@@ -128,7 +129,7 @@ async def login(
     identifier = payload.identifier.strip()
     account_key, client_key = _throttle_keys(identifier, request)
     await _ensure_not_throttled(db, account_key, client_key)
-    user = await get_user_by_identifier(db, identifier)
+    user = await get_user_for_sign_in(db, identifier)
     if user is None:
         _verify(_DUMMY_HASH, payload.password)
         logger.info("Login rejected for unknown identifier '%s'.", identifier)
@@ -219,5 +220,6 @@ async def whoami(user: AthenaTokenUser = Depends(get_user_on_any_password)) -> W
         identifier=user.identifier,
         service=user.service,
         first_name=user.first_name,
+        last_name=user.last_name,
         metadata=user.metadata,
     )

@@ -162,9 +162,21 @@ demoted or deleted.
 | `GET/POST/PATCH/DELETE` | `/users/` | admin |
 | `PATCH` | `/users/update_password` | signed in (own password) |
 | `POST` | `/users/reset_password/{user}` | admin |
+| `GET/POST` | `/api/users` | admin (the Users page) |
+| `PUT/DELETE` | `/api/users/{user_id}` | admin |
+| `POST` | `/api/users/{user_id}/reset-password` | admin |
 
-Superusers (`users.is_superuser`, the bootstrap account) see every user;
-other admins see the users they created (`users.created_by_id`).
+Every administrator sees and manages every user, as in Amberd Agents
+(`users.is_superuser` no longer changes that).
+
+**The Users page** (account menu, top right → Users; Admins only) is Amberd
+Agents' user management. Four things are collected - first name, last name,
+email and role (Admin or User) - and the email is what the person signs in
+with. Adding someone, or the key button, issues a temporary password that is
+emailed to them (Postmark); if the email cannot go, the page shows it once
+instead, since only its hash is stored. Nobody can remove the account they
+are signed in as, and the last Admin cannot be removed or made a User.
+Sign-in treats an email address as case-insensitive.
 
 **The default account.** At startup, a database with no users gets
 `admin@amberd.ai` with the password `admin@amberd.ai` (a superuser, not made

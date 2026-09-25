@@ -6,6 +6,7 @@ import Applications from "@pages/Applications";
 import ApplicationMetrics from "@pages/ApplicationMetrics";
 import ClusterMetrics from "@pages/ClusterMetrics";
 import RegisteredApplications from "@pages/RegisteredApplications";
+import Users from "@pages/Users";
 import getRouterBasename from "@lib/router"; 
 
 export const router = createBrowserRouter(
@@ -23,6 +24,7 @@ export const router = createBrowserRouter(
         { path: "apps/:tierIndex/:appName/metrics", element: <ApplicationMetrics /> },
         { path: "metrics/:tierIndex/:view?", element: <ClusterMetrics /> },
         { path: "registered-applications", element: <RegisteredApplications /> },
+        { path: "users", element: <Users /> },
       ],
     },
     {

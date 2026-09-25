@@ -13,6 +13,8 @@ type AuthContextType = {
   user: WhoAmIResponse | null;
   /** Signed in with a temporary password: nothing else works until it is replaced. */
   mustChoosePassword: boolean;
+  /** An Admin: sees the Users page (the API enforces it; this only hides it). */
+  isAdmin: boolean;
   /** The signed-in user, or null when the credentials were refused. */
   login: (username: string, password: string) => Promise<WhoAmIResponse | null>;
   logout: () => Promise<void>;
@@ -79,6 +81,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         checkingAuth,
         user,
         mustChoosePassword: user?.metadata?.needs_password_reset === true,
+        isAdmin: user?.metadata?.user_type?.toLowerCase() === "admin",
         login,
         logout,
         refreshUser: checkSession,

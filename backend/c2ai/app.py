@@ -20,6 +20,7 @@ from c2ai.api.metrics import router as metrics_v2_router
 from c2ai.api.ops import router as ops_router
 from c2ai.api.registered_applications import router as registered_applications_router
 from c2ai.api.troubleshooting import router as troubleshooting_router
+from c2ai.api.user_management import router as user_management_router
 from c2ai.api.users import router as users_router
 from c2ai.clients.http import close_http_clients
 from c2ai.config import check_startup_settings, get_settings
@@ -108,6 +109,7 @@ def create_app(*, serve_frontend: bool = True) -> FastAPI:
         github_connections_router,
         auth_session_router,
         users_router,
+        user_management_router,
         deployments_router,
         logs_router,
         metrics_v2_router,

@@ -1,8 +1,8 @@
-"""User administration endpoints.
+"""User administration endpoints (the original Athena API, kept for clients).
 
-Visibility: a superuser (the bootstrap ``admin``) sees every user; any other
-administrator sees the users they created plus themselves. Admin rights are
-the ``users.user_type`` column, exposed to the UI as ``metadata.user_type``.
+The interface's Users page uses ``/api/users`` (``c2ai.api.user_management``).
+Every administrator sees and manages every user. Admin rights are the
+``users.user_type`` column, exposed as ``metadata.user_type``.
 """
 
 from __future__ import annotations
@@ -58,12 +58,12 @@ async def read_users(
     """List visible users, or return one when ``user_name`` is given."""
 
     if user_name:
-        user = await crud_user.get_user_by_identifier(db, user_name, viewer=admin.viewer)
+        user = await crud_user.get_user_by_identifier(db, user_name)
         if not user:
             raise UserNotFound(user_name)
         return schemas_user.UserOut.model_validate(user)
 
-    users = await crud_user.get_users(db, start=start, limit=limit, viewer=admin.viewer)
+    users = await crud_user.get_users(db, start=start, limit=limit)
     if not users:
         raise NoUsersFound()
     return [schemas_user.UserOut.model_validate(user) for user in users]
@@ -128,7 +128,7 @@ async def update_existing_user(
 ):
     """Update names or metadata of a user (passwords use their own endpoints)."""
 
-    target = await crud_user.get_user_by_identifier(db, user_name, viewer=admin.viewer)
+    target = await crud_user.get_user_by_identifier(db, user_name)
     if not target:
         raise UserNotFound(user_name)
 
@@ -208,7 +208,7 @@ async def reset_user_password(
 ):
     """Issue a new one-time password for a user (POST; GET kept for old clients)."""
 
-    user = await crud_user.get_user_by_identifier(db, user_name, viewer=admin.viewer)
+    user = await crud_user.get_user_by_identifier(db, user_name)
     if not user:
         raise UserNotFound(user_name)
     new_password = generate_password()
@@ -239,7 +239,7 @@ async def delete_existing_user(
 ) -> Response:
     """Delete a user, refusing to remove the last administrator."""
 
-    user = await crud_user.get_user_by_identifier(db, user_name, viewer=admin.viewer)
+    user = await crud_user.get_user_by_identifier(db, user_name)
     if not user:
         raise UserNotFound(user_name)
     if user.user_type == ADMIN:

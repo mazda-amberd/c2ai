@@ -109,7 +109,7 @@ async def request_password_reset(db: AsyncSession, address: str) -> str:
     person who asked, or the form confirms which addresses exist.
     """
 
-    user = await crud_user.get_user_by_identifier(db, address.strip())
+    user = await crud_user.get_user_for_sign_in(db, address.strip())
     if user is None:
         return "unknown address"
     identifier = user.identifier

@@ -34,7 +34,7 @@ from c2ai.core.exceptions import (
     TokenExpired,
 )
 from c2ai.crud.session import is_token_revoked
-from c2ai.crud.user import Viewer, get_user_by_identifier
+from c2ai.crud.user import get_user_by_identifier
 from c2ai.db.session import get_db_session
 
 logger = logging.getLogger(__name__)
@@ -138,16 +138,12 @@ class AthenaTokenUser(BaseModel):
     exp: int | None = Field(default=None, exclude=True)
     # Filled from the database on every request, never from the token.
     user_id: UUID | None = Field(default=None, exclude=True)
-    is_superuser: bool = Field(default=False, exclude=True)
     first_name: str | None = Field(default=None, exclude=True)
+    last_name: str | None = Field(default=None, exclude=True)
 
     @property
     def is_admin(self) -> bool:
         return metadata_is_admin(self.metadata)
-
-    @property
-    def viewer(self) -> Viewer:
-        return Viewer(user_id=self.user_id, is_superuser=self.is_superuser)
 
 
 def metadata_is_admin(metadata: Mapping[str, Any] | None) -> bool:
@@ -190,7 +186,6 @@ def decode_jwt(token: str, *, algorithms: list[str] | None = None) -> AthenaToke
             raise TokenExpired()
 
     decoded.pop("user_id", None)
-    decoded.pop("is_superuser", None)
     return AthenaTokenUser.model_validate(decoded)
 
 
@@ -224,8 +219,8 @@ async def _resolve_current_user(
         update={
             "metadata": user.public_metadata,
             "user_id": user.id,
-            "is_superuser": bool(user.is_superuser),
             "first_name": user.first_name,
+            "last_name": user.last_name,
         }
     )
 

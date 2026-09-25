@@ -1,4 +1,4 @@
-"""Users against PostgreSQL: the 0021/0027 backfills, visibility, and the last-admin lock."""
+"""Users against PostgreSQL: the 0021/0027 backfills, roles, and the last-admin lock."""
 
 from __future__ import annotations
 
@@ -156,14 +156,17 @@ async def test_visibility_roles_and_last_admin(client, db):
     await _make(db, "member", "User", created_by=team_lead)
     await _make(db, "stranger", "User", created_by=root)
 
+    # Every administrator sees everyone, as in Amberd Agents - not only the
+    # people they created.
     lead = _login(client, "lead")
     listed = client.get("/users/", headers=lead).json()
-    assert sorted(user["identifier"] for user in listed) == ["lead", "member"]
     assert {user["identifier"]: user["metadata_"]["user_type"] for user in listed} == {
+        "root": "Admin",
         "lead": "Admin",
         "member": "User",
+        "stranger": "User",
     }
-    assert client.get("/users/", params={"user_name": "stranger"}, headers=lead).status_code == 404
+    assert client.get("/users/", params={"user_name": "stranger"}, headers=lead).status_code == 200
 
     created = client.post(
         "/users/",
