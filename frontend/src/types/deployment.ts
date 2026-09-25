@@ -53,6 +53,8 @@ export type PipelineRunRecord = {
   operation: "deploy" | "migration" | "update" | "terminate";
   event_type: string;
   triggered_by: string;
+  /** Registered application being deployed; null for ADA (titled by customer). */
+  application_name?: string | null;
   run_id: number | null;
   tier: number | null;
   branch: string | null;

@@ -87,13 +87,6 @@ const GITHUB_STEPS: StepDef[] = [
     subtitle:
       "Provide the LLM endpoint this application uses. Required for every application type.",
     icon: "cube",
-  },
-  {
-    id: "review",
-    kicker: "Review & Confirm",
-    subtitle:
-      "Check everything below before registering. Use Back to change any step.",
-    icon: "cube",
     final: true,
   },
 ];
@@ -126,8 +119,8 @@ const CONTAINER_STEPS: StepDef[] = [
   },
   {
     id: "params",
-    kicker: "Deployment Parameters",
-    subtitle: "Define configurable values generated for every deployment.",
+    kicker: "Environment Variables",
+    subtitle: "Define the environment variables applied to every deployment.",
     icon: "container",
   },
   {
@@ -135,13 +128,6 @@ const CONTAINER_STEPS: StepDef[] = [
     kicker: "LLM Configuration",
     subtitle:
       "Provide the LLM endpoint this application uses. Required for every application type.",
-    icon: "cube",
-  },
-  {
-    id: "review",
-    kicker: "Review & Confirm",
-    subtitle:
-      "Check everything below before registering. Use Back to change any step.",
     icon: "cube",
     final: true,
   },
@@ -310,7 +296,7 @@ function ParamsTable({
                   colSpan={3}
                   className="px-4 py-5 text-center text-[12px] text-[#57606c]"
                 >
-                  No parameters yet.
+                  No environment variables yet.
                 </td>
               </tr>
             )}
@@ -441,42 +427,6 @@ function TypedParamsTable({
   );
 }
 
-/* ---------------- Review step ----------------
- * Read-only summary of everything entered, grouped by wizard step, shown
- * before the final "Create Application" so the admin can confirm the data
- * (secrets are masked). */
-
-function ReviewSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="overflow-hidden rounded-[8px] border border-[#1c2836]">
-      <div className="border-b border-[#1c2836] bg-[rgba(6,17,29,0.6)] px-3.5 py-2 text-[10.5px] font-semibold uppercase tracking-wide text-[#8b97a5]">
-        {title}
-      </div>
-      <dl className="divide-y divide-[#1c2836]">{children}</dl>
-    </div>
-  );
-}
-
-function ReviewRow({ label, value }: { label: string; value: React.ReactNode }) {
-  const empty = value === "" || value === null || value === undefined;
-  return (
-    <div className="grid grid-cols-[minmax(140px,38%)_1fr] gap-3 px-3.5 py-2 text-[12.5px]">
-      <dt className="text-[#8b97a5]">{label}</dt>
-      <dd className={`min-w-0 break-words ${empty ? "text-[#57606c]" : "text-[#eef2f6]"}`}>
-        {empty ? "—" : value}
-      </dd>
-    </div>
-  );
-}
-
-const MASKED = "••••••••";
-
 /* ---------------- Toggle switch ---------------- */
 
 function Switch({
@@ -557,9 +507,16 @@ type ContainerFormValues = {
   llmModelName: string;
 };
 
-/* Every text field starts empty — nothing is pre-filled. Only the enum
- * controls (trigger method radio, pull-policy select) carry a selection,
- * since they can't be blank. */
+/* Text fields start empty except the ones with a house default: the
+ * branch, the LLM gateway every Amberd application uses, and a small
+ * container footprint. The enum controls (trigger method radio, pull-policy
+ * select) carry a selection, since they can't be blank. */
+
+const DEFAULT_LLM = {
+  llmEndpoint: "http://amberd-llm-gateway:8010",
+  llmApiToken: "EMPTY",
+  llmModelName: "qwen3-coder-next",
+};
 
 const emptyGithubValues = (): GithubFormValues => ({
   name: "",
@@ -569,11 +526,9 @@ const emptyGithubValues = (): GithubFormValues => ({
   workflowRepository: "",
   triggerMethod: "workflow_dispatch",
   workflowFile: "",
-  branch: "",
+  branch: "main",
   parameters: [],
-  llmEndpoint: "",
-  llmApiToken: "",
-  llmModelName: "",
+  ...DEFAULT_LLM,
 });
 
 const emptyContainerValues = (): ContainerFormValues => ({
@@ -588,14 +543,12 @@ const emptyContainerValues = (): ContainerFormValues => ({
   pullPolicy: "IfNotPresent",
   exposePublicly: false,
   gpuRequest: "",
-  cpuRequest: "",
-  memoryRequest: "",
-  replicas: "",
+  cpuRequest: "500m",
+  memoryRequest: "512Mi",
+  replicas: "1",
   storage: "",
   parameters: [],
-  llmEndpoint: "",
-  llmApiToken: "",
-  llmModelName: "",
+  ...DEFAULT_LLM,
 });
 
 export default function RegisterApplicationModal({
@@ -676,6 +629,13 @@ export default function RegisterApplicationModal({
     setKind(next);
   };
 
+  // Branch / Ref is required; put the default back if it was cleared.
+  useEffect(() => {
+    if (step.id === "workflow" && !githubFormApi.getValues("branch")) {
+      githubFormApi.setValue("branch", "main");
+    }
+  }, [step.id, githubFormApi]);
+
   const resetAll = () => {
     setKind("github");
     setStepIndex(0);
@@ -720,8 +680,10 @@ export default function RegisterApplicationModal({
           );
         }
         if (!githubForm.connectionId) return fail("GitHub Connection is required.");
+        if (!githubForm.codeRepository.trim()) return fail("Code Repository is required.");
         if (!githubForm.workflowRepository.trim())
           return fail("Workflow Repository is required.");
+        if (!githubForm.branch.trim()) return fail("Branch / Ref is required.");
         if (!githubForm.workflowFile.trim())
           return fail("Workflow File is required.");
         return true;
@@ -1070,7 +1032,7 @@ export default function RegisterApplicationModal({
 
               <Field
                 label="Code Repository"
-                optional
+                required
                 helper="owner/repo — where the application source lives"
               >
                 <input
@@ -1092,6 +1054,22 @@ export default function RegisterApplicationModal({
                 />
               </Field>
 
+              <Field
+                label="Branch / Ref"
+                required
+                helper="The branch or tag to run the workflow from."
+              >
+                <input className={FIELD_CLASS} {...githubFormApi.register("branch")} />
+              </Field>
+
+              <Field label="Workflow File" required>
+                <input
+                  className={FIELD_CLASS}
+                  placeholder="e.g. .github/workflows/deploy.yml"
+                  {...githubFormApi.register("workflowFile")}
+                />
+              </Field>
+
               <Field label="Trigger Method" required>
                 <ChoiceList
                   value={githubForm.triggerMethod}
@@ -1108,26 +1086,6 @@ export default function RegisterApplicationModal({
                       desc: "Trigger using event payload.",
                     },
                   ]}
-                />
-              </Field>
-
-              <Field label="Workflow File" required>
-                <input
-                  className={FIELD_CLASS}
-                  placeholder="e.g. .github/workflows/deploy.yml"
-                  {...githubFormApi.register("workflowFile")}
-                />
-              </Field>
-
-              <Field
-                label="Branch / Ref"
-                optional
-                helper="The branch or tag to run the workflow from."
-              >
-                <input
-                  className={FIELD_CLASS}
-                  placeholder="e.g. main"
-                  {...githubFormApi.register("branch")}
                 />
               </Field>
             </>
@@ -1207,38 +1165,20 @@ export default function RegisterApplicationModal({
           {step.id === "resources" && (
             <>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="GPU Request" optional>
-                  <input
-                    className={FIELD_CLASS}
-                    placeholder="e.g. 1"
-                    {...containerFormApi.register("gpuRequest")}
-                  />
-                </Field>
                 <Field label="CPU Request" optional>
-                  <input
-                    className={FIELD_CLASS}
-                    placeholder="e.g. 500m"
-                    {...containerFormApi.register("cpuRequest")}
-                  />
+                  <input className={FIELD_CLASS} {...containerFormApi.register("cpuRequest")} />
                 </Field>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
                 <Field label="Memory Request" optional>
-                  <input
-                    className={FIELD_CLASS}
-                    placeholder="e.g. 512Mi"
-                    {...containerFormApi.register("memoryRequest")}
-                  />
-                </Field>
-                <Field label="Scaling — Replica Count" optional>
-                  <input
-                    className={FIELD_CLASS}
-                    inputMode="numeric"
-                    placeholder="e.g. 3"
-                    {...containerFormApi.register("replicas")}
-                  />
+                  <input className={FIELD_CLASS} {...containerFormApi.register("memoryRequest")} />
                 </Field>
               </div>
+              <Field label="Scaling — Replica Count" optional>
+                <input
+                  className={FIELD_CLASS}
+                  inputMode="numeric"
+                  {...containerFormApi.register("replicas")}
+                />
+              </Field>
               <Field label="Storage — Persistent Volume" optional>
                 <Select {...containerFormApi.register("storage")}>
                   <option value="">No persistent volume</option>
@@ -1270,8 +1210,8 @@ export default function RegisterApplicationModal({
 
           {step.id === "params" && kind === "container" && (
             <ParamsTable
-              title="Parameters"
-              addLabel="Add Parameter"
+              title="Environment Variables"
+              addLabel="Add Variable"
               rows={containerForm.parameters}
               onAdd={() => containerParams.append({ key: "", value: "" })}
               onRemove={(i) => containerParams.remove(i)}
@@ -1281,7 +1221,7 @@ export default function RegisterApplicationModal({
               onChangeValue={(i, value) =>
                 containerFormApi.setValue(`parameters.${i}.value`, value)
               }
-              info="Default key/value pairs for this application. Resources, scaling, and storage are configured on the Resources & Scaling step."
+              info="Environment variables set on the container for every deployment of this application. Resources, scaling, and storage are configured on the Resources & Scaling step."
             />
           )}
 
@@ -1290,7 +1230,6 @@ export default function RegisterApplicationModal({
               <Field label="LLM Endpoint" required>
                 <input
                   className={FIELD_CLASS}
-                  placeholder="https://api.openai.com/v1"
                   {...(kind === "container"
                     ? containerFormApi.register("llmEndpoint")
                     : githubFormApi.register("llmEndpoint"))}
@@ -1313,7 +1252,6 @@ export default function RegisterApplicationModal({
               >
                 <input
                   className={FIELD_CLASS}
-                  placeholder="e.g. gpt-4o"
                   list="llm-model-suggestions"
                   autoComplete="off"
                   {...(kind === "container"
@@ -1354,113 +1292,6 @@ export default function RegisterApplicationModal({
             </>
           )}
 
-          {step.id === "review" && (
-            <div className="space-y-3">
-              <ReviewSection title="Basic Information">
-                <ReviewRow label="Application Name" value={name} />
-                <ReviewRow
-                  label="Description"
-                  value={kind === "container" ? containerForm.description : githubForm.description}
-                />
-                <ReviewRow
-                  label="Application Type"
-                  value={kind === "container" ? "Containerized Application" : "GitHub Workflow"}
-                />
-              </ReviewSection>
-
-              {kind === "github" && (
-                <>
-                  <ReviewSection title="Workflow Configuration">
-                    <ReviewRow
-                      label="GitHub Connection"
-                      value={selectedConnection?.name ?? githubForm.connectionId}
-                    />
-                    <ReviewRow label="Code Repository" value={githubForm.codeRepository} />
-                    <ReviewRow label="Workflow Repository" value={githubForm.workflowRepository} />
-                    <ReviewRow label="Trigger Method" value={githubForm.triggerMethod} />
-                    <ReviewRow label="Workflow File" value={githubForm.workflowFile} />
-                    <ReviewRow label="Branch / Ref" value={githubForm.branch || "main"} />
-                  </ReviewSection>
-                  <ReviewSection title="Parameters">
-                    {githubForm.parameters.filter((p) => p.name.trim()).length === 0 ? (
-                      <ReviewRow label="Parameters" value="" />
-                    ) : (
-                      githubForm.parameters
-                        .filter((p) => p.name.trim())
-                        .map((p, i) => (
-                          <ReviewRow key={i} label={p.name} value={PARAM_TYPE_LABEL[p.type]} />
-                        ))
-                    )}
-                  </ReviewSection>
-                </>
-              )}
-
-              {kind === "container" && (
-                <>
-                  <ReviewSection title="Container / Image Configuration">
-                    <ReviewRow
-                      label="Container Registry"
-                      value={
-                        registries.find((r) => r.value === containerForm.containerRegistry)?.label ??
-                        containerForm.containerRegistry
-                      }
-                    />
-                    <ReviewRow label="Image Registry" value={containerForm.imageRegistry} />
-                    <ReviewRow label="Registry Username" value={containerForm.registryUsername} />
-                    <ReviewRow
-                      label="Registry Password / Token"
-                      value={containerForm.registryPassword ? MASKED : ""}
-                    />
-                    <ReviewRow label="Default Image Tag" value={containerForm.tag} />
-                    <ReviewRow label="Container Port" value={containerForm.port} />
-                    <ReviewRow label="Image Pull Policy" value={containerForm.pullPolicy} />
-                    <ReviewRow
-                      label="Public Service (Ingress)"
-                      value={containerForm.exposePublicly ? "Yes" : "No"}
-                    />
-                  </ReviewSection>
-                  <ReviewSection title="Resources & Scaling">
-                    <ReviewRow label="GPU Request" value={containerForm.gpuRequest} />
-                    <ReviewRow label="CPU Request" value={containerForm.cpuRequest} />
-                    <ReviewRow label="Memory Request" value={containerForm.memoryRequest} />
-                    <ReviewRow label="Replica Count" value={containerForm.replicas} />
-                    <ReviewRow
-                      label="Persistent Volume"
-                      value={containerForm.storage || "No persistent volume"}
-                    />
-                  </ReviewSection>
-                  <ReviewSection title="Deployment Parameters">
-                    {containerForm.parameters.filter((p) => p.key.trim()).length === 0 ? (
-                      <ReviewRow label="Parameters" value="" />
-                    ) : (
-                      containerForm.parameters
-                        .filter((p) => p.key.trim())
-                        .map((p, i) => <ReviewRow key={i} label={p.key} value={p.value} />)
-                    )}
-                  </ReviewSection>
-                </>
-              )}
-
-              <ReviewSection title="LLM Configuration">
-                <ReviewRow
-                  label="LLM Endpoint"
-                  value={kind === "container" ? containerForm.llmEndpoint : githubForm.llmEndpoint}
-                />
-                <ReviewRow
-                  label="LLM API Token"
-                  value={
-                    (kind === "container" ? containerForm.llmApiToken : githubForm.llmApiToken)
-                      ? MASKED
-                      : ""
-                  }
-                />
-                <ReviewRow
-                  label="LLM Model Name"
-                  value={kind === "container" ? containerForm.llmModelName : githubForm.llmModelName}
-                />
-              </ReviewSection>
-            </div>
-          )}
         </div>
 
         {/* Footer */}

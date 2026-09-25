@@ -3,6 +3,7 @@ import {
   CircleHelp,
   ExternalLink,
   Loader2,
+  X,
   XCircle,
   CheckCircle2,
 } from "lucide-react";
@@ -57,12 +58,15 @@ type DeployingCardProps = {
   appStyle: AppStyle;
   /** When set and ``deployment.run_id`` is present, shows Cancel for in-flight runs. */
   onCancel?: () => void | Promise<void>;
+  /** When set, a failed deployment's card can be removed from the page. */
+  onDismiss?: () => void;
 };
 
 export default function DeployingCard({
   deployment,
   appStyle,
   onCancel,
+  onDismiss,
 }: DeployingCardProps) {
   const variant = resolveVariant(deployment);
   const opLabel = OPERATION_LABELS[deployment.operation] ?? "Running";
@@ -84,7 +88,8 @@ export default function DeployingCard({
     variant === "in_progress" || variant === "queued" || variant === "unknown";
 
   const previewUrl = deploymentPreviewUrl(deployment.subdomain, DEPLOY_DOMAIN);
-  const displayName = splitWorkflowHostLabel(deployment.subdomain).customer;
+  const displayName =
+    deployment.application_name?.trim() || splitWorkflowHostLabel(deployment.subdomain).customer;
 
   const runEnded = isTerminal(deployment);
   const isInProgress = variant === "in_progress" || variant === "queued";
@@ -134,6 +139,17 @@ export default function DeployingCard({
         )}
         <span>{bannerMessage}</span>
       </div>
+      {onDismiss && variant === "failure" && (
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss failed deployment"
+          title="Remove from page"
+          className="absolute right-2 top-1 z-10 flex h-5 w-5 items-center justify-center rounded text-foreground/70 transition-colors hover:bg-white/10 hover:text-foreground"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      )}
 
       {/* ── Header ── */}
       <div className="flex-1 space-y-3 mt-6">

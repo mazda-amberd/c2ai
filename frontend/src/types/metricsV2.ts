@@ -38,6 +38,14 @@ export interface MetricValue {
   status: string | null;
   /** False when the query failed or returned nothing. The key is always present. */
   available: boolean;
+  /** Samples across the requested window, oldest first (empty when unavailable). */
+  points?: MetricSample[];
+}
+
+export interface MetricSample {
+  /** Milliseconds since the epoch. */
+  timestamp: number;
+  value: number;
 }
 
 export interface Scope {

@@ -27,6 +27,8 @@ import {
 import { Button } from "@ui/button";
 import { cn } from "@/lib/utils";
 import CostAmount from "@components/CostAmount";
+import { DEPLOY_DOMAIN } from "@/constants/deployment";
+import { deploymentPreviewUrl } from "@/utils/subdomain";
 import {
   fetchAppCost,
   isCostAvailable,
@@ -106,6 +108,13 @@ export default function ApplicationListItem({
     });
   };
 
+  // Instances deployed by the ada workflows are served at their host label;
+  // others at their application name.
+  const appUrl = deploymentPreviewUrl(
+    app.nodename.startsWith("amberd-") ? app.nodename : app.name,
+    DEPLOY_DOMAIN,
+  );
+
   const navigate = useNavigate();
 
   const urlTier = tierIndex + 1;
@@ -175,6 +184,13 @@ export default function ApplicationListItem({
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+                  <DropdownMenuItem
+                    onSelect={() => window.open(appUrl, "_blank", "noopener,noreferrer")}
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                    Go to URL
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
                   <DropdownMenuItem onSelect={onMoveTier} disabled={isOperating}>
                     <ArrowRightLeft className="h-4 w-4" />
                     Move to Tier
@@ -228,6 +244,7 @@ export default function ApplicationListItem({
                   >
                     <CostAmount
                       cost={appCost}
+                      unavailableLabel="Cost not available"
                       className="text-sm font-bold text-[#fbbf24]"
                       unavailableClassName="text-xs font-semibold text-[#8b97a5]"
                     />

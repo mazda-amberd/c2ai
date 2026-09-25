@@ -170,11 +170,8 @@ export async function registerApplication(
         github_connection: registration.connectionId,
         trigger_method: registration.triggerMethod,
         repository: registration.workflowRepository.trim(),
-        // Optional: left out of the body entirely when blank (bodies are
-        // strict, and an empty string isn't a valid owner/repo).
-        ...(registration.codeRepository.trim()
-          ? { code_repository: registration.codeRepository.trim() }
-          : {}),
+        // Required by the wizard.
+        code_repository: registration.codeRepository.trim(),
         workflow_file_path: registration.workflowFile.trim(),
         ref: registration.branch.trim() || "main",
       },

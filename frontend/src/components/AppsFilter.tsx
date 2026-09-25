@@ -148,14 +148,14 @@ export default function AppsFilter({
 
           {/* Client Name — single-select */}
           <div>
-            <h3 className="text-sm mb-2">Filter by Client</h3>
+            <h3 className="text-sm mb-2">Filter by Customer</h3>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
                   variant="dropdown"
                   className="w-full text-left border-slate-600 bg-slate-800 text-gray-300 hover:border-slate-500"
                 >
-                  {filters.clientName ?? "Select Client"}
+                  {filters.clientName ?? "Select Customer"}
                   <ChevronDown className="h-6 w-6" />
                 </Button>
               </DropdownMenuTrigger>

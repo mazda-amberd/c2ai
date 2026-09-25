@@ -65,14 +65,10 @@ export type AppMetric = {
 /* ------------------------------------------------------------------ */
 /* Per-point history                                                   */
 /*                                                                      */
-/* The v2 metrics API returns one aggregated value per metric per call —
- * there is no per-point time series yet (tracked as an open item on the
- * backend: "Charting needs per-point data; that lands as an additive
- * `points` array on `MetricValue`"). Until then we build a short client-
- * side history by appending the latest value every time we poll, so the
- * chart fills in and starts looking like a real trend the longer a page
- * stays open. A freshly opened page will show a single point until a few
- * polls have landed — that's the real data, not a bug.
+/* The v2 metrics API returns each metric's samples across the window in
+ * `points`. When it returns none (an older backend, or a series query that
+ * failed while the value did not) we fall back to a short client-side
+ * history, appending the latest value every time we poll.
  * ------------------------------------------------------------------ */
 
 const MAX_HISTORY_POINTS = 60;
@@ -252,8 +248,11 @@ function buildAppMetrics(
 
   return Object.entries(series.metrics).map(([key, metric]: [string, MetricValue]) => {
     const def = defs[key];
-    const key_ = historyKey(level, series.scope.id, key, range);
-    const points = recordPoint(key_, now, metric.value);
+    const served = metric.points ?? [];
+    const points =
+      served.length > 0
+        ? served.map((p) => ({ timestamp: p.timestamp, value: p.value }))
+        : recordPoint(historyKey(level, series.scope.id, key, range), now, metric.value);
     const format = def?.format ?? ((v: number) => formatByUnit(metric.unit, v));
 
     return {

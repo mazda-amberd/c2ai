@@ -38,6 +38,7 @@ type Props = {
 type DeployFormValues = {
   appId: string;
   version: string;
+  customerName: string;
   instanceName: string;
   /** Dynamically generated from the registered app's parameter defs
    *  (Story 5.1) — one entry per parameter, value assigned at deploy time. */
@@ -53,6 +54,26 @@ const slugify = (value: string) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 40) || "app";
+
+/** Parameters this form never renders: Customer Name and Instance Name fill
+ *  the first two, and Athena derives the rest (it rejects supplied values). */
+const FORM_MANAGED_PARAMETERS = new Set([
+  "customer_name",
+  "env_instance",
+  "slack_user",
+  "tier",
+  "target_tier",
+  "namespace",
+  "instance_name",
+]);
+
+const EMPTY_FORM: DeployFormValues = {
+  appId: "",
+  version: "",
+  customerName: "",
+  instanceName: "",
+  parameters: [],
+};
 
 const PARAM_TYPE_LABEL: Record<ParamType, string> = {
   text: "Text",
@@ -102,17 +123,11 @@ export default function DeployApplicationModal({
   const [submitting, setSubmitting] = useState(false);
 
   const { register, watch, setValue, getValues, reset } =
-    useForm<DeployFormValues>({
-      defaultValues: {
-        appId: "",
-        version: "",
-        instanceName: "",
-        parameters: [],
-      },
-    });
+    useForm<DeployFormValues>({ defaultValues: EMPTY_FORM });
 
   const appId = watch("appId");
   const version = watch("version");
+  const customerName = watch("customerName");
   const instanceName = watch("instanceName");
   const parameters = watch("parameters");
 
@@ -159,7 +174,11 @@ export default function DeployApplicationModal({
         setDetail(d);
         setValue(
           "parameters",
-          d.type === "github" ? d.parameters.map((p) => ({ ...p })) : [],
+          d.type === "github"
+            ? d.parameters
+                .filter((p) => !FORM_MANAGED_PARAMETERS.has(p.name))
+                .map((p) => ({ ...p }))
+            : [],
         );
         setVersions(d.defaultVersion ? [d.defaultVersion] : []);
         setValue("version", d.defaultVersion);
@@ -198,7 +217,7 @@ export default function DeployApplicationModal({
     setVersions([]);
     setDetail(null);
     setDetailLoading(false);
-    reset({ appId: "", version: "", instanceName: "", parameters: [] });
+    reset(EMPTY_FORM);
   };
 
   const handleClose = (next: boolean) => {
@@ -217,6 +236,11 @@ export default function DeployApplicationModal({
     }
     if (!detail) {
       showToast("Application details are still loading.");
+      return;
+    }
+    const customer = customerName.trim();
+    if (!customer) {
+      showToast("Customer Name is required.");
       return;
     }
     const name = instanceName.trim();
@@ -244,11 +268,18 @@ export default function DeployApplicationModal({
           tier: tierNumber,
           version: version.trim(),
           instance_name: name,
-          parameters: toParameterValues(getValues("parameters")),
+          // Workflows that declare these receive them; for others Athena
+          // records the customer without sending either.
+          parameters: {
+            ...toParameterValues(getValues("parameters")),
+            customer_name: customer,
+            env_instance: name,
+          },
         });
       } else {
         created = await deployContainerApplication(app.id, tierNumber, {
           instance_name: name,
+          customer_name: customer,
           version: version.trim(),
         });
       }
@@ -335,6 +366,10 @@ export default function DeployApplicationModal({
                 </option>
               ))}
             </Select>
+          </Field>
+
+          <Field label="Customer Name" required helper="Who this instance is deployed for.">
+            <input className={FIELD_CLASS} {...register("customerName")} />
           </Field>
 
           <Field

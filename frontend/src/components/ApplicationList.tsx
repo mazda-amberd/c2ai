@@ -8,6 +8,7 @@ import type { Application } from "@/types/application";
 import NewDeploymentModal from "./NewDeploymentModal";
 import { TIER_DISPLAY_NAMES } from "@/constants/deployment";
 import { useTierDeploymentActions } from "@hooks/useDeployments";
+import { useDismissedDeployments } from "@hooks/useDismissedDeployments";
 import {
   Dialog,
   DialogContent,
@@ -34,6 +35,7 @@ export default function ApplicationList({
   const activeTier = TIER_DISPLAY_NAMES[tierIndex];
 
   const [terminateStep, setTerminateStep] = useState<1 | 2>(1);
+  const { dismiss, isDismissed } = useDismissedDeployments();
   const [confirmText, setConfirmText] = useState("");
 
   const {
@@ -99,7 +101,8 @@ export default function ApplicationList({
     );
   }
 
-  const isEmpty = apps.length === 0 && pendingDeployments.length === 0;
+  const visibleDeployments = pendingDeployments.filter((d) => !isDismissed(d.id));
+  const isEmpty = apps.length === 0 && visibleDeployments.length === 0;
 
   const openMoveTier = (app: Application) => {
     setMoveTarget(app);
@@ -322,7 +325,7 @@ export default function ApplicationList({
           className="font-semibold text-xl shrink-0 mb-2 pl-6"
           style={{ color: appStyle.text }}
         >
-          Applications ({apps.length + pendingDeployments.length})
+          Applications ({apps.length + visibleDeployments.length})
         </p>
         <div
           className="w-full flex-1 min-h-0 overflow-y-auto no-scrollbar"
@@ -334,7 +337,7 @@ export default function ApplicationList({
           }}
         >
           <div className="grid grid-cols-3 gap-6 content-start px-6 pt-4 pb-6">
-            {pendingDeployments.map((d) => (
+            {visibleDeployments.map((d) => (
               <DeployingCard
                 key={`deploying-${d.id}`}
                 deployment={d}
@@ -344,6 +347,7 @@ export default function ApplicationList({
                     ? () => void cancelPipelineRun(d.id)
                     : undefined
                 }
+                onDismiss={() => dismiss(d.id)}
               />
             ))}
             {apps.map((app) => {

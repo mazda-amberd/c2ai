@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Download, Loader2 } from "lucide-react";
 
 import { ApiFetchError } from "@/api";
+import TroubleshootingMetricChart from "./TroubleshootingMetricChart";
 import {
   createTroubleshootingJob,
   downloadTroubleshootingPdf,
@@ -295,25 +296,15 @@ export default function ApplicationTroubleshooting({ request }: Props) {
                 key={m.name}
                 className="relative rounded-[14px] border border-[#1c2836] bg-[#0d1420] px-5 pb-3.5 pt-[18px]"
               >
-                <div className="absolute right-[18px] top-[18px] h-2 w-2 rounded-full bg-[#f0655f]" />
+                <div className="absolute right-[18px] top-[18px] h-2 w-2 rounded-full bg-[#34d399]" />
                 <div className="mb-3 pr-4 text-[11px] font-extrabold uppercase tracking-[0.8px] text-[#8b97a5]">
                   {m.label}
                 </div>
-                <div className="text-2xl font-extrabold text-[#f0655f]">
+                <div className="text-2xl font-extrabold text-[#34d399]">
                   {m.value !== null ? m.value.toLocaleString() : "—"}
                   <span className="text-sm font-semibold text-[#8b97a5]">{m.unit}</span>
                 </div>
-                {m.plot_data_url ? (
-                  <img
-                    src={m.plot_data_url}
-                    alt={m.label}
-                    className="mt-2 block h-[46px] w-full object-fill"
-                  />
-                ) : (
-                  <div className="mt-2 flex h-[46px] items-center justify-center text-[11px] text-[#57606c]">
-                    No plot available
-                  </div>
-                )}
+                <TroubleshootingMetricChart metric={m} />
               </div>
             ))}
           </div>

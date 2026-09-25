@@ -123,6 +123,7 @@ export default function ApplicationMetrics() {
           </span>
           {app?.version && <span className={MUTED_PILL_CLASS}>{app.version}</span>}
           {app?.client_name && <span className={MUTED_PILL_CLASS}>{app.client_name}</span>}
+          {app?.instance_name && <span className={MUTED_PILL_CLASS}>{app.instance_name}</span>}
         </div>
       </div>
 

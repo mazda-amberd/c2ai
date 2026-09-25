@@ -13,11 +13,18 @@ type Props = {
   className?: string;
   /** Class applied only when the cost couldn't be calculated (muted look). */
   unavailableClassName?: string;
+  /** Text shown when the cost couldn't be calculated. */
+  unavailableLabel?: string;
 };
 
-/** Formats a cost figure; renders "Not available" with an explanatory
+/** Formats a cost figure; renders "Not available" (or `unavailableLabel`) with an explanatory
  *  tooltip when the backend couldn't calculate it, and "…" while loading. */
-export default function CostAmount({ cost, className, unavailableClassName }: Props) {
+export default function CostAmount({
+  cost,
+  className,
+  unavailableClassName,
+  unavailableLabel = COST_UNAVAILABLE_LABEL,
+}: Props) {
   if (cost === null) return <span className={className}>…</span>;
   if (isCostAvailable(cost)) return <span className={className}>{formatCost(cost)}</span>;
 
@@ -27,10 +34,10 @@ export default function CostAmount({ cost, className, unavailableClassName }: Pr
         <TooltipTrigger asChild>
           <span
             tabIndex={0}
-            aria-label={`${COST_UNAVAILABLE_LABEL} — ${COST_UNAVAILABLE_HINT}`}
+            aria-label={`${unavailableLabel} — ${COST_UNAVAILABLE_HINT}`}
             className={[className, unavailableClassName, "cursor-help"].filter(Boolean).join(" ")}
           >
-            {COST_UNAVAILABLE_LABEL}
+            {unavailableLabel}
           </span>
         </TooltipTrigger>
         <TooltipContent>{COST_UNAVAILABLE_HINT}</TooltipContent>

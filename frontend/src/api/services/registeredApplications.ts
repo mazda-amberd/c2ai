@@ -308,6 +308,8 @@ export const deployGithubApplication = async (
 export type DeployContainerApplicationPayload = {
   instance_name: string;
   version: string;
+  /** Who the instance is deployed for; recorded and shown with it. */
+  customer_name?: string;
 };
 
 export const deployContainerApplication = async (

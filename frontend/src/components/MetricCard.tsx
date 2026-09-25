@@ -1,7 +1,12 @@
-import { Area, AreaChart, ResponsiveContainer, YAxis } from "recharts";
+import { Area, AreaChart, ResponsiveContainer, Tooltip, YAxis } from "recharts";
 
 import type { AppMetric, TimeRangeKey } from "@/utils/metricsApi";
 import { formatMetricTime } from "@/utils/metricsApi";
+import {
+  CHART_TOOLTIP_CURSOR,
+  CHART_TOOLTIP_LABEL_STYLE,
+  CHART_TOOLTIP_STYLE,
+} from "@styles/chartTooltip";
 
 const GREEN = "#34d399";
 const AMBER = "#fbbf24";
@@ -77,7 +82,6 @@ export default function MetricCard({ metric, range }: Props) {
 
   const first = metric.points[0]?.timestamp ?? 0;
   const lastTs = last?.timestamp ?? 0;
-  const gradientId = `metric-fill-${metric.key}`;
 
   // Recharts needs 2+ points to draw a line — with only one poll in, it
   // renders a dot instead of a flat line. Duplicate the single point for
@@ -113,22 +117,33 @@ export default function MetricCard({ metric, range }: Props) {
         {metric.points.length > 0 ? (
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={chartData} margin={{ top: 4, right: 4, bottom: 4, left: 4 }}>
-              <defs>
-                <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={color} stopOpacity={0.35} />
-                  <stop offset="100%" stopColor={color} stopOpacity={0} />
-                </linearGradient>
-              </defs>
               <YAxis hide domain={["dataMin", "dataMax"]} />
+              <Tooltip
+                cursor={CHART_TOOLTIP_CURSOR}
+                isAnimationActive={false}
+                contentStyle={CHART_TOOLTIP_STYLE}
+                labelStyle={CHART_TOOLTIP_LABEL_STYLE}
+                itemStyle={{ color, padding: 0, fontWeight: 600 }}
+                separator=""
+                labelFormatter={(_label, payload) => {
+                  const ts = payload?.[0]?.payload?.timestamp;
+                  return ts ? formatMetricTime(ts, range) : "";
+                }}
+                formatter={(value) => {
+                  const f = metric.format(Number(value));
+                  return [f.unit ? `${f.display} ${f.unit}` : f.display, ""];
+                }}
+              />
               <Area
                 type="linear"
                 dataKey="value"
                 stroke={color}
                 strokeWidth={2.5}
                 strokeLinecap="round"
-                fill={`url(#${gradientId})`}
+                fill="none"
                 isAnimationActive={false}
                 dot={false}
+                activeDot={{ r: 4, fill: color, stroke: "#0d1420", strokeWidth: 2 }}
               />
             </AreaChart>
           </ResponsiveContainer>

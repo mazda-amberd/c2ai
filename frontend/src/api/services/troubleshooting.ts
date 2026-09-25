@@ -35,8 +35,10 @@ export type TroubleshootingMetric = {
   label: string;
   value: number | null;
   unit: string;
-  /** Backend-rendered sparkline image (data: URL); null when unavailable. */
+  /** No longer rendered by the backend; always null. */
   plot_data_url: string | null;
+  /** Samples over the report window, oldest first. */
+  points?: { timestamp: string; value: number }[];
 };
 
 export type TroubleshootingWindow = {
