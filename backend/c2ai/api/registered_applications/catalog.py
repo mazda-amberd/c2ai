@@ -38,7 +38,7 @@ from c2ai.core.exceptions import (
 )
 from c2ai.db.session import get_db_session as db_session
 from c2ai.models.registered_application import RegisteredApplicationVersion
-from c2ai.registration import checks
+from c2ai.registration import checks, discovery
 from c2ai.registration.repository import RegisteredApplicationCatalogRecord
 from c2ai.schemas.registered_application import (
     ContainerConfigurationOut,
@@ -49,12 +49,15 @@ from c2ai.schemas.registered_application import (
     ContainerRegisteredApplicationCreate,
     ContainerRegisteredApplicationDetail,
     ContainerSecretStorage,
+    GitHubRefOptions,
     GitHubRegisteredApplicationCreate,
     GitHubRegisteredApplicationDetail,
+    GitHubRepositoryOptions,
     GitHubRepositoryTagList,
     GitHubWorkflowConfiguration,
     GitHubWorkflowInspection,
     GitHubWorkflowInspectRequest,
+    GitHubWorkflowOptions,
     LLMConfigurationOut,
     LLMModelList,
     LLMModelOut,
@@ -337,6 +340,64 @@ async def inspect_github_workflow(
     """Its triggers and inputs, and whether C2AI will be able to start it."""
 
     return await checks.inspect_workflow(db, payload, connections=connections)
+
+
+_CONNECTION = Query(
+    ..., min_length=1, max_length=200, description="A saved GitHub connection's id, or the server's"
+)
+_REPOSITORY = Query(
+    ..., min_length=3, max_length=255, pattern=r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})/[A-Za-z0-9._-]{1,100}$"
+)
+
+
+@router.get(
+    "/github/repositories",
+    response_model=GitHubRepositoryOptions,
+    status_code=status.HTTP_200_OK,
+    summary="Repositories a GitHub connection can reach",
+)
+async def list_github_repositories(
+    connection: str = _CONNECTION,
+    _current_user: AthenaTokenUser = Depends(require_admin),
+    db: AsyncSession = Depends(db_session),
+    connections: ModuleType = Depends(github_connections_repository),
+) -> GitHubRepositoryOptions:
+    """To pick the workflow and code repositories from, instead of typing them."""
+
+    return await discovery.list_repositories(db, connection, connections=connections)
+
+
+@router.get(
+    "/github/refs",
+    response_model=GitHubRefOptions,
+    status_code=status.HTTP_200_OK,
+    summary="A repository's branches and tags, through a GitHub connection",
+)
+async def list_github_refs(
+    connection: str = _CONNECTION,
+    repository: str = _REPOSITORY,
+    _current_user: AthenaTokenUser = Depends(require_admin),
+    db: AsyncSession = Depends(db_session),
+    connections: ModuleType = Depends(github_connections_repository),
+) -> GitHubRefOptions:
+    return await discovery.list_refs(db, connection, repository, connections=connections)
+
+
+@router.get(
+    "/github/workflows",
+    response_model=GitHubWorkflowOptions,
+    status_code=status.HTTP_200_OK,
+    summary="The workflow files on a branch, and what starts each",
+)
+async def list_github_workflows(
+    connection: str = _CONNECTION,
+    repository: str = _REPOSITORY,
+    ref: str = Query(..., min_length=1, max_length=255),
+    _current_user: AthenaTokenUser = Depends(require_admin),
+    db: AsyncSession = Depends(db_session),
+    connections: ModuleType = Depends(github_connections_repository),
+) -> GitHubWorkflowOptions:
+    return await discovery.list_workflows(db, connection, repository, ref, connections=connections)
 
 
 @router.post(

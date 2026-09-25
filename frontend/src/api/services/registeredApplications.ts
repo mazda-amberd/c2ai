@@ -267,6 +267,49 @@ export const inspectGithubWorkflow = async (body: {
     body: JSON.stringify(body),
   });
 
+/* ---------------- What a GitHub connection can see ---------------- */
+
+export type ApiGithubRepositoryOptions = {
+  items: Array<{ full_name: string; default_branch: string | null; private: boolean }>;
+  /** The token reaches more repositories than are listed. */
+  truncated: boolean;
+};
+
+export type ApiGithubRefOptions = {
+  default_branch: string | null;
+  branches: string[];
+  tags: string[];
+};
+
+export type ApiGithubWorkflowOptions = {
+  items: Array<{
+    path: string;
+    name: string | null;
+    triggers: Array<"workflow_dispatch" | "repository_dispatch">;
+    /** False when the file could not be read as a workflow. */
+    readable: boolean;
+  }>;
+};
+
+const githubUrl = (what: string, query: Record<string, string>) =>
+  `/api/registered-applications/github/${what}?${new URLSearchParams(query).toString()}`;
+
+export const listGithubRepositories = async (connection: string): Promise<ApiGithubRepositoryOptions> =>
+  await apiFetch<ApiGithubRepositoryOptions>(githubUrl("repositories", { connection }));
+
+export const listGithubRefs = async (
+  connection: string,
+  repository: string,
+): Promise<ApiGithubRefOptions> =>
+  await apiFetch<ApiGithubRefOptions>(githubUrl("refs", { connection, repository }));
+
+export const listGithubWorkflows = async (
+  connection: string,
+  repository: string,
+  ref: string,
+): Promise<ApiGithubWorkflowOptions> =>
+  await apiFetch<ApiGithubWorkflowOptions>(githubUrl("workflows", { connection, repository, ref }));
+
 export type ApiImageCheck = {
   ok: boolean;
   detail: string;

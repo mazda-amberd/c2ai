@@ -12,7 +12,6 @@ import logging
 from collections.abc import Awaitable, Callable
 from types import ModuleType
 from typing import Any, TypeVar
-from uuid import UUID
 
 import httpx
 import yaml
@@ -20,9 +19,9 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from c2ai.clients.container_registry import ContainerRegistryClient, build_image_reference
-from c2ai.clients.github_actions import GitHubActionsClient
 from c2ai.constants.registered_application import GitHubTriggerMethod, ParameterType
 from c2ai.core.exceptions import AppException
+from c2ai.registration.discovery import github_client
 from c2ai.schemas.registered_application import (
     ContainerImageCheck,
     ContainerImageCheckRequest,
@@ -180,31 +179,12 @@ async def inspect_workflow(
             check(name, False, "GitHub could not be reached.")
         raise _Stop
 
-    connection_id = request.github_connection_id
-    runtime = await connections.resolve_github_connection(db, connection_id)
     try:
-        UUID(connection_id)
-        saved = True
-    except ValueError:
-        saved = False
-    if saved and runtime is None:
-        check("Connection", False, "The selected GitHub connection no longer exists.")
-        return done()
-
-    owner, name = request.repository.split("/", 1)
-    try:
-        client = GitHubActionsClient(
-            repo_owner=owner,
-            repo_name=name,
-            github_token=runtime.token if runtime else None,
-            api_base_url=runtime.api_base_url if runtime else "https://api.github.com",
+        client = await github_client(
+            db, request.github_connection_id, request.repository, connections=connections
         )
-    except ValueError:
-        check(
-            "Connection",
-            False,
-            "This connection uses the server's GitHub token, and GITHUB_PAT is not set.",
-        )
+    except AppException as error:
+        check("Connection", False, str(error.detail))
         return done()
 
     path, ref = request.workflow_file_path, request.ref

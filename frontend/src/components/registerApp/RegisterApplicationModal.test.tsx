@@ -26,6 +26,16 @@ describe("RegisterApplicationModal", () => {
       configured: true,
     });
     vi.spyOn(registeredApplicationsApi, "listContainerSecrets").mockResolvedValue([]);
+    vi.spyOn(registeredApplicationsApi, "listGithubRepositories").mockResolvedValue({
+      items: [],
+      truncated: false,
+    });
+    vi.spyOn(registeredApplicationsApi, "listGithubRefs").mockResolvedValue({
+      default_branch: "main",
+      branches: ["main"],
+      tags: [],
+    });
+    vi.spyOn(registeredApplicationsApi, "listGithubWorkflows").mockResolvedValue({ items: [] });
     vi.spyOn(registeredApplicationsApi, "checkLlmModelPricing").mockResolvedValue({
       model_name: "qwen3-coder-next",
       pricing_available: true,
@@ -488,5 +498,71 @@ describe("RegisterApplicationModal", () => {
       }),
     );
     expect(await screen.findByText('"chat-service copy" created from "chat-service".')).toBeTruthy();
+  });
+
+  it("picks the repositories, branch and workflow file from what the connection can see", async () => {
+    const repositories = vi
+      .spyOn(registeredApplicationsApi, "listGithubRepositories")
+      .mockResolvedValue({
+        items: [
+          { full_name: "amberd-ai/dealership_new", default_branch: "main", private: true },
+          { full_name: "amberd-ai/devops", default_branch: "develop", private: true },
+        ],
+        truncated: false,
+      });
+    vi.spyOn(registeredApplicationsApi, "listGithubRefs").mockResolvedValue({
+      default_branch: "develop",
+      branches: ["develop", "main"],
+      tags: ["v1.0.0"],
+    });
+    const workflows = vi.spyOn(registeredApplicationsApi, "listGithubWorkflows").mockResolvedValue({
+      items: [
+        { path: ".github/workflows/ci.yml", name: "CI", triggers: [], readable: true },
+        {
+          path: ".github/workflows/deploy.yml",
+          name: "Deploy",
+          triggers: ["repository_dispatch"],
+          readable: true,
+        },
+      ],
+    });
+    render(
+      <ToastProvider>
+        <RegisterApplicationModal open onOpenChange={() => {}} />
+      </ToastProvider>,
+    );
+
+    fireEvent.change(field("Application Name"), { target: { value: "chatbot" } });
+    next(); // -> type
+    next(); // -> workflow
+    await screen.findByRole("option", { name: "Devops" });
+    fireEvent.change(field("GitHub Connection"), { target: { value: "c-1" } });
+
+    await waitFor(() => expect(repositories).toHaveBeenCalledWith("c-1"));
+    expect(
+      await screen.findByText(/2 repositories to pick from here and in Code Repository/),
+    ).toBeTruthy();
+    const offered = [...document.querySelectorAll("#github-repositories option")].map(
+      (o) => (o as HTMLOptionElement).value,
+    );
+    expect(offered).toEqual(["amberd-ai/dealership_new", "amberd-ai/devops"]);
+    // The workflow repository (from the connection) starts at its default branch.
+    await waitFor(() => expect(field("Branch / Ref").value).toBe("develop"));
+    const refs = [...document.querySelectorAll("#github-refs option")].map(
+      (o) => `${(o as HTMLOptionElement).value} ${o.textContent}`,
+    );
+    expect(refs).toEqual(["develop default branch", "main branch", "v1.0.0 tag"]);
+
+    await waitFor(() =>
+      expect(workflows).toHaveBeenCalledWith("c-1", "amberd-ai/devops", "develop"),
+    );
+    const ci = await screen.findByRole("button", { name: /ci\.yml/ });
+    expect(ci).toHaveProperty("disabled", true);
+    expect(ci.textContent).toContain("C2AI can't start it");
+    fireEvent.click(screen.getByRole("button", { name: /deploy\.yml/ }));
+    expect(field("Workflow File").value).toBe(".github/workflows/deploy.yml");
+    expect(
+      await screen.findByText("Trigger Method set to repository_dispatch, which the workflow listens for."),
+    ).toBeTruthy();
   });
 });

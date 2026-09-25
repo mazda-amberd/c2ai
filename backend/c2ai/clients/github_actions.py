@@ -144,6 +144,61 @@ class GitHubActionsClient:
             raise ValueError("GitHub returned the file in an unexpected encoding")
         return base64.b64decode(body["content"]).decode("utf-8")
 
+    async def list_accessible_repositories(
+        self, *, limit: int = 1000
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Repositories this token can reach, and whether there are more than ``limit``.
+
+        A personal access token lists its account's repositories (a
+        fine-grained one, only those it was granted); a GitHub App
+        installation token, the installation's.
+        """
+
+        per_page = 100
+        items: list[dict[str, Any]] = []
+        async with http_client(30.0) as client:
+            url = f"{self.api_base_url}/user/repos"
+            params: dict[str, Any] = {
+                "affiliation": "owner,collaborator,organization_member",
+                "sort": "full_name",
+            }
+            key: str | None = None
+            for page in range(1, limit // per_page + 2):
+                response = await client.get(
+                    url,
+                    headers=self._headers(),
+                    params={**params, "per_page": per_page, "page": page},
+                )
+                if page == 1 and key is None and response.status_code == 403:
+                    # An installation token has no user: ask for the installation's.
+                    url, params, key = f"{self.api_base_url}/installation/repositories", {}, "repositories"
+                    response = await client.get(
+                        url, headers=self._headers(), params={"per_page": per_page, "page": page}
+                    )
+                response.raise_for_status()
+                body = response.json()
+                batch = body.get(key) if key else body
+                if not isinstance(batch, list):
+                    raise ValueError("Invalid GitHub repositories response")
+                items.extend(item for item in batch if isinstance(item, dict))
+                if len(batch) < per_page or len(items) > limit:
+                    break
+        return items[:limit], len(items) > limit
+
+    async def list_workflow_files(self, ref: str) -> list[str]:
+        """Paths of the workflow files in ``.github/workflows`` on ``ref``."""
+
+        body = await self._get_or_none("/contents/.github/workflows", params={"ref": ref})
+        if not isinstance(body, list):
+            return []
+        return sorted(
+            item["path"]
+            for item in body
+            if isinstance(item, dict)
+            and item.get("type") == "file"
+            and str(item.get("name", "")).endswith((".yml", ".yaml"))
+        )
+
     async def get_workflow(self, path: str) -> dict[str, Any] | None:
         """GitHub Actions' record of a workflow (``state``); None when it lists none.
 

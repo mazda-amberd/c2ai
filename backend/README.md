@@ -240,6 +240,9 @@ signed-in user may.
 | `GET` | `/api/registered-applications` | Catalog: search, type/status filters, optional `tier` facet, sort, paging |
 | `POST` | `/api/registered-applications/github` | Register a GitHub Workflow application (version 1) |
 | `POST` | `/api/registered-applications/container` | Register a Containerized application (version 1) |
+| `GET` | `/api/registered-applications/github/repositories?connection=` | Repositories a connection's token can reach, to pick from |
+| `GET` | `/api/registered-applications/github/refs?connection=&repository=` | A repository's default branch, branches and tags |
+| `GET` | `/api/registered-applications/github/workflows?connection=&repository=&ref=` | The workflow files on a branch, and what starts each |
 | `POST` | `/api/registered-applications/github/inspect` | Read a workflow before registering: its triggers, its inputs (to import as parameters), and whether C2AI can start it |
 | `POST` | `/api/registered-applications/container/check` | Look an image and tag up in its registry with the credentials entered |
 | `GET` | `/api/registered-applications/container/secrets-status` | Whether a secret provider is configured for secret environment variables |

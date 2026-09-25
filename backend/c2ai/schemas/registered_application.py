@@ -564,6 +564,42 @@ class GitHubWorkflowInspection(_ContractModel):
     inputs: list[RegisteredParameterDefinition] = Field(default_factory=list)
 
 
+class GitHubRepositoryOption(_ContractModel):
+    """A repository a GitHub connection can reach."""
+
+    full_name: str
+    default_branch: str | None = None
+    private: bool = False
+
+
+class GitHubRepositoryOptions(_ContractModel):
+    """Repositories to pick from; ``truncated`` when the token reaches more."""
+
+    items: list[GitHubRepositoryOption]
+    truncated: bool = False
+
+
+class GitHubRefOptions(_ContractModel):
+    """A repository's branches and tags, and the branch it starts from."""
+
+    default_branch: str | None = None
+    branches: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+
+
+class GitHubWorkflowOption(_ContractModel):
+    """A workflow file, and what starts it. ``readable`` is False when it could not be parsed."""
+
+    path: str
+    name: str | None = None
+    triggers: list[GitHubTriggerMethod] = Field(default_factory=list)
+    readable: bool = True
+
+
+class GitHubWorkflowOptions(_ContractModel):
+    items: list[GitHubWorkflowOption]
+
+
 class ContainerImageCheckRequest(_ContractModel):
     """An image to look up in its registry before registering it.
 
