@@ -356,6 +356,9 @@ function DiscoveryNote({ children, error = false }: { children: React.ReactNode;
   );
 }
 
+/** The Workflow File choice that brings back the text field. */
+const OTHER_WORKFLOW = "__other__";
+
 /** A repository's branches and tags, as suggestions for a Branch / Ref field. */
 function RefSuggestions({ id, refs }: { id: string; refs: ApiGithubRefOptions | null }) {
   return (
@@ -476,6 +479,10 @@ export default function RegisterApplicationModal({
   const derivedRepository = useRef("");
   // The Code Branch / Ref last filled in (the form's "main", then a repository's default).
   const derivedBranch = useRef("main");
+  // The Workflow Branch / Ref last filled in from a separate workflow repository.
+  const derivedWorkflowBranch = useRef("");
+  // "Other" chosen for the Workflow File: its path is typed.
+  const [typingWorkflowFile, setTypingWorkflowFile] = useState(false);
 
   const githubFormApi = useForm<GithubFormValues>({
     mode: "onChange",
@@ -630,6 +637,26 @@ export default function RegisterApplicationModal({
     derivedBranch.current = defaultBranch;
   }, [defaultBranch, githubFormApi]);
 
+  // A workflow kept in another repository runs from that repository's
+  // default branch unless a branch was typed; back on the code repository,
+  // a branch filled in that way goes back to blank (the code's).
+  const workflowDefaultBranch =
+    discovery.workflowRefs === discovery.codeRefs
+      ? null
+      : (discovery.workflowRefs.data?.default_branch ?? null);
+  useEffect(() => {
+    const current = githubFormApi.getValues("branch").trim();
+    if (workflowDefaultBranch) {
+      if (!current || current === derivedWorkflowBranch.current) {
+        githubFormApi.setValue("branch", workflowDefaultBranch);
+      }
+      derivedWorkflowBranch.current = workflowDefaultBranch;
+    } else if (current && current === derivedWorkflowBranch.current && !githubForm.workflowRepository.trim()) {
+      githubFormApi.setValue("branch", "");
+      derivedWorkflowBranch.current = "";
+    }
+  }, [workflowDefaultBranch, githubForm.workflowRepository, githubFormApi]);
+
   /** The Basic step's fields are entered before the type is chosen, into
    *  whichever form is active at the time. Switching type must carry them
    *  over, otherwise the other form submits an empty name (422). */
@@ -669,6 +696,8 @@ export default function RegisterApplicationModal({
     setReferenceError("");
     derivedRepository.current = "";
     derivedBranch.current = "main";
+    derivedWorkflowBranch.current = "";
+    setTypingWorkflowFile(false);
   };
 
   const handleClose = (next: boolean) => {
@@ -898,6 +927,15 @@ export default function RegisterApplicationModal({
       setCheckingImage(false);
     }
   };
+
+  // The workflow files found where the workflow runs, and which is chosen:
+  // one of them, or "Other" (typed, or a path that is not among them).
+  const workflowOptions = discovery.workflows.data?.items ?? [];
+  const typedFile = githubForm.workflowFile.trim();
+  const workflowChoice =
+    typingWorkflowFile || (typedFile && !workflowOptions.some((w) => w.path === typedFile))
+      ? OTHER_WORKFLOW
+      : typedFile;
 
   /** Use a workflow file found on the branch, and the trigger it listens for. */
   const pickWorkflow = (workflow: ApiGithubWorkflowOptions["items"][number]) => {
@@ -1237,13 +1275,49 @@ export default function RegisterApplicationModal({
               </Field>
 
               <Field label="Workflow File" required>
-                <input
-                  className={FIELD_CLASS}
-                  placeholder="e.g. .github/workflows/deploy.yml"
-                  {...githubFormApi.register("workflowFile")}
-                />
+                {workflowOptions.length > 0 && (
+                  <Select
+                    aria-label="Workflow File"
+                    value={workflowChoice}
+                    onChange={(e) => {
+                      const chosen = workflowOptions.find((w) => w.path === e.target.value);
+                      setTypingWorkflowFile(!chosen && e.target.value === OTHER_WORKFLOW);
+                      if (chosen) pickWorkflow(chosen);
+                      else if (e.target.value === "") githubFormApi.setValue("workflowFile", "");
+                    }}
+                  >
+                    <option value="">Select a workflow file…</option>
+                    {workflowOptions.map((workflow) => {
+                      const startable = workflow.triggers.length > 0;
+                      const file = workflow.path.split("/").pop();
+                      return (
+                        <option key={workflow.path} value={workflow.path} disabled={!startable}>
+                          {`${file}${workflow.name ? ` · ${workflow.name}` : ""} — ${
+                            startable
+                              ? workflow.triggers.join(", ")
+                              : workflow.readable
+                                ? "C2AI can't start it"
+                                : "couldn't be read"
+                          }`}
+                        </option>
+                      );
+                    })}
+                    <option value={OTHER_WORKFLOW}>Other — type a path…</option>
+                  </Select>
+                )}
+                {(workflowOptions.length === 0 || workflowChoice === OTHER_WORKFLOW) && (
+                  <input
+                    aria-label="Workflow file path"
+                    className={FIELD_CLASS}
+                    placeholder="e.g. .github/workflows/deploy.yml"
+                    {...githubFormApi.register("workflowFile")}
+                  />
+                )}
                 {discovery.workflows.status === "loading" && (
-                  <DiscoveryNote>Looking for workflow files on {discovery.workflowBranch}…</DiscoveryNote>
+                  <DiscoveryNote>
+                    Looking for workflow files in {discovery.workflowRepository} on{" "}
+                    {discovery.workflowBranch}…
+                  </DiscoveryNote>
                 )}
                 {discovery.workflows.status === "error" && (
                   <DiscoveryNote error>
@@ -1251,50 +1325,15 @@ export default function RegisterApplicationModal({
                   </DiscoveryNote>
                 )}
                 {discovery.workflows.data?.items.length === 0 && (
-                  <DiscoveryNote>No workflow files in .github/workflows on {discovery.workflowBranch}.</DiscoveryNote>
+                  <DiscoveryNote>
+                    No workflow files in .github/workflows of {discovery.workflowRepository} on{" "}
+                    {discovery.workflowBranch}.
+                  </DiscoveryNote>
                 )}
-                {!!discovery.workflows.data?.items.length && (
-                  <div
-                    role="group"
-                    aria-label={`Workflow files on ${discovery.workflowBranch}`}
-                    className="space-y-1"
-                  >
-                    {discovery.workflows.data.items.map((workflow) => {
-                      const startable = workflow.triggers.length > 0;
-                      const chosen = githubForm.workflowFile.trim() === workflow.path;
-                      return (
-                        <button
-                          key={workflow.path}
-                          type="button"
-                          disabled={!startable}
-                          aria-pressed={chosen}
-                          onClick={() => pickWorkflow(workflow)}
-                          title={
-                            startable
-                              ? `Use ${workflow.path}`
-                              : "C2AI can only start workflows with workflow_dispatch or repository_dispatch"
-                          }
-                          className="flex w-full items-center justify-between gap-3 rounded-[6px] border px-3 py-1.5 text-left text-[12px] transition-colors hover:bg-[rgba(32,171,199,0.06)] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
-                          style={{
-                            borderColor: chosen ? ACCENT : "#1c2836",
-                            background: chosen ? "rgba(32,171,199,0.08)" : undefined,
-                          }}
-                        >
-                          <span className="min-w-0 truncate">
-                            <span className="font-mono text-[#eef2f6]">{workflow.path.split("/").pop()}</span>
-                            {workflow.name && <span className="text-[#8b97a5]"> · {workflow.name}</span>}
-                          </span>
-                          <span className="shrink-0 text-[11px] text-[#8b97a5]">
-                            {startable
-                              ? workflow.triggers.join(", ")
-                              : workflow.readable
-                                ? "C2AI can't start it"
-                                : "couldn't be read"}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
+                {workflowOptions.length > 0 && (
+                  <DiscoveryNote>
+                    Workflow files in {discovery.workflowRepository} on {discovery.workflowBranch}.
+                  </DiscoveryNote>
                 )}
               </Field>
 

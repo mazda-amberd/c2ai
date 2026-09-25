@@ -80,6 +80,7 @@ describe("RegisterApplicationModal", () => {
       "Same as the code branch (main)",
     );
     fireEvent.change(field("Workflow Repository"), { target: { value: "amberd-ai/devops" } });
+    await waitFor(() => expect(field("Workflow Branch / Ref").value).toBe("main"));
     next(); // -> params
     next(); // -> llm, the last step
     expect(field("LLM Endpoint").value).toBe("http://amberd-llm-gateway:8010");
@@ -94,7 +95,8 @@ describe("RegisterApplicationModal", () => {
       codeRepository: "amberd-ai/dealership_new",
       codeBranch: "main",
       workflowRepository: "amberd-ai/devops",
-      branch: "",
+      // A separate workflow repository runs from its default branch.
+      branch: "main",
       llmEndpoint: "http://amberd-llm-gateway:8010",
       llmApiToken: "EMPTY",
       llmModelName: "qwen3-coder-next",
@@ -532,22 +534,40 @@ describe("RegisterApplicationModal", () => {
         ],
         truncated: false,
       });
-    vi.spyOn(registeredApplicationsApi, "listGithubRefs").mockResolvedValue({
-      default_branch: "develop",
-      branches: ["develop", "main"],
-      tags: ["v1.0.0"],
-    });
-    const workflows = vi.spyOn(registeredApplicationsApi, "listGithubWorkflows").mockResolvedValue({
-      items: [
-        { path: ".github/workflows/ci.yml", name: "CI", triggers: [], readable: true },
-        {
-          path: ".github/workflows/deploy.yml",
-          name: "Deploy",
-          triggers: ["repository_dispatch"],
-          readable: true,
-        },
-      ],
-    });
+    const listRefs = vi
+      .spyOn(registeredApplicationsApi, "listGithubRefs")
+      .mockImplementation(async (_connection, repository) =>
+        repository === "amberd-ai/devops"
+          ? { default_branch: "develop", branches: ["develop", "main"], tags: ["v1.0.0"] }
+          : { default_branch: "main", branches: ["main", "release"], tags: [] },
+      );
+    // Each repository has its own workflow files.
+    const workflows = vi
+      .spyOn(registeredApplicationsApi, "listGithubWorkflows")
+      .mockImplementation(async (_connection, repository) =>
+        repository === "amberd-ai/devops"
+          ? {
+              items: [
+                { path: ".github/workflows/ci.yml", name: "CI", triggers: [], readable: true },
+                {
+                  path: ".github/workflows/deploy.yml",
+                  name: "Deploy",
+                  triggers: ["repository_dispatch"],
+                  readable: true,
+                },
+              ],
+            }
+          : {
+              items: [
+                {
+                  path: ".github/workflows/release.yml",
+                  name: "Release",
+                  triggers: ["workflow_dispatch"],
+                  readable: true,
+                },
+              ],
+            },
+      );
     render(
       <ToastProvider>
         <RegisterApplicationModal open onOpenChange={() => {}} />
@@ -578,22 +598,62 @@ describe("RegisterApplicationModal", () => {
     await waitFor(() =>
       expect(workflows).toHaveBeenCalledWith("c-1", "amberd-ai/devops", "develop"),
     );
-    const ci = await screen.findByRole("button", { name: /ci\.yml/ });
-    expect(ci).toHaveProperty("disabled", true);
-    expect(ci.textContent).toContain("C2AI can't start it");
-    fireEvent.click(screen.getByRole("button", { name: /deploy\.yml/ }));
-    expect(field("Workflow File").value).toBe(".github/workflows/deploy.yml");
+    // A dropdown of the files found; one C2AI cannot start is shown but not choosable.
+    const files = (await screen.findByRole("combobox", { name: "Workflow File" })) as HTMLSelectElement;
+    expect(screen.getByText("Workflow files in amberd-ai/devops on develop.")).toBeTruthy();
+    const options = [...files.options].map((o) => [o.textContent, o.disabled]);
+    expect(options).toEqual([
+      ["Select a workflow file…", false],
+      ["ci.yml · CI — C2AI can't start it", true],
+      ["deploy.yml · Deploy — repository_dispatch", false],
+      ["Other — type a path…", false],
+    ]);
+    expect(screen.queryByLabelText("Workflow file path")).toBeNull();
+    fireEvent.change(files, { target: { value: ".github/workflows/deploy.yml" } });
+    expect(files.value).toBe(".github/workflows/deploy.yml");
     expect(
       await screen.findByText("Trigger Method set to repository_dispatch, which the workflow listens for."),
     ).toBeTruthy();
 
-    // A workflow kept in another repository: its branches, and its files on the code branch.
-    const listRefs = vi.mocked(registeredApplicationsApi.listGithubRefs);
+    // "Other" is typed, and stays the choice.
+    fireEvent.change(files, { target: { value: "__other__" } });
+    fireEvent.change(screen.getByLabelText("Workflow file path"), {
+      target: { value: ".github/workflows/elsewhere.yml" },
+    });
+    expect(files.value).toBe("__other__");
+
+    // A workflow kept in another repository runs from its default branch,
+    // and its files are the ones listed.
     fireEvent.change(field("Workflow Repository"), { target: { value: "amberd-ai/dealership_new" } });
-    await waitFor(() =>
-      expect(workflows).toHaveBeenCalledWith("c-1", "amberd-ai/dealership_new", "develop"),
-    );
+    await waitFor(() => expect(field("Workflow Branch / Ref").value).toBe("main"));
     expect(listRefs).toHaveBeenCalledWith("c-1", "amberd-ai/dealership_new");
+    await waitFor(() =>
+      expect(workflows).toHaveBeenCalledWith("c-1", "amberd-ai/dealership_new", "main"),
+    );
+    expect(await screen.findByText("Workflow files in amberd-ai/dealership_new on main.")).toBeTruthy();
+    const workflowRefs = [...document.querySelectorAll("#github-workflow-refs option")].map(
+      (o) => (o as HTMLOptionElement).value,
+    );
+    expect(workflowRefs).toEqual(["main", "release"]);
+
+    // A branch given is where they are listed from.
+    fireEvent.change(field("Workflow Branch / Ref"), { target: { value: "release" } });
+    await waitFor(() =>
+      expect(workflows).toHaveBeenCalledWith("c-1", "amberd-ai/dealership_new", "release"),
+    );
+    fireEvent.change(
+      screen.getByRole("combobox", { name: "Workflow File" }),
+      { target: { value: ".github/workflows/release.yml" } },
+    );
+    expect(
+      (screen.getByRole("combobox", { name: "Workflow File" }) as HTMLSelectElement).value,
+    ).toBe(".github/workflows/release.yml");
+
+    // Back on the code repository: the typed branch stays, as typed.
+    fireEvent.change(field("Workflow Repository"), { target: { value: "" } });
+    await waitFor(() =>
+      expect(workflows).toHaveBeenLastCalledWith("c-1", "amberd-ai/devops", "release"),
+    );
   });
 
   it("manages connections in their own dialog, choosing one just added", async () => {
