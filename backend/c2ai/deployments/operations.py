@@ -39,8 +39,13 @@ def open_operation(
     tier: int | None = None,
     version: str | None = None,
     event_type: str | None = None,
+    restore_state: dict[str, Any] | None = None,
 ) -> PipelineRun:
-    """Add an unfinished log row for ``operation`` (flushed by the caller)."""
+    """Add an unfinished, not-yet-dispatched log row (flushed by the caller).
+
+    ``restore_state`` is the instance before the operation; it is put back if
+    the dispatch never reaches the pipeline.
+    """
 
     run = PipelineRun(
         id=str(uuid.uuid4()),
@@ -52,6 +57,9 @@ def open_operation(
         tier=tier if tier is not None else instance.tier,
         branch=version,
         dispatched_at=datetime.now(UTC),
+        kind=operation.value,
+        dispatch_state="pending",
+        restore_state=restore_state,
     )
     db.add(run)
     return run
@@ -69,17 +77,27 @@ def operation_conflict(subdomain: str) -> ConflictError:
     )
 
 
-def record_dispatch(run: PipelineRun | None, reference: dict[str, Any]) -> None:
+def record_reference(run: PipelineRun | None, reference: dict[str, Any]) -> None:
     """Copy what the pipeline returned (workflow, run id) onto the log row."""
 
     if run is None:
         return
+    run.dispatch_state = "dispatched"
     workflow = reference.get("workflow_id") or reference.get("event_type")
     if workflow:
         # ".github/workflows/ada-deploy.yaml" → "ada-deploy.yaml", as GitHub names it.
         run.event_type = PurePosixPath(str(workflow)).name
     if reference.get("run_id") is not None:
         run.run_id = int(reference["run_id"])
+
+
+def record_progress(run: PipelineRun, progress: dict[str, Any] | None) -> None:
+    """Store the latest GitHub run snapshot the status endpoints read."""
+
+    run.progress = progress
+    run.progress_updated_at = datetime.now(UTC)
+    if progress and progress.get("run_id") is not None:
+        run.run_id = int(progress["run_id"])
 
 
 def close_operation(run: PipelineRun | None, outcome: Outcome, *, at: datetime | None = None):
@@ -99,8 +117,36 @@ async def active_operation(db: AsyncSession, instance_id) -> PipelineRun | None:
     return result.scalar_one_or_none()
 
 
+async def open_operations(db: AsyncSession, *, limit: int = 100) -> list[PipelineRun]:
+    """Unfinished operations, oldest first (for the tracker)."""
+
+    result = await db.execute(
+        select(PipelineRun)
+        .where(PipelineRun.ended_at.is_(None), PipelineRun.deployment_instance_id.is_not(None))
+        .order_by(PipelineRun.dispatched_at)
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
+def operation_kind(run: PipelineRun | None) -> Operation | None:
+    if run is None or not run.kind:
+        return None
+    return Operation(run.kind)
+
+
 async def get_operation(db: AsyncSession, operation_id: str) -> PipelineRun | None:
     result = await db.execute(select(PipelineRun).where(PipelineRun.id == operation_id))
+    return result.scalar_one_or_none()
+
+
+async def latest_operation_for_instance(db: AsyncSession, instance_id) -> PipelineRun | None:
+    result = await db.execute(
+        select(PipelineRun)
+        .where(PipelineRun.deployment_instance_id == instance_id)
+        .order_by(PipelineRun.dispatched_at.desc())
+        .limit(1)
+    )
     return result.scalar_one_or_none()
 
 

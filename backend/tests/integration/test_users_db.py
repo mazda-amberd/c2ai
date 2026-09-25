@@ -95,6 +95,7 @@ async def _make(db, identifier, user_type, *, superuser=False, created_by=None):
             "created_by_id": created_by.id if created_by else None,
         },
     )
+    await db.commit()
     if superuser:
         user.is_superuser = True
         await db.commit()

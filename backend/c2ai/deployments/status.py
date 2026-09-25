@@ -1,9 +1,10 @@
-"""Live status of deployment operations in the ``PipelineStatusOut`` shape.
+"""Status of deployment operations in the ``PipelineStatusOut`` shape.
 
 ``/api/pipeline/active``, ``/status`` and ``/history`` read the operation log
-(``pipeline_runs``), which every application type writes. An unfinished
-operation is overlaid with its instance's live GitHub Actions progress; the
-same lookup applies GitHub's final result, so polling also settles it.
+(``pipeline_runs``), which every application type writes, including the
+GitHub run snapshot the ``deployments.track`` job stores on it. Nothing here
+calls GitHub or writes to the database: any number of browsers can poll
+without adding GitHub API calls.
 
 Unsuccessful operations stay visible for ``TERMINAL_VISIBILITY_WINDOW``;
 successful ones disappear as soon as they finish.
@@ -11,7 +12,7 @@ successful ones disappear as soon as they finish.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -23,17 +24,11 @@ from c2ai.deployments import operations
 from c2ai.deployments.configuration import (
     configured_version,
 )
-from c2ai.deployments.tracking import (
-    get_registered_deployment_workflow_progress,
-)
 from c2ai.models.pipeline_run import PipelineRun
 from c2ai.models.registered_application import DeploymentInstance
 from c2ai.schemas.deployment import PipelineStatusOut
 
 TERMINAL_VISIBILITY_WINDOW = timedelta(minutes=5)
-# Every open client polls /api/pipeline/active; cache each operation's GitHub
-# lookup briefly so the poll rate does not reach the GitHub API.
-STATUS_CACHE_TTL = timedelta(seconds=8)
 
 _GH_CONCLUSION = {
     "success": "success",
@@ -42,7 +37,6 @@ _GH_CONCLUSION = {
     "abandoned": "failure",
 }
 
-_status_cache: dict[str, tuple[dict[str, Any], datetime]] = {}
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -144,42 +138,15 @@ async def _load_instances(
     return {instance.id: instance for instance in result.scalars().unique().all()}
 
 
-async def operation_status(
-    db: AsyncSession,
-    run: PipelineRun,
-    instance: DeploymentInstance | None,
-) -> PipelineStatusOut:
-    """One operation's status; unfinished ones consult GitHub (briefly cached)."""
+def operation_status(run: PipelineRun, instance: DeploymentInstance | None) -> PipelineStatusOut:
+    """One operation's status from the log and its stored GitHub snapshot."""
 
-    now = datetime.now(UTC)
-    if run.ended_at is None:
-        cached = _status_cache.get(run.id)
-        if cached and now - cached[1] < STATUS_CACHE_TTL:
-            return PipelineStatusOut(**cached[0])
-
-    progress = progress_error = None
-    if run.ended_at is None and instance is not None:
-        progress, progress_error = await get_registered_deployment_workflow_progress(
-            db, instance
-        )
-    # The lookup may have settled the operation, so read the row after it.
     values = _base_values(run, instance)
-    if progress:
-        values = _apply_progress(values, progress)
-    elif progress_error and run.ended_at is None:
-        values["current_step"] = progress_error
-
-    if run.ended_at is None:
-        _status_cache[run.id] = (values, now)
-    else:
-        _status_cache.pop(run.id, None)
+    if run.progress:
+        values = _apply_progress(values, run.progress)
+    elif run.ended_at is None and run.dispatch_state == "dispatched":
+        values["current_step"] = values["current_step"] or "Waiting for the GitHub Actions run."
     return PipelineStatusOut(**values)
-
-
-def _prune_cache() -> None:
-    stale_before = datetime.now(UTC) - STATUS_CACHE_TTL
-    for key in [k for k, (_, at) in _status_cache.items() if at < stale_before]:
-        _status_cache.pop(key, None)
 
 
 def _is_successfully_completed(status: PipelineStatusOut) -> bool:
@@ -191,12 +158,7 @@ async def list_active_statuses(db: AsyncSession) -> list[PipelineStatusOut]:
 
     runs = await operations.visible_operations(db, failed_within=TERMINAL_VISIBILITY_WINDOW)
     instances = await _load_instances(db, runs)
-    # One at a time: the session is not safe for concurrent use.
-    statuses = [
-        await operation_status(db, run, instances.get(run.deployment_instance_id))
-        for run in runs
-    ]
-    _prune_cache()
+    statuses = [operation_status(run, instances.get(run.deployment_instance_id)) for run in runs]
     return [status for status in statuses if not _is_successfully_completed(status)]
 
 
@@ -207,4 +169,4 @@ async def latest_status_for_subdomain(
     if run is None:
         return None
     instances = await _load_instances(db, [run])
-    return await operation_status(db, run, instances.get(run.deployment_instance_id))
+    return operation_status(run, instances.get(run.deployment_instance_id))

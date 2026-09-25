@@ -43,5 +43,4 @@ async def replace_application_instances_for_tiers(
                     status=status_val,
                 )
             )
-
-    await db.commit()
+    await db.flush()

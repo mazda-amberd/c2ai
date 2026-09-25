@@ -1,4 +1,7 @@
-"""Persistence for users (Argon2-hashed passwords, typed access columns)."""
+"""Persistence for users (Argon2-hashed passwords, typed access columns).
+
+Functions here only flush; the route commits.
+"""
 
 from __future__ import annotations
 
@@ -111,7 +114,7 @@ async def create_user(db: AsyncSession, user_data: dict[str, Any]) -> User:
         updated_by=user_data.get("updated_by"),
     )
     db.add(user)
-    await db.commit()
+    await db.flush()
     await db.refresh(user)
     return user
 
@@ -137,7 +140,7 @@ async def update_user(db: AsyncSession, user: User, updates: dict[str, Any]) -> 
         merged.update({k: v for k, v in profile.items() if k not in _PROTECTED_METADATA_KEYS})
         user.metadata_ = merged
     db.add(user)
-    await db.commit()
+    await db.flush()
     await db.refresh(user)
     return user
 
@@ -163,7 +166,7 @@ async def update_user_password(
     metadata["needs_password_reset"] = bool(needs_password_reset)
     target_user.metadata_ = metadata
     db.add(target_user)
-    await db.commit()
+    await db.flush()
     await db.refresh(target_user)
     return target_user
 
@@ -172,5 +175,5 @@ async def delete_user(db: AsyncSession, target_user: User) -> bool:
     """Delete a user row (users they created keep existing, unowned)."""
 
     await db.delete(target_user)
-    await db.commit()
+    await db.flush()
     return True

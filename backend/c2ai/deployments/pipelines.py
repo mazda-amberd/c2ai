@@ -39,6 +39,14 @@ def _callback_base_url() -> str:
     return get_settings().callback_base_url.rstrip("/")
 
 
+def _workflow_callback_token(callback_token: str | None) -> dict[str, str]:
+    """callback_token as a workflow_dispatch input, once the workflows declare it."""
+
+    if callback_token and get_settings().container_workflows_accept_callback_token:
+        return {"callback_token": callback_token}
+    return {}
+
+
 def _pipeline_client(owner_repository: str) -> GitHubActionsClient:
     """Client for one of Amberd's pipeline repositories (``owner/name``)."""
 
@@ -77,6 +85,7 @@ def build_container_pipeline_payload(
     registry_username: str | None,
     registry_token: str | None,
     llm_api_token: str | None,
+    callback_token: str | None = None,
 ) -> dict[str, Any]:
     """Flatten one stored configuration into the container pipeline's contract."""
 
@@ -109,6 +118,7 @@ def build_container_pipeline_payload(
         # hostname from.
         "app_name": instance_name,
         "callback_base_url": _callback_base_url(),
+        **({"callback_token": callback_token} if callback_token else {}),
         "tier": f"tier{tier}",
         "container_registry": _CONTAINER_REGISTRY_LABELS.get(
             registry.strip().lower(),
@@ -160,6 +170,7 @@ async def dispatch_registered_application_deployment(
     registry_username: str | None = None,
     registry_token: str | None = None,
     llm_api_token: str | None = None,
+    callback_token: str | None = None,
 ) -> dict[str, Any]:
     """Dispatch a registered GitHub workflow or the configured container pipeline."""
 
@@ -273,6 +284,7 @@ async def dispatch_registered_application_deployment(
                 registry_username=registry_username,
                 registry_token=registry_token,
                 llm_api_token=llm_api_token,
+                callback_token=callback_token,
             )
         },
     )
@@ -297,6 +309,7 @@ async def dispatch_registered_application_upgrade(
     configuration: dict[str, Any],
     triggered_by: str,
     rollback: bool = False,
+    callback_token: str | None = None,
 ) -> dict[str, Any]:
     """Dispatch the type-specific predefined in-place update workflow."""
 
@@ -307,6 +320,7 @@ async def dispatch_registered_application_upgrade(
         target_version=target_version,
         configuration=configuration,
         triggered_by=triggered_by,
+        callback_token=callback_token,
     )
     return {**reference, "rollback": True} if rollback else reference
 
@@ -319,6 +333,7 @@ async def _dispatch_upgrade(
     target_version: str,
     configuration: dict[str, Any],
     triggered_by: str,
+    callback_token: str | None = None,
 ) -> dict[str, Any]:
 
     application_type = version.application.application_type
@@ -361,6 +376,7 @@ async def _dispatch_upgrade(
                 "app_name": instance_name,
                 "callback_base_url": _callback_base_url(),
                 "default_image_tag": target_version,
+                **_workflow_callback_token(callback_token),
             }
         ),
     )
@@ -411,6 +427,7 @@ async def dispatch_registered_application_termination(
     tier: int,
     configuration: dict[str, Any],
     triggered_by: str,
+    callback_token: str | None = None,
 ) -> dict[str, Any]:
     """Dispatch the type-specific predefined termination workflow."""
 
@@ -453,6 +470,7 @@ async def dispatch_registered_application_termination(
                 # deletes from app_name, so it carries the deployed instance
                 # name. workflow_dispatch rejects any other input.
                 "app_name": instance_name,
+                **_workflow_callback_token(callback_token),
                 "callback_base_url": _callback_base_url(),
             }
         ),

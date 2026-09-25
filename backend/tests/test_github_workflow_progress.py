@@ -1,14 +1,39 @@
-"""Tests for registered deployment GitHub Actions progress synchronization."""
+"""GitHub Actions progress: the tracker's fetch and apply steps."""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from c2ai.deployments.tracking import (
-    get_registered_deployment_workflow_progress,
-)
+from c2ai.deployments import tracking
 from tests.helpers import mock_db
+
+
+class _Run:
+    """The operation-log row the tracker updates."""
+
+    def __init__(self, kind):
+        self.kind = kind
+        self.tier = None
+        self.ended_at = None
+        self.conclusion = None
+        self.progress = None
+        self.progress_updated_at = None
+        self.run_id = None
+
+
+async def _track(db, instance, run, client):
+    """plan (DB) → fetch (GitHub) → apply (DB), as the deployments.track job does."""
+
+    with (
+        patch("c2ai.deployments.tracking.GitHubActionsClient", return_value=client),
+        patch("c2ai.deployments.repository.active_operation", AsyncMock(return_value=run)),
+    ):
+        plan = await tracking.plan_fetch(db, instance)
+        progress, error = await tracking.fetch(plan)
+        if progress is not None:
+            await tracking.apply_progress(db, run, instance, progress)
+    return progress, error
 
 
 @pytest.mark.asyncio
@@ -66,14 +91,8 @@ async def test_completed_termination_syncs_status_and_exposes_nested_steps():
     client = MagicMock()
     client.get_workflow_progress = AsyncMock(return_value=progress)
 
-    with patch(
-        "c2ai.deployments.tracking.GitHubActionsClient",
-        return_value=client,
-    ):
-        returned_progress, error = await get_registered_deployment_workflow_progress(
-            db,
-            instance,
-        )
+    run = _Run("terminate")
+    returned_progress, error = await _track(db, instance, run, client)
 
     assert error is None
     assert returned_progress["jobs"][0]["steps"][0]["name"] == "Remove deployment"
@@ -81,7 +100,8 @@ async def test_completed_termination_syncs_status_and_exposes_nested_steps():
     assert instance.current_step == "completed"
     assert instance.dns_status == "deleted"
     assert instance.events[-1].created_by == "github-actions"
-    db.commit.assert_awaited_once()
+    assert (run.conclusion, run.progress["run_id"]) == ("success", 891)
+    db.commit.assert_not_awaited()  # the tracker job commits
 
 
 @pytest.mark.asyncio
@@ -133,11 +153,8 @@ async def test_failed_job_sets_failed_state_and_specific_reason():
     client = MagicMock()
     client.get_workflow_progress = AsyncMock(return_value=progress)
 
-    with patch(
-        "c2ai.deployments.tracking.GitHubActionsClient",
-        return_value=client,
-    ):
-        _, error = await get_registered_deployment_workflow_progress(db, instance)
+    run = _Run("deploy")
+    _, error = await _track(db, instance, run, client)
 
     assert error is None
     # Runs are titled with the workflow's derived host label, not the record name.
@@ -149,4 +166,5 @@ async def test_failed_job_sets_failed_state_and_specific_reason():
     assert instance.failure_reason == (
         "GitHub Actions job 'deploy' failed at step 'Apply manifests'."
     )
+    assert run.conclusion == "failure"
 

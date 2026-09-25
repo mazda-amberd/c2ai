@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from c2ai.api.registered_applications import clients
 from c2ai.api.registered_applications.clients import PREFIX, TAGS
 from c2ai.auth.jwt import AthenaTokenUser, require_admin
+from c2ai.clients.container_registry import ContainerRegistryClient
 from c2ai.constants.registered_application import (
     ApplicationType,
     DeploymentInstanceStatus,
@@ -31,23 +32,15 @@ from c2ai.core.exceptions import (
     UnprocessableEntityError,
 )
 from c2ai.db.session import get_db_session as db_session
-from c2ai.deployments import repository as instances
+from c2ai.deployments import operations, repository as instances, service
 from c2ai.deployments.callbacks import verify_callback
 from c2ai.deployments.configuration import (
     build_container_deployment_configuration,
     build_deployment_configuration,
-    configured_version,
     default_github_instance_name,
     resolve_github_deployment_instance_name,
 )
-from c2ai.deployments.dispatch import dispatch_deployment as _dispatch_deployment
-from c2ai.deployments.pipelines import (
-    dispatch_registered_application_termination,
-    dispatch_registered_application_upgrade,
-)
-from c2ai.deployments.tracking import (
-    get_registered_deployment_workflow_progress,
-)
+from c2ai.jobs import JobStore, get_job_store
 from c2ai.registration import credentials, repository as applications, secrets as secret_store
 from c2ai.schemas.registered_application import (
     ContainerRegisteredApplicationDeploymentCreate,
@@ -206,8 +199,13 @@ async def get_registered_application_deployment(
     )
     if instance is None:
         raise DeploymentInstanceNotFound(deployment_id)
-    workflow_progress, workflow_progress_error = (
-        await get_registered_deployment_workflow_progress(db, instance)
+    run = await operations.latest_operation_for_instance(db, instance.id)
+    workflow_progress = run.progress if run is not None else None
+    workflow_progress_error = (
+        "Waiting for the matching GitHub Actions run."
+        if run is not None and run.ended_at is None and run.progress is None
+        and run.dispatch_state == "dispatched"
+        else None
     )
     return _deployment_out(
         instance,
@@ -238,6 +236,7 @@ async def report_registered_application_deployment_progress(
             payload,
         )
     )
+    await db.commit()
     return _deployment_out(instance, include_events=True)
 
 
@@ -251,6 +250,7 @@ async def rollback_registered_application_deployment(
     deployment_id: UUID,
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    store: JobStore = Depends(get_job_store),
 ) -> RegisteredApplicationDeploymentDetail:
     """Return the instance to its previous version, or redeploy it.
 
@@ -260,65 +260,13 @@ async def rollback_registered_application_deployment(
     stored configuration is deployed again (a retry of a failed deployment).
     """
 
-    instance = await instances.prepare_registered_application_rollback(
-        db,
-        deployment_id,
-        triggered_by=current_user.identifier,
+    instance = await service.rollback(
+        db, store, deployment_id, triggered_by=current_user.identifier
     )
-    application_type = instance.application.application_type
-    restoring_version = instance.status == DeploymentInstanceStatus.UPDATING.value
-    try:
-        if restoring_version:
-            target_version = configured_version(instance.configuration, application_type)
-            dispatch_reference = await dispatch_registered_application_upgrade(
-                instance.application_version,
-                deployment_id=instance.id,
-                instance_name=instance.instance_name,
-                tier=instance.tier,
-                target_version=target_version,
-                configuration=instance.configuration,
-                triggered_by=current_user.identifier,
-                rollback=True,
-            )
-        else:
-            dispatch_reference = await _dispatch_deployment(
-                db,
-                instance.application_version,
-                deployment_id=instance.id,
-                instance_name=instance.instance_name,
-                tier=instance.tier,
-                configuration=instance.configuration,
-                triggered_by=current_user.identifier,
-            )
-    except Exception as error:
-        await db.rollback()
-        logger.exception("Deployment rollback dispatch failed id=%s", deployment_id)
-        raise ServiceUnavailableError(
-            "The rollback pipeline could not be triggered."
-        ) from error
-
-    if restoring_version:
-        instance = await instances.complete_registered_application_upgrade_dispatch(
-            db,
-            instance,
-            dispatch_reference,
-            event_message=(
-                f"Rollback #{instance.rollback_count} pipeline dispatched for version "
-                f"'{target_version}'."
-            ),
-        )
-    else:
-        instance = await instances.complete_registered_application_dispatch(
-            db,
-            instance,
-            dispatch_reference,
-            event_message=f"Rollback #{instance.rollback_count} pipeline dispatched.",
-        )
     logger.info(
-        "Rollback #%s dispatched id=%s mode=%s by=%s",
+        "Rollback #%s dispatched id=%s by=%s",
         instance.rollback_count,
         instance.id,
-        "version" if restoring_version else "redeploy",
         current_user.identifier,
     )
     return _deployment_out(instance, include_events=True)
@@ -335,6 +283,8 @@ async def upgrade_registered_application_deployment(
     payload: RegisteredApplicationDeploymentUpgrade,
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    registry_client: ContainerRegistryClient = Depends(clients.container_registry_client),
+    store: JobStore = Depends(get_job_store),
 ) -> RegisteredApplicationDeploymentDetail:
     """Validate one version and dispatch the type-specific upgrade workflow."""
 
@@ -383,7 +333,8 @@ async def upgrade_registered_application_deployment(
                 instance.application_version_id,
             )
         )
-        await clients.container_registry_client().get_tag(
+        await db.commit()  # no transaction while the registry answers
+        await registry_client.get_tag(
             registry=registry,
             repository=repository,
             tag=payload.version,
@@ -391,39 +342,12 @@ async def upgrade_registered_application_deployment(
             username=registry_runtime.username if registry_runtime else None,
             password=registry_runtime.password if registry_runtime else None,
         )
-    instance = await instances.prepare_registered_application_upgrade(
+    instance = await service.upgrade(
         db,
+        store,
         deployment_id,
         target_version=payload.version,
         triggered_by=current_user.identifier,
-    )
-    try:
-        dispatch_reference = await dispatch_registered_application_upgrade(
-            instance.application_version,
-            deployment_id=instance.id,
-            instance_name=instance.instance_name,
-            tier=instance.tier,
-            target_version=payload.version,
-            configuration=instance.configuration,
-            triggered_by=current_user.identifier,
-        )
-    except Exception as error:
-        await db.rollback()
-        logger.exception(
-            "Registered deployment upgrade dispatch failed id=%s type=%s",
-            deployment_id,
-            application_type,
-        )
-        raise ServiceUnavailableError(
-            "The upgrade pipeline could not be triggered."
-        ) from error
-
-    instance = (
-        await instances.complete_registered_application_upgrade_dispatch(
-            db,
-            instance,
-            dispatch_reference,
-        )
     )
     logger.info(
         "Registered deployment upgrade dispatched id=%s type=%s version=%s by=%s",
@@ -446,6 +370,7 @@ async def terminate_registered_application_deployment(
     payload: RegisteredApplicationDeploymentTerminate,
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    store: JobStore = Depends(get_job_store),
 ) -> RegisteredApplicationDeploymentDetail:
     """Confirm and dispatch the type-specific termination workflow."""
 
@@ -469,39 +394,8 @@ async def terminate_registered_application_deployment(
     if payload.confirmation != instance.instance_name:
         raise DeploymentTerminationConfirmationMismatch()
 
-    instance = (
-        await instances.prepare_registered_application_termination(
-            db,
-            deployment_id,
-            triggered_by=current_user.identifier,
-        )
-    )
-    try:
-        dispatch_reference = await dispatch_registered_application_termination(
-            instance.application_version,
-            deployment_id=instance.id,
-            instance_name=instance.instance_name,
-            tier=instance.tier,
-            configuration=instance.configuration,
-            triggered_by=current_user.identifier,
-        )
-    except Exception as error:
-        await db.rollback()
-        logger.exception(
-            "Registered deployment termination dispatch failed id=%s type=%s",
-            deployment_id,
-            application_type,
-        )
-        raise ServiceUnavailableError(
-            "The termination pipeline could not be triggered."
-        ) from error
-
-    instance = (
-        await instances.complete_registered_application_termination_dispatch(
-            db,
-            instance,
-            dispatch_reference,
-        )
+    instance = await service.terminate(
+        db, store, deployment_id, triggered_by=current_user.identifier
     )
     logger.info(
         "Registered deployment termination dispatched id=%s type=%s by=%s",
@@ -524,6 +418,8 @@ async def deploy_registered_container_application(
     payload: ContainerRegisteredApplicationDeploymentCreate,
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    registry_client: ContainerRegistryClient = Depends(clients.container_registry_client),
+    store: JobStore = Depends(get_job_store),
 ) -> RegisteredApplicationDeploymentOut:
     """Validate a tag and deploy the stored container template into the path Tier."""
 
@@ -550,7 +446,8 @@ async def deploy_registered_container_application(
                 version.id,
             )
         )
-    await clients.container_registry_client().get_tag(
+    await db.commit()  # no transaction while the registry answers
+    await registry_client.get_tag(
         registry=template.registry,
         repository=template.image_repository,
         tag=payload.version,
@@ -567,39 +464,14 @@ async def deploy_registered_container_application(
             db, application_id
         ),
     )
-    instance = await instances.create_registered_application_deployment(
+    instance = await service.deploy(
         db,
+        store,
         version,
         instance_name=payload.instance_name,
         tier=tier,
         configuration=configuration,
         triggered_by=current_user.identifier,
-    )
-    try:
-        dispatch_reference = await _dispatch_deployment(
-            db,
-            version,
-            deployment_id=instance.id,
-            instance_name=instance.instance_name,
-            tier=instance.tier,
-            configuration=configuration,
-            triggered_by=current_user.identifier,
-        )
-    except Exception as error:
-        await db.rollback()
-        logger.exception(
-            "Container deployment dispatch failed application=%s tier=%s",
-            application_id,
-            tier,
-        )
-        raise ServiceUnavailableError(
-            "The deployment pipeline could not be triggered."
-        ) from error
-
-    instance = await instances.complete_registered_application_dispatch(
-        db,
-        instance,
-        dispatch_reference,
     )
     logger.info(
         "Container deployment dispatched id=%s application=%s tier=%s by=%s",
@@ -626,6 +498,7 @@ async def deploy_registered_application(
     payload: RegisteredApplicationDeploymentCreate,
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    store: JobStore = Depends(get_job_store),
 ) -> RegisteredApplicationDeploymentOut:
     """Validate, persist, and dispatch a deployment from the current template version."""
 
@@ -659,39 +532,14 @@ async def deploy_registered_application(
         tier=payload.tier,
         supplied_instance_name=payload.instance_name,
     )
-    instance = await instances.create_registered_application_deployment(
+    instance = await service.deploy(
         db,
+        store,
         version,
         instance_name=instance_name,
         tier=payload.tier,
         configuration=configuration,
         triggered_by=current_user.identifier,
-    )
-    try:
-        dispatch_reference = await _dispatch_deployment(
-            db,
-            version,
-            deployment_id=instance.id,
-            instance_name=instance.instance_name,
-            tier=instance.tier,
-            configuration=configuration,
-            triggered_by=current_user.identifier,
-        )
-    except Exception as error:
-        await db.rollback()
-        logger.exception(
-            "Registered application deployment dispatch failed application=%s tier=%s",
-            application_id,
-            payload.tier,
-        )
-        raise ServiceUnavailableError(
-            "The deployment pipeline could not be triggered."
-        ) from error
-
-    instance = await instances.complete_registered_application_dispatch(
-        db,
-        instance,
-        dispatch_reference,
     )
     logger.info(
         "Registered application deployment dispatched id=%s application=%s tier=%s by=%s",

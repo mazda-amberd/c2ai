@@ -87,8 +87,13 @@ class JobStore(ABC):
         run_after: datetime | None = None,
         max_attempts: int = 1,
         retention: timedelta = DEFAULT_RETENTION,
+        session: AsyncSession | None = None,
     ) -> JobRecord | None:
-        """Queue a job; None when an unfinished job already has ``dedupe_key``."""
+        """Queue a job; None when an unfinished job already has ``dedupe_key``.
+
+        With ``session`` the job is written in the caller's transaction (the
+        outbox pattern) and becomes visible when the caller commits.
+        """
 
     @abstractmethod
     async def get(self, job_id: UUID | str) -> JobRecord | None:
@@ -99,6 +104,10 @@ class JobStore(ABC):
         self, worker_id: str, *, kinds: Sequence[str], lease: timedelta, limit: int = 1
     ) -> list[JobRecord]:
         """Take up to ``limit`` ready jobs of ``kinds``, oldest first."""
+
+    @abstractmethod
+    async def claim_job(self, job_id: UUID, worker_id: str, lease: timedelta) -> JobRecord | None:
+        """Claim one specific queued job (to run it inline); None if taken."""
 
     @abstractmethod
     async def renew(self, job_id: UUID, worker_id: str, lease: timedelta) -> bool:
@@ -195,20 +204,44 @@ class PostgresJobStore(JobStore):
         run_after=None,
         max_attempts=1,
         retention=DEFAULT_RETENTION,
+        session=None,
     ):
-        async with self._session_factory() as session:
-            record = await self._insert(
-                session,
-                kind=kind,
-                payload=_json(payload or {}),
-                owner=owner,
-                dedupe_key=dedupe_key,
-                run_after=run_after or utcnow(),
-                max_attempts=max_attempts,
-                retention_seconds=int(retention.total_seconds()),
-            )
-            await session.commit()
+        values = {
+            "kind": kind,
+            "payload": _json(payload or {}),
+            "owner": owner,
+            "dedupe_key": dedupe_key,
+            "run_after": run_after or utcnow(),
+            "max_attempts": max_attempts,
+            "retention_seconds": int(retention.total_seconds()),
+        }
+        if session is not None:
+            return await self._insert(session, **values)
+        async with self._session_factory() as own:
+            record = await self._insert(own, **values)
+            await own.commit()
             return record
+
+    async def claim_job(self, job_id, worker_id, lease):
+        async with self._session_factory() as session:
+            row = (
+                await session.execute(
+                    text(
+                        f"""
+                        UPDATE jobs
+                        SET status = 'running', attempts = attempts + 1,
+                            locked_by = :worker,
+                            locked_until = now() + make_interval(secs => :lease),
+                            updated_at = now()
+                        WHERE id = :id AND status = 'queued'
+                        RETURNING {_COLUMNS}
+                        """
+                    ),
+                    {"id": job_id, "worker": worker_id, "lease": lease.total_seconds()},
+                )
+            ).first()
+            await session.commit()
+            return _record(row) if row else None
 
     async def get(self, job_id):
         try:
@@ -438,6 +471,7 @@ class MemoryJobStore(JobStore):
         run_after=None,
         max_attempts=1,
         retention=DEFAULT_RETENTION,
+        session=None,
     ):
         async with self._lock:
             return self._add(
@@ -482,6 +516,23 @@ class MemoryJobStore(JobStore):
                 )
                 self._jobs[job.id] = updated
                 claimed.append(updated)
+            return claimed
+
+    async def claim_job(self, job_id, worker_id, lease):
+        async with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status != QUEUED:
+                return None
+            now = self._clock()
+            claimed = replace(
+                job,
+                status=RUNNING,
+                attempts=job.attempts + 1,
+                locked_by=worker_id,
+                locked_until=now + lease,
+                updated_at=now,
+            )
+            self._jobs[job_id] = claimed
             return claimed
 
     def _owned(self, job_id: UUID, worker_id: str) -> JobRecord | None:

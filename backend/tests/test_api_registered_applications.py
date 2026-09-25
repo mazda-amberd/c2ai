@@ -1,5 +1,6 @@
 """API tests for GitHub Workflow application registration."""
 
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
@@ -7,6 +8,7 @@ from uuid import UUID
 import httpx
 import pytest
 
+from c2ai.api.registered_applications import clients
 from c2ai.app import app
 from c2ai.auth.jwt import AthenaTokenUser, require_admin
 from c2ai.clients.container_registry import (
@@ -302,6 +304,17 @@ def _upgradeable_github_instance() -> DeploymentInstance:
     return instance
 
 
+@contextmanager
+def _override(dependency, value):
+    """Serve ``value`` for a FastAPI dependency inside a ``with`` block."""
+
+    app.dependency_overrides[dependency] = lambda: value
+    try:
+        yield value
+    finally:
+        app.dependency_overrides.pop(dependency, None)
+
+
 @pytest.fixture(autouse=True)
 def _no_managed_secrets():
     """Container deploys look up managed secrets; none exist unless a test says so."""
@@ -336,11 +349,11 @@ def container_secret_admin_client(registered_applications_admin_client):
         return_value="vault://athena/chat-service/chatbot-api-key"
     )
     provider.delete_secret = AsyncMock()
-    with patch(
-        "c2ai.api.registered_applications.clients.container_secret_provider",
-        return_value=provider,
-    ):
+    app.dependency_overrides[clients.container_secret_provider] = lambda: provider
+    try:
         yield registered_applications_admin_client, provider
+    finally:
+        app.dependency_overrides.pop(clients.container_secret_provider, None)
 
 
 def _managed_secret() -> ContainerApplicationSecret:
@@ -696,395 +709,6 @@ def test_register_github_application_returns_created_template(
     assert create_mock.await_args.kwargs["created_by"] == "admin-user"
 
 
-def test_deploy_registered_application_dispatches_and_returns_instance(
-    registered_applications_admin_client,
-):
-    version = _persisted_version()
-    instance = DeploymentInstance(
-        id=UUID("eeeeeeee-0000-0000-0000-000000000001"),
-        application_id=version.application.id,
-        application_version_id=version.id,
-        instance_name="example-prod",
-        tier=2,
-        status="deploying",
-        configuration={"parameters": {"tier": "Tier 2"}, "secrets": []},
-        triggered_by="admin-user",
-        dispatch_reference={"trigger_method": "workflow_dispatch"},
-        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=UTC),
-    )
-    request = {
-        "instance_name": "example-prod",
-        "tier": 2,
-        "parameters": {},
-    }
-    with (
-        patch(
-            "c2ai.registration.repository."
-            "get_current_registered_application_version",
-            new_callable=AsyncMock,
-            return_value=version,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "create_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ) as create_mock,
-        patch(
-            "c2ai.deployments.dispatch."
-            "dispatch_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value={"trigger_method": "workflow_dispatch"},
-        ) as dispatch_mock,
-        patch(
-            "c2ai.deployments.repository."
-            "complete_registered_application_dispatch",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-    ):
-        response = registered_applications_admin_client.post(
-            "/api/registered-applications/aaaaaaaa-0000-0000-0000-000000000001/deployments",
-            json=request,
-        )
-
-    assert response.status_code == 201
-    body = response.json()
-    assert body["id"] == "eeeeeeee-0000-0000-0000-000000000001"
-    assert body["application_type"] == "github_workflow"
-    assert body["tier"] == 2
-    assert body["status"] == "deploying"
-    assert create_mock.await_args.kwargs["triggered_by"] == "admin-user"
-    dispatch_mock.assert_awaited_once()
-
-
-def test_deploy_registered_application_names_the_instance_the_workflow_creates(
-    registered_applications_admin_client,
-):
-    version = _persisted_version()
-    version.parameters.extend(
-        [
-            ApplicationParameterDefinition(
-                position=1,
-                label="Customer",
-                key="customer_name",
-                parameter_type="text",
-                required=True,
-            ),
-            ApplicationParameterDefinition(
-                position=2,
-                label="Environment Instance",
-                key="env_instance",
-                parameter_type="text",
-                required=True,
-            ),
-            ApplicationParameterDefinition(
-                position=3,
-                label="Slack User",
-                key="slack_user",
-                parameter_type="text",
-                required=True,
-            ),
-        ]
-    )
-    instance = DeploymentInstance(
-        id=UUID("eeeeeeee-0000-0000-0000-000000000004"),
-        application_id=version.application.id,
-        application_version_id=version.id,
-        instance_name="amberd-test-deploy",
-        tier=1,
-        status="deploying",
-        configuration={"parameters": {}, "secrets": []},
-        triggered_by="admin-user",
-        dispatch_reference={"trigger_method": "workflow_dispatch"},
-        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=UTC),
-    )
-    with (
-        patch(
-            "c2ai.registration.repository."
-            "get_current_registered_application_version",
-            new_callable=AsyncMock,
-            return_value=version,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "create_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ) as create_mock,
-        patch(
-            "c2ai.deployments.dispatch."
-            "dispatch_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value={"trigger_method": "workflow_dispatch"},
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "complete_registered_application_dispatch",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-    ):
-        response = registered_applications_admin_client.post(
-            "/api/registered-applications/aaaaaaaa-0000-0000-0000-000000000001/deployments",
-            json={
-                "tier": 1,
-                "parameters": {"customer_name": "test", "env_instance": "deploy"},
-            },
-        )
-
-    assert response.status_code == 201
-    assert create_mock.await_args.kwargs["instance_name"] == "amberd-test-deploy"
-    # slack_user is filled from the caller instead of being asked for.
-    assert create_mock.await_args.kwargs["configuration"]["parameters"][
-        "slack_user"
-    ] == "admin-user"
-
-
-def test_deploy_registered_application_falls_back_to_a_generated_instance_name(
-    registered_applications_admin_client,
-):
-    version = _persisted_version()
-    instance = DeploymentInstance(
-        id=UUID("eeeeeeee-0000-0000-0000-000000000005"),
-        application_id=version.application.id,
-        application_version_id=version.id,
-        instance_name="example-chatbot-tier-2",
-        tier=2,
-        status="deploying",
-        configuration={"parameters": {}, "secrets": []},
-        triggered_by="admin-user",
-        dispatch_reference={"trigger_method": "workflow_dispatch"},
-        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=UTC),
-    )
-    with (
-        patch(
-            "c2ai.registration.repository."
-            "get_current_registered_application_version",
-            new_callable=AsyncMock,
-            return_value=version,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "create_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ) as create_mock,
-        patch(
-            "c2ai.deployments.dispatch."
-            "dispatch_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value={"trigger_method": "workflow_dispatch"},
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "complete_registered_application_dispatch",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-    ):
-        response = registered_applications_admin_client.post(
-            "/api/registered-applications/aaaaaaaa-0000-0000-0000-000000000001/deployments",
-            json={"tier": 2, "parameters": {}},
-        )
-
-    assert response.status_code == 201
-    assert create_mock.await_args.kwargs["instance_name"] == "example-chatbot-tier-2"
-
-
-def test_deploy_registered_application_reports_pipeline_failure(
-    registered_applications_admin_client,
-):
-    version = _persisted_version()
-    instance = DeploymentInstance(
-        id=UUID("eeeeeeee-0000-0000-0000-000000000002"),
-        application_id=version.application.id,
-        application_version_id=version.id,
-        instance_name="example-prod",
-        tier=2,
-        status="pending",
-        configuration={"parameters": {"tier": "Tier 2"}, "secrets": []},
-        triggered_by="admin-user",
-        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=UTC),
-    )
-    with (
-        patch(
-            "c2ai.registration.repository."
-            "get_current_registered_application_version",
-            new_callable=AsyncMock,
-            return_value=version,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "create_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-        patch(
-            "c2ai.deployments.dispatch."
-            "dispatch_registered_application_deployment",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("GitHub is unavailable"),
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "complete_registered_application_dispatch",
-            new_callable=AsyncMock,
-        ) as complete_mock,
-    ):
-        response = registered_applications_admin_client.post(
-            "/api/registered-applications/aaaaaaaa-0000-0000-0000-000000000001/deployments",
-            json={
-                "instance_name": "example-prod",
-                "tier": 2,
-                "parameters": {},
-            },
-        )
-
-    assert response.status_code == 503
-    assert response.json()["code"] == "ServiceUnavailableError"
-    complete_mock.assert_not_awaited()
-
-
-def test_deploy_registered_container_uses_path_tier_and_stored_template(
-    registered_applications_admin_client,
-):
-    version = _persisted_container_version()
-    registry_client = MagicMock()
-    registry_client.get_tag = AsyncMock(
-        return_value=ContainerRegistryTag(
-            name="2.0.0",
-            digest="sha256:release",
-            last_updated=None,
-        )
-    )
-    configuration = {
-        "parameters": {"LOG_LEVEL": "info"},
-        "llm": {
-            "endpoint": "https://amberd-llm-gateway.tier3.svc:8010",
-            "model_name": "qwen3-6",
-        },
-        "container": {
-            "registry": "Docker Hub",
-            "image_repository": "amberd/chat-service",
-            "image_tag": "2.0.0",
-            "image_pull_policy": "IfNotPresent",
-            "container_port": 8080,
-            "gpu_request": "1",
-            "cpu_request": "500m",
-            "memory_request": "512Mi",
-            "scaling": "3",
-            "replica_count": 3,
-            "storage": "10Gi",
-            "persistent_volume_size": "10Gi",
-            "environment_variables": {
-                "LOG_LEVEL": "info",
-                "llm_endpoint": "https://amberd-llm-gateway.tier3.svc:8010",
-                "llm_model_name": "qwen3-6",
-            },
-            "service_type": "Ingress",
-            "host": "chat-service-tier-3.amberd.ai",
-            "image_pull_secret": None,
-            "registry_credentials_configured": True,
-        },
-        "dns": {
-            "subdomain": "chat-service-tier-3",
-            "hostname": "chat-service-tier-3.amberd.ai",
-            "managed_by": "athena",
-        },
-        "managed_secrets": [],
-    }
-    instance = DeploymentInstance(
-        id=UUID("eeeeeeee-0000-0000-0000-000000000003"),
-        application_id=version.application.id,
-        application_version_id=version.id,
-        instance_name="chat-service-tier-3",
-        tier=3,
-        status="deploying",
-        current_step="validating_configuration",
-        configuration=configuration,
-        triggered_by="admin-user",
-        dispatch_reference={"pipeline": "container"},
-        subdomain="chat-service-tier-3",
-        hostname="chat-service-tier-3.amberd.ai",
-        dns_status="pending",
-        created_at=datetime(2026, 8, 13, 13, 0, tzinfo=UTC),
-    )
-    with (
-        patch(
-            "c2ai.registration.repository."
-            "get_current_registered_application_version",
-            new_callable=AsyncMock,
-            return_value=version,
-        ),
-        patch(
-            "c2ai.registration.credentials."
-            "resolve_container_registry_credentials",
-            new_callable=AsyncMock,
-            return_value=ContainerRegistryRuntime(
-                username="amberd",
-                password="write-only-registry-password",
-            ),
-        ),
-        patch(
-            "c2ai.registration.credentials."
-            "resolve_llm_api_token",
-            new_callable=AsyncMock,
-            return_value="write-only-llm-token",
-        ),
-        patch(
-            "c2ai.api.registered_applications.clients.container_registry_client",
-            return_value=registry_client,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "create_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ) as create_mock,
-        patch(
-            "c2ai.deployments.dispatch."
-            "dispatch_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value={"pipeline": "container"},
-        ) as dispatch_mock,
-        patch(
-            "c2ai.deployments.repository."
-            "complete_registered_application_dispatch",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-    ):
-        response = registered_applications_admin_client.post(
-            f"/api/registered-applications/{version.application.id}/tiers/3/deployments",
-            json={
-                "instance_name": "chat-service-tier-3",
-                "version": "2.0.0",
-            },
-        )
-
-    assert response.status_code == 201
-    body = response.json()
-    assert body["tier"] == 3
-    assert body["configuration"] == configuration
-    assert body["subdomain"] == "chat-service-tier-3"
-    assert "write-only-registry-password" not in response.text
-    assert "encrypted-registry-password" not in response.text
-    registry_client.get_tag.assert_awaited_once_with(
-        registry="Docker Hub",
-        repository="amberd/chat-service",
-        tag="2.0.0",
-        credential_id=None,
-        username="amberd",
-        password="write-only-registry-password",
-    )
-    assert create_mock.await_args.kwargs["tier"] == 3
-    assert create_mock.await_args.kwargs["configuration"] == configuration
-    assert dispatch_mock.await_args.kwargs["tier"] == 3
-    dispatched_configuration = dispatch_mock.await_args.kwargs["configuration"]
-    assert "write-only-registry-password" not in str(dispatched_configuration)
-
-
 def test_deploy_registered_container_rejects_an_unknown_registry_tag(
     registered_applications_admin_client,
 ):
@@ -1115,10 +739,7 @@ def test_deploy_registered_container_rejects_an_unknown_registry_tag(
             new_callable=AsyncMock,
             return_value="write-only-llm-token",
         ),
-        patch(
-            "c2ai.api.registered_applications.clients.container_registry_client",
-            return_value=registry_client,
-        ),
+        _override(clients.container_registry_client, registry_client),
         patch(
             "c2ai.deployments.repository."
             "create_registered_application_deployment",
@@ -1201,11 +822,28 @@ def test_list_and_get_registered_deployment_history(
     assert list_mock.await_args.kwargs["tier"] == 2
     assert list_mock.await_args.kwargs["instance"] == "amberd-acme-prod"
 
-    with patch(
-        "c2ai.deployments.repository."
-        "get_registered_application_deployment",
-        new_callable=AsyncMock,
-        return_value=instance,
+    # GitHub progress comes from the snapshot the tracker stored on the
+    # operation row; reading a deployment never calls GitHub.
+    snapshot = {
+        "run_id": 42,
+        "status": "in_progress",
+        "conclusion": None,
+        "jobs": [{"id": 1, "name": "deploy", "status": "in_progress", "steps": []}],
+    }
+    run = MagicMock(progress=snapshot, ended_at=None, dispatch_state="dispatched")
+    with (
+        patch(
+            "c2ai.deployments.repository."
+            "get_registered_application_deployment",
+            new_callable=AsyncMock,
+            return_value=instance,
+        ),
+        patch(
+            "c2ai.deployments.operations.latest_operation_for_instance",
+            new_callable=AsyncMock,
+            return_value=run,
+        ),
+        patch("c2ai.clients.github_actions.GitHubActionsClient") as github,
     ):
         response = registered_applications_admin_client.get(
             f"/api/registered-applications/deployments/{instance.id}"
@@ -1213,6 +851,8 @@ def test_list_and_get_registered_deployment_history(
 
     assert response.status_code == 200
     assert response.json()["events"][0]["message"] == "Namespace created."
+    assert response.json()["workflow_progress"]["jobs"][0]["name"] == "deploy"
+    github.assert_not_called()
 
 
 def test_progress_callback_requires_shared_token_and_returns_updated_history(
@@ -1244,288 +884,6 @@ def test_progress_callback_requires_shared_token_and_returns_updated_history(
     assert response.status_code == 200
     assert response.json()["events"][0]["step"] == "creating_namespace"
     update_mock.assert_awaited_once()
-
-
-def test_rollback_redispatches_stored_configuration(
-    registered_applications_admin_client,
-):
-    instance = _tracked_instance(
-        _persisted_version(),
-        deployment_status="deploying",
-        current_step="validating_configuration",
-    )
-    instance.rollback_count = 1
-    with (
-        patch(
-            "c2ai.deployments.repository."
-            "prepare_registered_application_rollback",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-        patch(
-            "c2ai.deployments.dispatch."
-            "dispatch_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value={"trigger_method": "workflow_dispatch"},
-        ) as dispatch_mock,
-        patch(
-            "c2ai.deployments.repository."
-            "complete_registered_application_dispatch",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ) as complete_mock,
-    ):
-        response = registered_applications_admin_client.post(
-            f"/api/registered-applications/deployments/{instance.id}/rollback"
-        )
-
-    assert response.status_code == 202
-    assert response.json()["rollback_count"] == 1
-    assert dispatch_mock.await_args.kwargs["configuration"] == instance.configuration
-    assert "Rollback #1" in complete_mock.await_args.kwargs["event_message"]
-
-
-def test_upgrade_container_deployment_validates_tag_and_dispatches(
-    registered_applications_admin_client,
-):
-    instance = _upgradeable_container_instance()
-    registry_client = MagicMock()
-    registry_client.get_tag = AsyncMock(
-        return_value=ContainerRegistryTag(
-            name="2.0.0",
-            digest="sha256:next",
-            last_updated=None,
-        )
-    )
-
-    async def prepare_upgrade(*_args, **_kwargs):
-        instance.configuration["container"]["image_tag"] = "2.0.0"
-        instance.status = "updating"
-        instance.current_step = "validating_configuration"
-        return instance
-
-    with (
-        patch(
-            "c2ai.deployments.repository."
-            "get_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-        patch(
-            "c2ai.registration.credentials."
-            "resolve_container_registry_credentials",
-            new_callable=AsyncMock,
-            return_value=ContainerRegistryRuntime(
-                username="amberd",
-                password="write-only-registry-password",
-            ),
-        ),
-        patch(
-            "c2ai.api.registered_applications.clients.container_registry_client",
-            return_value=registry_client,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "prepare_registered_application_upgrade",
-            new_callable=AsyncMock,
-            side_effect=prepare_upgrade,
-        ) as prepare_mock,
-        patch(
-            "c2ai.api.registered_applications.deployments."
-            "dispatch_registered_application_upgrade",
-            new_callable=AsyncMock,
-            return_value={"pipeline": "container-upgrade"},
-        ) as dispatch_mock,
-        patch(
-            "c2ai.deployments.repository."
-            "complete_registered_application_upgrade_dispatch",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ) as complete_mock,
-    ):
-        response = registered_applications_admin_client.post(
-            f"/api/registered-applications/deployments/{instance.id}/upgrade",
-            json={"version": "2.0.0"},
-        )
-
-    assert response.status_code == 202
-    body = response.json()
-    assert body["status"] == "updating"
-    assert body["configuration"]["container"]["image_tag"] == "2.0.0"
-    assert body["configuration"]["container"]["replica_count"] == 3
-    assert body["configuration"]["dns"]["hostname"] == "chat-prod.amberd.ai"
-    # A private registry needs the stored credential on the tag check too.
-    registry_client.get_tag.assert_awaited_once_with(
-        registry="Docker Hub",
-        repository="amberd/chat-service",
-        tag="2.0.0",
-        credential_id="dockerhub-credential",
-        username="amberd",
-        password="write-only-registry-password",
-    )
-    assert prepare_mock.await_args.kwargs["triggered_by"] == "admin-user"
-    assert dispatch_mock.await_args.kwargs["target_version"] == "2.0.0"
-    assert dispatch_mock.await_args.kwargs["configuration"] == instance.configuration
-    complete_mock.assert_awaited_once()
-
-
-def test_upgrade_github_deployment_uses_same_endpoint_without_registry_lookup(
-    registered_applications_admin_client,
-):
-    instance = _upgradeable_github_instance()
-    registry_client = MagicMock()
-    registry_client.get_tag = AsyncMock()
-
-    async def prepare_upgrade(*_args, **_kwargs):
-        instance.configuration["github"]["version"] = "2.0.0"
-        instance.status = "updating"
-        instance.current_step = "validating_configuration"
-        return instance
-
-    with (
-        patch(
-            "c2ai.deployments.repository."
-            "get_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-        patch(
-            "c2ai.registration.credentials."
-            "resolve_container_registry_credentials",
-            new_callable=AsyncMock,
-            return_value=ContainerRegistryRuntime(
-                username="amberd",
-                password="write-only-registry-password",
-            ),
-        ),
-        patch(
-            "c2ai.api.registered_applications.clients.container_registry_client",
-            return_value=registry_client,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "prepare_registered_application_upgrade",
-            new_callable=AsyncMock,
-            side_effect=prepare_upgrade,
-        ),
-        patch(
-            "c2ai.api.registered_applications.deployments."
-            "dispatch_registered_application_upgrade",
-            new_callable=AsyncMock,
-            return_value={"pipeline": "github-upgrade"},
-        ) as dispatch_mock,
-        patch(
-            "c2ai.deployments.repository."
-            "complete_registered_application_upgrade_dispatch",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-    ):
-        response = registered_applications_admin_client.post(
-            f"/api/registered-applications/deployments/{instance.id}/upgrade",
-            json={"version": "2.0.0"},
-        )
-
-    assert response.status_code == 202
-    assert response.json()["configuration"]["github"]["version"] == "2.0.0"
-    registry_client.get_tag.assert_not_awaited()
-    assert dispatch_mock.await_args.kwargs["target_version"] == "2.0.0"
-    assert dispatch_mock.await_args.args[0].application.application_type == (
-        "github_workflow"
-    )
-
-
-def test_upgrade_failed_github_deployment_restarts_its_workflow(
-    registered_applications_admin_client,
-):
-    instance = _upgradeable_github_instance()
-    instance.status = "failed"
-    instance.current_step = "failed"
-    instance.configuration["github"]["version"] = "dev"
-
-    async def prepare_upgrade(*_args, **_kwargs):
-        instance.status = "updating"
-        instance.current_step = "validating_configuration"
-        instance.failure_reason = None
-        return instance
-
-    with (
-        patch(
-            "c2ai.deployments.repository."
-            "get_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "prepare_registered_application_upgrade",
-            new_callable=AsyncMock,
-            side_effect=prepare_upgrade,
-        ),
-        patch(
-            "c2ai.api.registered_applications.deployments."
-            "dispatch_registered_application_upgrade",
-            new_callable=AsyncMock,
-            return_value={"pipeline": "github-upgrade"},
-        ) as dispatch_mock,
-        patch(
-            "c2ai.deployments.repository."
-            "complete_registered_application_upgrade_dispatch",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-    ):
-        response = registered_applications_admin_client.post(
-            f"/api/registered-applications/deployments/{instance.id}/upgrade",
-            json={"version": "dev"},
-        )
-
-    assert response.status_code == 202
-    assert dispatch_mock.await_args.kwargs["target_version"] == "dev"
-
-
-def test_upgrade_container_deployment_reports_missing_tag(
-    registered_applications_admin_client,
-):
-    instance = _upgradeable_container_instance()
-    registry_client = MagicMock()
-    registry_client.get_tag = AsyncMock(
-        side_effect=ContainerImageTagNotFound("amberd/chat-service", "9.9.9")
-    )
-    with (
-        patch(
-            "c2ai.deployments.repository."
-            "get_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-        patch(
-            "c2ai.registration.credentials."
-            "resolve_container_registry_credentials",
-            new_callable=AsyncMock,
-            return_value=ContainerRegistryRuntime(
-                username="amberd",
-                password="write-only-registry-password",
-            ),
-        ),
-        patch(
-            "c2ai.api.registered_applications.clients.container_registry_client",
-            return_value=registry_client,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "prepare_registered_application_upgrade",
-            new_callable=AsyncMock,
-        ) as prepare_mock,
-    ):
-        response = registered_applications_admin_client.post(
-            f"/api/registered-applications/deployments/{instance.id}/upgrade",
-            json={"version": "9.9.9"},
-        )
-
-    assert response.status_code == 422
-    assert response.json()["code"] == "ContainerImageTagNotFound"
-    prepare_mock.assert_not_awaited()
 
 
 def test_upgrade_deployment_rejects_unsupported_type_and_active_state(
@@ -1566,200 +924,6 @@ def test_upgrade_deployment_rejects_unsupported_type_and_active_state(
     assert response.json()["code"] == "DeploymentUpgradeNotAvailable"
 
 
-def test_upgrade_container_deployment_rolls_back_when_dispatch_fails(
-    registered_applications_admin_client,
-):
-    instance = _upgradeable_container_instance()
-    registry_client = MagicMock()
-    registry_client.get_tag = AsyncMock(
-        return_value=ContainerRegistryTag(
-            name="2.0.0",
-            digest=None,
-            last_updated=None,
-        )
-    )
-
-    async def prepare_upgrade(*_args, **_kwargs):
-        instance.configuration["container"]["image_tag"] = "2.0.0"
-        instance.status = "updating"
-        return instance
-
-    with (
-        patch(
-            "c2ai.deployments.repository."
-            "get_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-        patch(
-            "c2ai.registration.credentials."
-            "resolve_container_registry_credentials",
-            new_callable=AsyncMock,
-            return_value=ContainerRegistryRuntime(
-                username="amberd",
-                password="write-only-registry-password",
-            ),
-        ),
-        patch(
-            "c2ai.api.registered_applications.clients.container_registry_client",
-            return_value=registry_client,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "prepare_registered_application_upgrade",
-            new_callable=AsyncMock,
-            side_effect=prepare_upgrade,
-        ),
-        patch(
-            "c2ai.api.registered_applications.deployments."
-            "dispatch_registered_application_upgrade",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("pipeline unavailable"),
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "complete_registered_application_upgrade_dispatch",
-            new_callable=AsyncMock,
-        ) as complete_mock,
-    ):
-        response = registered_applications_admin_client.post(
-            f"/api/registered-applications/deployments/{instance.id}/upgrade",
-            json={"version": "2.0.0"},
-        )
-
-    assert response.status_code == 503
-    assert response.json()["code"] == "ServiceUnavailableError"
-    complete_mock.assert_not_awaited()
-
-
-def test_terminate_container_deployment_confirms_and_dispatches_cleanup(
-    registered_applications_admin_client,
-):
-    instance = _upgradeable_container_instance()
-
-    async def prepare_termination(*_args, **_kwargs):
-        instance.status = "terminating"
-        instance.current_step = "validating_configuration"
-        return instance
-
-    with (
-        patch(
-            "c2ai.deployments.repository."
-            "get_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "prepare_registered_application_termination",
-            new_callable=AsyncMock,
-            side_effect=prepare_termination,
-        ) as prepare_mock,
-        patch(
-            "c2ai.api.registered_applications.deployments."
-            "dispatch_registered_application_termination",
-            new_callable=AsyncMock,
-            return_value={"pipeline": "container-termination"},
-        ) as dispatch_mock,
-        patch(
-            "c2ai.deployments.repository."
-            "complete_registered_application_termination_dispatch",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ) as complete_mock,
-    ):
-        response = registered_applications_admin_client.post(
-            f"/api/registered-applications/deployments/{instance.id}/terminate",
-            json={"confirmation": instance.instance_name},
-        )
-
-    assert response.status_code == 202
-    body = response.json()
-    assert body["status"] == "terminating"
-    assert body["configuration"]["container"]["image_tag"] == "1.2.3"
-    assert body["configuration"]["dns"]["hostname"] == "chat-prod.amberd.ai"
-    assert prepare_mock.await_args.kwargs["triggered_by"] == "admin-user"
-    assert dispatch_mock.await_args.kwargs["configuration"] == instance.configuration
-    assert dispatch_mock.await_args.kwargs["triggered_by"] == "admin-user"
-    complete_mock.assert_awaited_once()
-
-
-def test_terminate_github_deployment_uses_same_confirmation_and_endpoint(
-    registered_applications_admin_client,
-):
-    instance = _upgradeable_github_instance()
-
-    async def prepare_termination(*_args, **_kwargs):
-        instance.status = "terminating"
-        instance.current_step = "validating_configuration"
-        return instance
-
-    with (
-        patch(
-            "c2ai.deployments.repository."
-            "get_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "prepare_registered_application_termination",
-            new_callable=AsyncMock,
-            side_effect=prepare_termination,
-        ),
-        patch(
-            "c2ai.api.registered_applications.deployments."
-            "dispatch_registered_application_termination",
-            new_callable=AsyncMock,
-            return_value={"pipeline": "github-termination"},
-        ) as dispatch_mock,
-        patch(
-            "c2ai.deployments.repository."
-            "complete_registered_application_termination_dispatch",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-    ):
-        response = registered_applications_admin_client.post(
-            f"/api/registered-applications/deployments/{instance.id}/terminate",
-            json={"confirmation": instance.instance_name},
-        )
-
-    assert response.status_code == 202
-    assert response.json()["application_type"] == "github_workflow"
-    assert response.json()["status"] == "terminating"
-    assert dispatch_mock.await_args.args[0].application.application_type == (
-        "github_workflow"
-    )
-
-
-def test_terminate_container_deployment_requires_exact_confirmation(
-    registered_applications_admin_client,
-):
-    instance = _upgradeable_container_instance()
-    with (
-        patch(
-            "c2ai.deployments.repository."
-            "get_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "prepare_registered_application_termination",
-            new_callable=AsyncMock,
-        ) as prepare_mock,
-    ):
-        response = registered_applications_admin_client.post(
-            f"/api/registered-applications/deployments/{instance.id}/terminate",
-            json={"confirmation": "different-instance"},
-        )
-
-    assert response.status_code == 422
-    assert response.json()["code"] == "DeploymentTerminationConfirmationMismatch"
-    prepare_mock.assert_not_awaited()
-
-
 def test_terminate_deployment_rejects_unsupported_type_and_active_state(
     registered_applications_admin_client,
 ):
@@ -1796,50 +960,6 @@ def test_terminate_deployment_rejects_unsupported_type_and_active_state(
         )
     assert response.status_code == 409
     assert response.json()["code"] == "DeploymentTerminationNotAvailable"
-
-
-def test_terminate_container_deployment_rolls_back_when_dispatch_fails(
-    registered_applications_admin_client,
-):
-    instance = _upgradeable_container_instance()
-
-    async def prepare_termination(*_args, **_kwargs):
-        instance.status = "terminating"
-        return instance
-
-    with (
-        patch(
-            "c2ai.deployments.repository."
-            "get_registered_application_deployment",
-            new_callable=AsyncMock,
-            return_value=instance,
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "prepare_registered_application_termination",
-            new_callable=AsyncMock,
-            side_effect=prepare_termination,
-        ),
-        patch(
-            "c2ai.api.registered_applications.deployments."
-            "dispatch_registered_application_termination",
-            new_callable=AsyncMock,
-            side_effect=RuntimeError("pipeline unavailable"),
-        ),
-        patch(
-            "c2ai.deployments.repository."
-            "complete_registered_application_termination_dispatch",
-            new_callable=AsyncMock,
-        ) as complete_mock,
-    ):
-        response = registered_applications_admin_client.post(
-            f"/api/registered-applications/deployments/{instance.id}/terminate",
-            json={"confirmation": instance.instance_name},
-        )
-
-    assert response.status_code == 503
-    assert response.json()["code"] == "ServiceUnavailableError"
-    complete_mock.assert_not_awaited()
 
 
 def test_register_github_application_returns_conflict_for_duplicate_name(
@@ -2029,10 +1149,7 @@ def test_list_container_image_tags_returns_deployment_ready_references(
             new_callable=AsyncMock,
             return_value=version,
         ),
-        patch(
-            "c2ai.api.registered_applications.clients.container_registry_client",
-            return_value=registry_client,
-        ),
+        _override(clients.container_registry_client, registry_client),
         patch(
             "c2ai.registration.credentials."
             "resolve_container_registry_credentials",

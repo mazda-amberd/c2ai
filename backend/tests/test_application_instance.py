@@ -36,4 +36,4 @@ async def test_replace_application_instances_per_tier():
 
     assert db.execute.await_count == 3
     assert db.add.call_count == 1
-    db.commit.assert_awaited_once()
+    db.commit.assert_not_awaited()  # the route commits

@@ -107,6 +107,7 @@ async def create_user(
             "created_by_id": admin.user_id,
         },
     )
+    await db.commit()
     logger.info("User '%s' created by '%s'.", identifier, admin.identifier)
     return schemas_user.UserOutWithCredentials(
         **schemas_user.UserOut.model_validate(db_user).model_dump(),
@@ -144,6 +145,7 @@ async def update_existing_user(
                 raise CannotUpdateLastAdminToUser()
 
     updated = await crud_user.update_user(db, target, updates)
+    await db.commit()
     return {
         "message": f"User '{updated.identifier}' was successfully updated.",
         "user": schemas_user.UserOut.model_validate(updated),
@@ -180,6 +182,7 @@ async def update_user_password(
         needs_password_reset=False,
         updated_by=current_user.identifier,
     )
+    await db.commit()
     ttl_seconds = default_token_ttl_seconds()
     set_auth_cookie(response, issue_session_token(user, ttl_seconds=ttl_seconds), max_age=ttl_seconds)
     logger.info("Password updated by '%s'.", current_user.identifier)
@@ -219,6 +222,7 @@ async def reset_user_password(
         needs_password_reset=True,
         updated_by=admin.identifier,
     )
+    await db.commit()
     logger.info("Password for '%s' reset by '%s'.", user_name, admin.identifier)
     return {
         "message": f"Password for user '{user_name}' has been reset successfully.",
@@ -244,5 +248,6 @@ async def delete_existing_user(
             raise CannotDeleteLastAdminUser()
     if not await crud_user.delete_user(db, user):
         raise FailedToDelete(user_name)
+    await db.commit()
     logger.info("User '%s' deleted by '%s'.", user_name, admin.identifier)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

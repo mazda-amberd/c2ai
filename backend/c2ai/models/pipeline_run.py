@@ -2,7 +2,7 @@
 """SQLAlchemy model for the `pipeline_runs` table: the deployment operation log."""
 
 from sqlalchemy import BigInteger, Column, DateTime, ForeignKey, Integer, String
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -32,6 +32,10 @@ class PipelineRun(Base):
         dispatched_at (datetime): When the operation was requested.
         ended_at (datetime | None): NULL while the operation is in progress.
         conclusion (str | None): success | failure | cancelled | abandoned.
+        kind (str | None): the lifecycle operation, e.g. "rollback".
+        dispatch_state (str): pending | dispatched | failed.
+        restore_state (dict | None): the instance before the operation.
+        progress (dict | None): latest GitHub Actions run snapshot.
     """
 
     __tablename__ = "pipeline_runs"
@@ -63,6 +67,16 @@ class PipelineRun(Base):
     )
     ended_at = Column(DateTime(timezone=True), nullable=True)
     conclusion = Column(String, nullable=True)
+
+    # Lifecycle operation (``lifecycle.Operation`` value).
+    kind = Column(String, nullable=True)
+    # pending (saved, not sent) | dispatched | failed — the dispatch outbox.
+    dispatch_state = Column(String, nullable=False, default="dispatched")
+    # The instance before this operation, restored if the dispatch fails.
+    restore_state = Column(JSONB, nullable=True)
+    # Latest GitHub Actions snapshot, written by the deployments.track job.
+    progress = Column(JSONB, nullable=True)
+    progress_updated_at = Column(DateTime(timezone=True), nullable=True)
 
     def to_dict(self) -> dict:
         return {

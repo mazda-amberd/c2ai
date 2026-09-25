@@ -6,7 +6,6 @@ import logging
 from datetime import timedelta
 
 from c2ai.config import get_settings
-from c2ai.db.session import AsyncSessionLocal
 from c2ai.jobs.worker import JobContext, Schedule, job_handler, register_schedule
 from c2ai.security.rotate import reencrypt_all
 
@@ -21,8 +20,8 @@ def _configured() -> bool:
 
 
 @job_handler(KIND, lease=timedelta(minutes=10))
-async def reencrypt(_ctx: JobContext) -> dict:
-    result = await reencrypt_all(AsyncSessionLocal)
+async def reencrypt(ctx: JobContext) -> dict:
+    result = await reencrypt_all(ctx.session_factory)
     if result["rewritten"]:
         logger.info("Re-encrypted %s credential(s) under key %s", result["rewritten"],
                     result["primary_key"])

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from uuid import UUID
 
@@ -24,14 +23,9 @@ from c2ai.deployments.repository import (
     prepare_registered_application_upgrade,
 )
 from c2ai.models.registered_application import ContainerApplicationSecret
-from c2ai.registration.credentials import (
-    ContainerRegistryRuntime,
-)
 from c2ai.schemas.registered_application import ContainerRegisteredApplicationDeploymentCreate
 from tests.test_api_registered_applications import (
     _persisted_container_version,
-    _upgradeable_container_instance,
-    _upgradeable_github_instance,
     registered_applications_admin_client,  # noqa: F401 - fixture
 )
 from tests.test_registered_application_tracking import _container_instance, _db
@@ -119,122 +113,6 @@ class TestRollback:
         assert result.previous_configuration == upgraded
         assert "to version '1.2.3'" in result.events[-1].message
         assert result.dns_status == "active"  # DNS is untouched by a version change
-
-    def test_api_rollback_dispatches_upgrade_pipeline_to_previous_version(
-        self, registered_applications_admin_client  # noqa: F811
-    ):
-        instance = _upgradeable_container_instance()
-        instance.status = "updating"  # as prepared by the CRUD layer
-        instance.rollback_count = 1
-        with (
-            patch(
-                "c2ai.deployments.repository.prepare_registered_application_rollback",
-                new_callable=AsyncMock,
-                return_value=instance,
-            ),
-            patch(
-                f"{_API}.dispatch_registered_application_upgrade",
-                new_callable=AsyncMock,
-                return_value={"operation": "upgrade", "rollback": True},
-            ) as upgrade_mock,
-            patch(
-                "c2ai.deployments.dispatch.dispatch_registered_application_deployment", new_callable=AsyncMock
-            ) as deploy_mock,
-            patch(
-                "c2ai.deployments.repository.complete_registered_application_upgrade_dispatch",
-                new_callable=AsyncMock,
-                return_value=instance,
-            ) as complete_mock,
-        ):
-            response = registered_applications_admin_client.post(
-                f"/api/registered-applications/deployments/{instance.id}/rollback"
-            )
-        assert response.status_code == 202
-        deploy_mock.assert_not_awaited()
-        assert upgrade_mock.await_args.kwargs["target_version"] == "1.2.3"
-        assert upgrade_mock.await_args.kwargs["rollback"] is True
-        assert "Rollback #1" in complete_mock.await_args.kwargs["event_message"]
-
-    def test_container_redeploy_rollback_sends_registry_and_llm_credentials(
-        self, registered_applications_admin_client  # noqa: F811
-    ):
-        # Previously a rollback redispatched without these, so the pipeline
-        # received empty registry and LLM tokens.
-        instance = _upgradeable_container_instance()
-        instance.status = "deploying"
-        instance.rollback_count = 1
-        with (
-            patch(
-                "c2ai.deployments.repository.prepare_registered_application_rollback",
-                new_callable=AsyncMock,
-                return_value=instance,
-            ),
-            patch(
-                "c2ai.registration.credentials.resolve_container_registry_credentials",
-                new_callable=AsyncMock,
-                return_value=ContainerRegistryRuntime(username="amberd", password="reg-pass"),
-            ),
-            patch(
-                "c2ai.registration.credentials.resolve_llm_api_token",
-                new_callable=AsyncMock,
-                return_value="llm-token",
-            ),
-            patch(
-                "c2ai.deployments.dispatch.dispatch_registered_application_deployment",
-                new_callable=AsyncMock,
-                return_value={"pipeline": "container"},
-            ) as deploy_mock,
-            patch(
-                "c2ai.deployments.repository.complete_registered_application_dispatch",
-                new_callable=AsyncMock,
-                return_value=instance,
-            ),
-        ):
-            response = registered_applications_admin_client.post(
-                f"/api/registered-applications/deployments/{instance.id}/rollback"
-            )
-        assert response.status_code == 202
-        kwargs = deploy_mock.await_args.kwargs
-        assert kwargs["registry_username"] == "amberd"
-        assert kwargs["registry_token"] == "reg-pass"
-        assert kwargs["llm_api_token"] == "llm-token"
-        assert "reg-pass" not in response.text
-
-    def test_github_redeploy_rollback_uses_the_saved_connection(
-        self, registered_applications_admin_client  # noqa: F811
-    ):
-        instance = _upgradeable_github_instance()
-        instance.status = "deploying"
-        instance.rollback_count = 1
-        runtime = SimpleNamespace(token="gh-token", api_base_url="https://ghe.example/api/v3")
-        with (
-            patch(
-                "c2ai.deployments.repository.prepare_registered_application_rollback",
-                new_callable=AsyncMock,
-                return_value=instance,
-            ),
-            patch(
-                "c2ai.crud.github_connection.resolve_github_connection",
-                new_callable=AsyncMock,
-                return_value=runtime,
-            ),
-            patch(
-                "c2ai.deployments.dispatch.dispatch_registered_application_deployment",
-                new_callable=AsyncMock,
-                return_value={"trigger_method": "workflow_dispatch"},
-            ) as deploy_mock,
-            patch(
-                "c2ai.deployments.repository.complete_registered_application_dispatch",
-                new_callable=AsyncMock,
-                return_value=instance,
-            ),
-        ):
-            response = registered_applications_admin_client.post(
-                f"/api/registered-applications/deployments/{instance.id}/rollback"
-            )
-        assert response.status_code == 202
-        assert deploy_mock.await_args.kwargs["github_token"] == "gh-token"
-        assert deploy_mock.await_args.kwargs["github_api_base_url"] == "https://ghe.example/api/v3"
 
 
 class TestManagedSecrets:

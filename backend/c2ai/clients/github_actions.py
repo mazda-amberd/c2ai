@@ -4,6 +4,7 @@ GitHub Actions API client for triggering workflows.
 
 import asyncio
 import logging
+from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
 from pathlib import PurePosixPath
 from typing import Any
@@ -17,6 +18,9 @@ from c2ai.config import get_settings
 logger = logging.getLogger(__name__)
 
 _REF_CACHE_TTL = timedelta(seconds=60)
+# Conditional-request cache for run/job polling (per process, bounded).
+_ETAG_CACHE_SIZE = 512
+_etag_cache: OrderedDict[tuple, tuple[str, Any]] = OrderedDict()
 _ref_cache: dict[tuple[str, str, str, str], tuple[bool, datetime]] = {}
 
 
@@ -252,10 +256,7 @@ class GitHubActionsClient:
             f"{self.api_base_url}/repos/{self.repo_owner}/{self.repo_name}"
             f"/actions/runs/{run_id}"
         )
-        async with http_client(20.0) as client:
-            response = await client.get(url, headers=self._headers())
-        response.raise_for_status()
-        return response.json()
+        return await self._get_json(url)
 
     async def get_workflow_run_jobs(self, run_id: int) -> list[dict[str, Any]]:
         """Return all jobs and their embedded steps for one workflow run."""
@@ -266,20 +267,40 @@ class GitHubActionsClient:
         )
         jobs: list[dict[str, Any]] = []
         page = 1
-        async with http_client(20.0) as client:
-            while True:
-                response = await client.get(
-                    url,
-                    params={"filter": "latest", "per_page": 100, "page": page},
-                    headers=self._headers(),
-                )
-                response.raise_for_status()
-                page_jobs = response.json().get("jobs", [])
-                jobs.extend(page_jobs)
-                if len(page_jobs) < 100:
-                    break
-                page += 1
+        while True:
+            body = await self._get_json(
+                url, params={"filter": "latest", "per_page": 100, "page": page}
+            )
+            page_jobs = body.get("jobs", [])
+            jobs.extend(page_jobs)
+            if len(page_jobs) < 100:
+                break
+            page += 1
         return jobs
+
+    async def _get_json(self, url: str, params: dict[str, Any] | None = None) -> Any:
+        """GET with an ETag: unchanged resources come back as 304, which
+        GitHub does not count against the API rate limit."""
+
+        key = (url, tuple(sorted((params or {}).items())), self.github_token)
+        cached = _etag_cache.get(key)
+        headers = self._headers()
+        if cached is not None:
+            headers["If-None-Match"] = cached[0]
+        async with http_client(20.0) as client:
+            response = await client.get(url, params=params, headers=headers)
+        if response.status_code == 304 and cached is not None:
+            _etag_cache.move_to_end(key)
+            return cached[1]
+        response.raise_for_status()
+        body = response.json()
+        etag = response.headers.get("ETag")
+        if etag:
+            _etag_cache[key] = (etag, body)
+            _etag_cache.move_to_end(key)
+            while len(_etag_cache) > _ETAG_CACHE_SIZE:
+                _etag_cache.popitem(last=False)
+        return body
 
     async def list_workflow_runs(
         self,

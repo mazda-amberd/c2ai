@@ -1,4 +1,8 @@
-"""Outbound clients the registered-application routes use (patched in tests)."""
+"""Outbound clients the registered-application routes depend on.
+
+Routes receive them with ``Depends``; tests replace them through
+``app.dependency_overrides`` rather than patching module paths.
+"""
 
 from __future__ import annotations
 

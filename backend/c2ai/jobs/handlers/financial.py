@@ -15,10 +15,10 @@ KIND = "financial.ingest"
 
 
 @job_handler(KIND, lease=timedelta(minutes=5))
-async def ingest(_ctx: JobContext) -> dict:
+async def ingest(ctx: JobContext) -> dict:
     # The advisory lock inside still guarantees one ingestion at a time, even
     # if a lease expired while a slow poll was finishing.
-    result = await run_gateway_cost_ingestion_once()
+    result = await run_gateway_cost_ingestion_once(session_factory=ctx.session_factory)
     if not result.lock_acquired:
         logger.info("Financial ingestion skipped: another worker holds the lock")
     else:

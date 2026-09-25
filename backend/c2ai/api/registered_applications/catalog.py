@@ -14,6 +14,7 @@ from c2ai.api.registered_applications import clients
 from c2ai.api.registered_applications.clients import PREFIX, TAGS
 from c2ai.auth.jwt import AthenaTokenUser, require_admin
 from c2ai.clients.container_registry import (
+    ContainerRegistryClient,
     build_image_reference,
 )
 from c2ai.clients.github_actions import GitHubActionsClient
@@ -252,6 +253,7 @@ async def register_github_application(
         payload,
         created_by=current_user.identifier,
     )
+    await db.commit()
     logger.info(
         "GitHub Workflow registration completed name=%s by=%s",
         payload.name,
@@ -278,6 +280,7 @@ async def register_container_application(
         payload,
         created_by=current_user.identifier,
     )
+    await db.commit()
     logger.info(
         "Containerized application registration completed name=%s by=%s",
         payload.name,
@@ -357,6 +360,7 @@ async def list_container_application_image_tags(
     limit: int = Query(default=100, ge=1, le=200),
     _current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    registry_client: ContainerRegistryClient = Depends(clients.container_registry_client),
 ) -> ContainerImageTagList:
     """Resolve the current registry configuration and return safe tag metadata."""
 
@@ -384,7 +388,7 @@ async def list_container_application_image_tags(
             )
         )
 
-    page = await clients.container_registry_client().list_tags(
+    page = await registry_client.list_tags(
         registry=configuration.registry,
         repository=configuration.image_repository,
         credential_id=configuration.registry_credential_id,
@@ -516,4 +520,5 @@ async def delete_registered_application(
         application_id,
         deleted_by=current_user.identifier,
     )
+    await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

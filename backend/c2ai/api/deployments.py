@@ -30,6 +30,7 @@ from c2ai.core.exceptions import UnprocessableEntityError
 from c2ai.db.session import get_db_session as db_session
 from c2ai.deployments import ada, operations
 from c2ai.deployments.status import latest_status_for_subdomain, list_active_statuses
+from c2ai.jobs import JobStore, get_job_store
 from c2ai.schemas.deployment import (
     SUBDOMAIN_RE,
     DeployRequest,
@@ -78,6 +79,7 @@ async def trigger_deployment(
     body: DeployRequest,
     current_user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(db_session),
+    store: JobStore = Depends(get_job_store),
 ) -> PipelineRunOut:
     expected = workflow_prepare_subdomain(body.customer_name, body.env_instance)
     if body.subdomain != expected:
@@ -87,7 +89,7 @@ async def trigger_deployment(
             f"env_instance '{body.env_instance}'. "
             "For new deployments the subdomain must equal amberd-{sanitised_customer}-{sanitised_env}."
         )
-    return _out(await ada.deploy(db, body, current_user))
+    return _out(await ada.deploy(db, store, body, current_user))
 
 
 @router.post(
@@ -100,8 +102,9 @@ async def trigger_deployment_update(
     body: DeployRequest,
     current_user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(db_session),
+    store: JobStore = Depends(get_job_store),
 ) -> PipelineRunOut:
-    return _out(await ada.update(db, body, current_user))
+    return _out(await ada.update(db, store, body, current_user))
 
 
 @router.post(
@@ -114,8 +117,9 @@ async def move_deployment_to_tier(
     body: MoveTierRequest,
     current_user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(db_session),
+    store: JobStore = Depends(get_job_store),
 ) -> PipelineRunOut:
-    return _out(await ada.move_tier(db, body.subdomain, body.tier, current_user))
+    return _out(await ada.move_tier(db, store, body.subdomain, body.tier, current_user))
 
 
 @router.post(
@@ -128,8 +132,9 @@ async def terminate_deployment(
     body: TerminateRequest,
     current_user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(db_session),
+    store: JobStore = Depends(get_job_store),
 ) -> PipelineRunOut:
-    return _out(await ada.terminate(db, body.subdomain, current_user))
+    return _out(await ada.terminate(db, store, body.subdomain, current_user))
 
 
 @router.post(

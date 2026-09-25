@@ -1,4 +1,7 @@
-"""The registered-application catalog: registration, versions, listing, deletion."""
+"""The registered-application catalog: registration, versions, listing, deletion.
+
+Functions here only flush; the route commits.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +11,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import and_, exists, func, or_, select
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased, joinedload, selectinload
 
@@ -92,19 +95,14 @@ async def _persist_new_application(
     db: AsyncSession,
     application: RegisteredApplication,
 ) -> None:
-    """Flush and commit a complete registration graph in one transaction."""
+    """Flush a complete registration graph (the caller commits)."""
 
     db.add(application)
     try:
         await db.flush()
-        await db.commit()
     except IntegrityError as error:
-        await db.rollback()
         if violated_constraint(error) == _APPLICATION_NAME_CONSTRAINT:
             raise DuplicateRegisteredApplication(application.name) from error
-        raise
-    except SQLAlchemyError:
-        await db.rollback()
         raise
 
 
@@ -457,7 +455,6 @@ async def delete_registered_application(
     )
     application = application_result.scalar_one_or_none()
     if application is None:
-        await db.rollback()
         raise RegisteredApplicationNotFound(application_id)
 
     instance_result = await db.execute(
@@ -470,7 +467,6 @@ async def delete_registered_application(
     )
     remaining_instances = [(str(name), int(tier)) for name, tier in instance_result.all()]
     if remaining_instances:
-        await db.rollback()
         raise RegisteredApplicationHasRunningInstances(
             application.name,
             remaining_instances,
@@ -484,7 +480,6 @@ async def delete_registered_application(
     )
     managed_secret_count = int(secret_result.scalar_one())
     if managed_secret_count:
-        await db.rollback()
         raise RegisteredApplicationHasManagedSecrets(
             application.name,
             managed_secret_count,
@@ -493,8 +488,4 @@ async def delete_registered_application(
     application.deleted_at = datetime.now(tz=UTC)
     application.updated_by = deleted_by
     db.add(application)
-    try:
-        await db.commit()
-    except SQLAlchemyError:
-        await db.rollback()
-        raise
+    await db.flush()

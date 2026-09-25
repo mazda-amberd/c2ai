@@ -1,0 +1,430 @@
+"""Registered-application deployments end to end on PostgreSQL (GitHub and the
+container registry faked): registration, dispatch payloads and credentials,
+upgrade/rollback/terminate, dispatch failures, callbacks, and the outbox."""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import text
+
+from c2ai.api.registered_applications import clients
+from c2ai.app import app
+from c2ai.auth.jwt import AthenaTokenUser, require_admin
+from c2ai.clients.container_registry import ContainerRegistryTag
+from c2ai.core.exceptions import ContainerImageTagNotFound
+from c2ai.db.session import get_db_session
+from c2ai.deployments import operations, repository as instances
+from c2ai.deployments.service import DISPATCH_JOB, DispatchRequest
+from c2ai.jobs import PostgresJobStore, Worker, get_job_store
+from c2ai.jobs.handlers.deployments import track_open_operations
+from c2ai.jobs.worker import registered_handlers
+from tests.integration.conftest import _SERVER_URL
+from tests.integration.test_deployments_db import FakeGitHub
+
+pytestmark = pytest.mark.skipif(not _SERVER_URL, reason="needs C2AI_TEST_DATABASE_URL")
+
+BASE = "/api/registered-applications"
+
+
+class FakeRegistry:
+    """The container registry: known tags, and the credentials it was asked with."""
+
+    def __init__(self):
+        self.tags = {"1.2.3", "2.0.0"}
+        self.calls: list[dict] = []
+
+    async def get_tag(self, *, registry, repository, tag, credential_id, username, password):
+        self.calls.append({"tag": tag, "username": username, "password": password})
+        if tag not in self.tags:
+            raise ContainerImageTagNotFound(repository, tag)
+        return ContainerRegistryTag(name=tag, digest=None, last_updated=None)
+
+
+@pytest.fixture
+async def env(session_factory, http_mock, monkeypatch):
+    monkeypatch.setenv("GITHUB_PAT", "ghp_environment")
+    monkeypatch.setenv("ATHENA_CREDENTIAL_ENCRYPTION_KEY", "test passphrase")
+    monkeypatch.setenv("DEPLOYMENT_CALLBACK_TOKEN", "callback-secret")
+    async with session_factory() as db:
+        await db.execute(
+            text(
+                "TRUNCATE pipeline_runs, deployment_instance_events, deployment_instances,"
+                " jobs, github_connections CASCADE"
+            )
+        )
+        await db.execute(
+            text(
+                "DELETE FROM registered_applications"
+                " WHERE id <> 'ada00000-0000-4000-8000-000000000001'"
+            )
+        )
+        await db.commit()
+    github, registry = FakeGitHub(), FakeRegistry()
+    http_mock(github)
+
+    async def _session():
+        async with session_factory() as session:
+            yield session
+
+    overrides = {
+        get_db_session: _session,
+        require_admin: lambda: AthenaTokenUser(identifier="admin", metadata={"user_type": "Admin"}),
+        get_job_store: lambda: PostgresJobStore(session_factory),
+        clients.container_registry_client: lambda: registry,
+    }
+    app.dependency_overrides.update(overrides)
+    try:
+        yield TestClient(app), github, registry, session_factory
+    finally:
+        for dependency in overrides:
+            app.dependency_overrides.pop(dependency, None)
+
+
+def _register_github(client, *, parameters=("customer_name", "env_instance", "branch"),
+                     connection="github-app-1", name="example-chatbot"):
+    response = client.post(
+        f"{BASE}/github",
+        json={
+            "application_type": "github_workflow",
+            "name": name,
+            "github": {
+                "github_connection": connection,
+                "trigger_method": "workflow_dispatch",
+                "repository": "amberd-ai/example-chatbot",
+                "workflow_file_path": ".github/workflows/deploy.yml",
+                "ref": "main",
+            },
+            "parameters": [{"key": key, "type": "text"} for key in parameters],
+            "llm": {
+                "endpoint": "https://llm.example.com/v1",
+                "api_token": "llm-secret",
+                "model_name": "qwen3-coder-next",
+            },
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+def _register_container(client):
+    response = client.post(
+        f"{BASE}/container",
+        json={
+            "application_type": "containerized",
+            "name": "chat-service",
+            "container": {
+                "registry": "Docker Hub",
+                "image_registry": "amberd/chat-service",
+                "registry_username": "amberd",
+                "registry_password": "registry-secret",
+                "tag": "1.2.3",
+                "pull_policy": "IfNotPresent",
+                "port": 8080,
+                "expose_public_service": True,
+                "cpu_request": "500m",
+                "memory_request": "512Mi",
+                "scaling": "1",
+            },
+            "parameters": [{"key": "LOG_LEVEL", "value": "info"}],
+            "llm": {
+                "endpoint": "https://amberd-llm-gateway:8010",
+                "api_token": "llm-secret",
+                "model_name": "qwen3-6",
+            },
+        },
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+def _deploy_container(client, application_id, *, name="chat-prod", tier=2, version="1.2.3"):
+    return client.post(
+        f"{BASE}/{application_id}/tiers/{tier}/deployments",
+        json={"instance_name": name, "version": version},
+    )
+
+
+def _report(client, deployment_id, token, step, status_, failure_reason=None):
+    """A pipeline progress callback, authenticated with its operation's token."""
+
+    body = {"current_step": step, "status": status_}
+    if failure_reason:
+        body["failure_reason"] = failure_reason
+    return client.post(
+        f"{BASE}/deployments/{deployment_id}/progress",
+        headers={"X-Athena-Deployment-Token": token},
+        json=body,
+    )
+
+
+def _complete_container_deploy(client, github, deployment):
+    """The container pipeline reports its way to a running instance."""
+
+    token = github.events[-1][1]["deployment"]["callback_token"]
+    for step in ("applying_resources", "configuring_dns"):
+        assert _report(client, deployment["id"], token, step, "deploying").status_code == 200
+    completed = _report(client, deployment["id"], token, "completed", "running")
+    assert completed.status_code == 200, completed.text
+    return token
+
+
+async def _history(session_factory, instance_id):
+    async with session_factory() as db:
+        rows = await db.execute(
+            text(
+                "SELECT operation, kind, dispatch_state, conclusion FROM pipeline_runs"
+                " WHERE deployment_instance_id = :id ORDER BY dispatched_at"
+            ),
+            {"id": instance_id},
+        )
+        return [tuple(row) for row in rows]
+
+
+# --- GitHub Workflow applications -----------------------------------------------
+
+
+async def test_github_deploy_names_the_instance_and_uses_the_saved_connection(env):
+    client, github, _registry, session_factory = env
+    connection = client.post(
+        "/api/github-connections",
+        json={
+            "connection_name": "Chatbot repo",
+            "repository_url": "https://github.com/amberd-ai/example-chatbot",
+            "access_token": "ghp_saved_connection",
+        },
+    )
+    assert connection.status_code == 201, connection.text
+    application_id = _register_github(client, connection=connection.json()["id"])
+
+    response = client.post(
+        f"{BASE}/{application_id}/deployments",
+        json={"tier": 2, "version": "main",
+              "parameters": {"customer_name": "acme", "env_instance": "prod"}},
+    )
+    assert response.status_code == 201, response.text
+    deployment = response.json()
+    # The workflow derives its host label from the parameters.
+    assert deployment["instance_name"] == "amberd-acme-prod"
+    assert deployment["status"] == "deploying"
+    workflow, inputs = github.dispatches[-1]
+    assert workflow == "deploy.yml"
+    assert inputs["customer_name"] == "acme" and inputs["provider"] == "tier2"
+    assert inputs["deployment_id"] == deployment["id"]
+    assert github.dispatch_auth[-1] == "Bearer ghp_saved_connection"
+    assert await _history(session_factory, deployment["id"]) == [
+        ("deploy", "deploy", "dispatched", None)
+    ]
+
+
+async def test_github_deploy_falls_back_to_a_generated_name(env):
+    client, _github, _registry, _sf = env
+    application_id = _register_github(client, parameters=("region",), name="Billing Sync")
+    response = client.post(
+        f"{BASE}/{application_id}/deployments",
+        json={"tier": 3, "parameters": {"region": "eu"}},
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["instance_name"] == "billing-sync-tier-3"
+
+
+async def test_github_upgrade_and_retry_of_a_failed_upgrade(env):
+    client, github, _registry, session_factory = env
+    application_id = _register_github(client)
+    deployment = client.post(
+        f"{BASE}/{application_id}/deployments",
+        json={"tier": 1, "version": "v1",
+              "parameters": {"customer_name": "acme", "env_instance": "qa"}},
+    ).json()
+    github.finish(github.last_run_id())
+    await track_open_operations(session_factory)
+
+    upgrade = client.post(f"{BASE}/deployments/{deployment['id']}/upgrade", json={"version": "v2"})
+    assert upgrade.status_code == 202, upgrade.text
+    assert github.dispatches[-1][0] == "ada-update.yaml"
+    assert github.dispatches[-1][1]["branch"] == "v2"
+    assert github.dispatches[-1][1]["subdomain"] == "amberd-acme-qa"
+    github.finish(github.last_run_id(), "failure")
+    await track_open_operations(session_factory)
+    assert client.get(f"{BASE}/deployments/{deployment['id']}").json()["status"] == "failed"
+
+    retry = client.post(f"{BASE}/deployments/{deployment['id']}/upgrade", json={"version": "v2"})
+    assert retry.status_code == 202, retry.text
+
+
+# --- Containerized applications -------------------------------------------------
+
+
+async def test_container_deploy_validates_the_tag_and_sends_credentials(env):
+    client, github, registry, _sf = env
+    application_id = _register_container(client)
+
+    missing = _deploy_container(client, application_id, version="9.9.9")
+    assert missing.status_code == 422
+    assert missing.json()["code"] == "ContainerImageTagNotFound"
+
+    response = _deploy_container(client, application_id)
+    assert response.status_code == 201, response.text
+    deployment = response.json()
+    assert (deployment["tier"], deployment["hostname"]) == (2, "chat-prod.amberd.ai")
+    # The registry was asked with the stored (decrypted) credential.
+    assert registry.calls[-1] == {"tag": "1.2.3", "username": "amberd", "password": "registry-secret"}
+    event_type, payload = github.events[-1]
+    sent = payload["deployment"]
+    assert event_type == "containerized-deploy"
+    assert (sent["tier"], sent["registry_username"], sent["registry_token"]) == (
+        "tier2", "amberd", "registry-secret"
+    )
+    assert sent["llm_api_token"] == "llm-secret"
+    assert len(sent["callback_token"]) == 64  # per-operation HMAC
+    assert "registry-secret" not in response.text
+
+
+async def test_container_upgrade_rollback_and_callbacks(env):
+    client, github, _registry, session_factory = env
+    application_id = _register_container(client)
+    deployment = _deploy_container(client, application_id).json()
+    deploy_token = _complete_container_deploy(client, github, deployment)
+    assert client.get(f"{BASE}/deployments/{deployment['id']}").json()["status"] == "running"
+
+    missing = client.post(
+        f"{BASE}/deployments/{deployment['id']}/upgrade", json={"version": "3.0.0"}
+    )
+    assert missing.status_code == 422
+    assert [row[0] for row in await _history(session_factory, deployment["id"])] == ["deploy"]
+
+    upgrade = client.post(f"{BASE}/deployments/{deployment['id']}/upgrade", json={"version": "2.0.0"})
+    assert upgrade.status_code == 202, upgrade.text
+    workflow, inputs = github.dispatches[-1]
+    assert (workflow, inputs["default_image_tag"], inputs["app_name"]) == (
+        "containerized-app-update.yaml", "2.0.0", "chat-prod"
+    )
+    # The finished deploy's token no longer authenticates anything.
+    stale = _report(client, deployment["id"], deploy_token, "completed", "running")
+    assert stale.status_code == 401
+    github.finish(github.last_run_id())
+    await track_open_operations(session_factory)
+
+    rollback = client.post(f"{BASE}/deployments/{deployment['id']}/rollback")
+    assert rollback.status_code == 202, rollback.text
+    workflow, inputs = github.dispatches[-1]
+    assert (workflow, inputs["default_image_tag"]) == ("containerized-app-update.yaml", "1.2.3")
+    assert rollback.json()["configuration"]["container"]["image_tag"] == "1.2.3"
+    assert [row[:2] for row in await _history(session_factory, deployment["id"])] == [
+        ("deploy", "deploy"), ("update", "upgrade"), ("update", "rollback")
+    ]
+
+
+async def test_failed_upgrade_dispatch_puts_the_instance_back(env):
+    client, github, _registry, session_factory = env
+    application_id = _register_container(client)
+    deployment = _deploy_container(client, application_id).json()
+    _complete_container_deploy(client, github, deployment)
+    github.reject_dispatches = True
+
+    response = client.post(
+        f"{BASE}/deployments/{deployment['id']}/upgrade", json={"version": "2.0.0"}
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"] == "The upgrade pipeline could not be triggered."
+    after = client.get(f"{BASE}/deployments/{deployment['id']}").json()
+    assert after["status"] == "running"
+    assert after["configuration"]["container"]["image_tag"] == "1.2.3"
+    assert "could not be triggered" in after["events"][-1]["message"]
+    assert (await _history(session_factory, deployment["id"]))[-1] == (
+        "update", "upgrade", "failed", "failure"
+    )
+
+
+async def test_failed_first_deploy_is_retried_by_rollback_with_credentials(env):
+    client, github, _registry, _session_factory = env
+    application_id = _register_container(client)
+    deployment = _deploy_container(client, application_id).json()
+    token = github.events[-1][1]["deployment"]["callback_token"]
+    failed = _report(
+        client, deployment["id"], token, "failed", "failed", "ImagePullBackOff"
+    )
+    assert failed.status_code == 200, failed.text
+
+    retry = client.post(f"{BASE}/deployments/{deployment['id']}/rollback")
+    assert retry.status_code == 202, retry.text
+    sent = github.events[-1][1]["deployment"]
+    assert (sent["registry_token"], sent["llm_api_token"]) == ("registry-secret", "llm-secret")
+    assert retry.json()["rollback_count"] == 1
+
+
+async def test_termination_requires_the_exact_name(env):
+    client, github, _registry, _sf = env
+    application_id = _register_container(client)
+    deployment = _deploy_container(client, application_id).json()
+    _complete_container_deploy(client, github, deployment)
+
+    url = f"{BASE}/deployments/{deployment['id']}/terminate"
+    wrong = client.post(url, json={"confirmation": "chat"})
+    assert wrong.status_code == 422
+    assert wrong.json()["code"] == "DeploymentTerminationConfirmationMismatch"
+    response = client.post(url, json={"confirmation": "chat-prod"})
+    assert response.status_code == 202, response.text
+    assert response.json()["status"] == "terminating"
+    assert github.dispatches[-1][0] == "containerized-app-terminate.yaml"
+
+
+# --- The outbox -------------------------------------------------------------------
+
+
+async def test_a_staged_operation_is_dispatched_by_the_worker(env):
+    """The request that staged an operation died before dispatching it."""
+
+    client, github, _registry, session_factory = env
+    application_id = _register_container(client)
+    deployment = _deploy_container(client, application_id).json()
+    _complete_container_deploy(client, github, deployment)
+
+    store = PostgresJobStore(session_factory)
+    async with session_factory() as db:  # phase 1 only, as a crashed request leaves it
+        instance = await instances.prepare_registered_application_upgrade(
+            db, deployment["id"], target_version="2.0.0", triggered_by="admin"
+        )
+        run = await operations.active_operation(db, instance.id)
+        request = DispatchRequest(
+            kind="upgrade", event_message="Upgrade dispatched.", triggered_by="admin",
+            target_version="2.0.0",
+        )
+        await store.enqueue(DISPATCH_JOB, request.payload(instance, run.id), session=db)
+        await db.commit()
+    dispatched_before = len(github.dispatches)
+
+    worker = Worker(
+        store,
+        worker_id="test-worker",
+        handlers={DISPATCH_JOB: registered_handlers()[DISPATCH_JOB]},
+        schedules=[],
+        session_factory=session_factory,
+    )
+    assert await worker.run_once() == 1
+    assert len(github.dispatches) == dispatched_before + 1
+    assert (await _history(session_factory, deployment["id"]))[-1][2] == "dispatched"
+
+
+async def test_an_operation_whose_dispatch_never_ran_is_undone(env):
+    client, github, _registry, session_factory = env
+    application_id = _register_container(client)
+    deployment = _deploy_container(client, application_id).json()
+    _complete_container_deploy(client, github, deployment)
+
+    async with session_factory() as db:  # staged, then nothing ever dispatched it
+        await instances.prepare_registered_application_upgrade(
+            db, deployment["id"], target_version="2.0.0", triggered_by="admin"
+        )
+        await db.execute(
+            text(
+                "UPDATE pipeline_runs SET dispatched_at = now() - interval '10 minutes'"
+                " WHERE dispatch_state = 'pending'"
+            )
+        )
+        await db.commit()
+
+    summary = await track_open_operations(session_factory)
+    assert summary["restored"] == 1
+    after = client.get(f"{BASE}/deployments/{deployment['id']}").json()
+    assert (after["status"], after["configuration"]["container"]["image_tag"]) == ("running", "1.2.3")

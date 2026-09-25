@@ -62,6 +62,7 @@ async def get_metrics(
     tiers = await enrich_tiers_with_instance_metadata(db, tiers)
     try:
         await replace_application_instances_for_tiers(db, tiers)
+        await db.commit()
     except SQLAlchemyError as exc:
         # Concurrent pollers can race on the snapshot; the response is still valid.
         await db.rollback()

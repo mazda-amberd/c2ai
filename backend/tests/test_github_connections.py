@@ -120,7 +120,7 @@ async def test_create_encrypts_token_in_the_application(monkeypatch):
     assert b"github_pat_secret" not in blob
     assert crypto.decrypt(blob, column=crypto.GITHUB_TOKEN) == "github_pat_secret"
     db.add.assert_called_once_with(connection)
-    db.commit.assert_awaited_once()
+    db.commit.assert_not_awaited()  # the route commits
 
 
 @pytest.mark.asyncio

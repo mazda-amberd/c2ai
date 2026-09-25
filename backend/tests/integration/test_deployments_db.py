@@ -19,8 +19,8 @@ from sqlalchemy import text
 from c2ai.app import app
 from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token
 from c2ai.db.session import get_db_session
-from c2ai.deployments import status as status_module
-from c2ai.jobs.handlers.deployments import reconcile_open_operations
+from c2ai.jobs import PostgresJobStore, get_job_store
+from c2ai.jobs.handlers.deployments import track_open_operations
 from tests.integration.conftest import _SERVER_URL
 
 pytestmark = pytest.mark.skipif(not _SERVER_URL, reason="needs C2AI_TEST_DATABASE_URL")
@@ -42,9 +42,14 @@ class FakeGitHub:
     def __init__(self):
         self.refs = {"main", "release-2"}
         self.dispatches: list[tuple[str, dict]] = []
+        # repository_dispatch events: (event_type, client_payload)
+        self.events: list[tuple[str, dict]] = []
+        # Authorization header of every dispatch, in order
+        self.dispatch_auth: list[str] = []
         self.runs: dict[int, dict] = {}
         self.cancelled: list[int] = []
         self.reject_dispatches = False
+        self.calls = 0
         self._ids = itertools.count(1000)
 
     def finish(self, run_id: int, conclusion: str = "success") -> None:
@@ -54,9 +59,19 @@ class FakeGitHub:
         return max(self.runs)
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.calls += 1
         parts = request.url.path.strip("/").split("/")
         # repos/{owner}/{repo}/...
         rest = parts[3:]
+        if not rest and request.method == "GET":  # connection validation
+            return httpx.Response(200, json={"full_name": f"{parts[1]}/{parts[2]}"})
+        if rest == ["dispatches"] and request.method == "POST":
+            if self.reject_dispatches:
+                return httpx.Response(422, json={"message": "Invalid payload"})
+            body = json.loads(request.content)
+            self.events.append((body["event_type"], body["client_payload"]))
+            self.dispatch_auth.append(request.headers.get("Authorization", ""))
+            return httpx.Response(204)
         if rest[:1] == ["branches"] and len(rest) == 2:
             return httpx.Response(200 if rest[1] in self.refs else 404, json={})
         if rest[:3] == ["git", "ref", "tags"]:
@@ -66,6 +81,7 @@ class FakeGitHub:
                 return httpx.Response(422, json={"message": "Unexpected inputs"})
             body = json.loads(request.content)
             self.dispatches.append((rest[2], body["inputs"]))
+            self.dispatch_auth.append(request.headers.get("Authorization", ""))
             run_id = next(self._ids)
             now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
             self.runs[run_id] = {
@@ -103,7 +119,6 @@ async def clean(session_factory):
             )
         )
         await session.commit()
-    status_module._status_cache.clear()
 
 
 @pytest.fixture
@@ -127,11 +142,13 @@ def client(session_factory, clean, github, user):
 
     app.dependency_overrides[get_db_session] = _session
     app.dependency_overrides[get_current_user_token] = lambda: user["identity"]
+    app.dependency_overrides[get_job_store] = lambda: PostgresJobStore(session_factory)
     try:
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(get_db_session, None)
         app.dependency_overrides.pop(get_current_user_token, None)
+        app.dependency_overrides.pop(get_job_store, None)
 
 
 async def _instance_rows(session_factory):
@@ -146,8 +163,13 @@ async def _instance_rows(session_factory):
 
 
 def _active(client):
-    status_module._status_cache.clear()
     return client.get("/api/pipeline/active").json()
+
+
+async def _track(session_factory):
+    """One deployments.track run: the only code that polls GitHub."""
+
+    return await track_open_operations(session_factory)
 
 
 async def test_ada_deploy_is_a_registered_deployment_with_legacy_inputs(client, github, session_factory):
@@ -173,13 +195,20 @@ async def test_ada_deploy_is_a_registered_deployment_with_legacy_inputs(client, 
     assert (name, tier, state) == (SUBDOMAIN, 1, "deploying")
     assert application_id == "ada00000-0000-4000-8000-000000000001"
 
+    calls = github.calls
     [active] = _active(client)
-    assert (active["id"], active["gh_status"]) == (operation["id"], "in_progress")
+    assert (active["id"], active["gh_status"]) == (operation["id"], "queued")
+    assert github.calls == calls  # status reads never call GitHub
+    await _track(session_factory)  # the tracker does
+    assert github.calls > calls
+    [active] = _active(client)
+    assert active["gh_status"] == "in_progress"
 
     # The same subdomain cannot be deployed twice.
     assert client.post("/api/deploy", json=DEPLOY_BODY).status_code == 409
 
     github.finish(operation["run_id"])
+    await _track(session_factory)
     assert _active(client) == []
     assert (await _instance_rows(session_factory))[0][2] == "running"
     history = client.get("/api/pipeline/history", params={"subdomain": SUBDOMAIN}).json()
@@ -192,18 +221,25 @@ async def test_unknown_branch_is_rejected_before_anything_is_written(client, ses
     assert await _instance_rows(session_factory) == []
 
 
-async def test_failed_dispatch_leaves_no_instance_or_operation(client, github, session_factory):
+async def test_failed_dispatch_is_undone_and_reported(client, github, session_factory):
     github.reject_dispatches = True
     response = client.post("/api/deploy", json=DEPLOY_BODY)
     assert response.status_code == 503
-    assert await _instance_rows(session_factory) == []
-    assert client.get("/api/pipeline/history", params={"subdomain": SUBDOMAIN}).json() == []
+    [(_name, _tier, state, _app)] = await _instance_rows(session_factory)
+    assert state == "cancelled"  # never deployed: the name is free again
+    [operation] = client.get("/api/pipeline/history", params={"subdomain": SUBDOMAIN}).json()
+    assert operation["ended_at"] is not None
+    [shown] = _active(client)  # the failure stays visible on the tier page
+    assert (shown["gh_conclusion"], shown["id"]) == ("failure", operation["id"])
+
+    github.reject_dispatches = False
+    assert client.post("/api/deploy", json=DEPLOY_BODY).status_code == 201
 
 
 async def test_update_move_and_terminate_one_at_a_time(client, github, session_factory):
     deployed = client.post("/api/deploy", json=DEPLOY_BODY).json()
     github.finish(deployed["run_id"])
-    _active(client)
+    await _track(session_factory)
 
     # Updating to the same branch is a redeploy, which ADA allows.
     update = client.post("/api/deploy/update", json=DEPLOY_BODY)
@@ -223,7 +259,7 @@ async def test_update_move_and_terminate_one_at_a_time(client, github, session_f
     assert blocked.status_code == 409
 
     github.finish(update.json()["run_id"])
-    _active(client)
+    await _track(session_factory)
     move = client.post("/api/deploy/move-tier", json={"subdomain": SUBDOMAIN, "tier": 2})
     assert move.status_code == 201, move.text
     assert move.json()["operation"] == "migration"
@@ -234,13 +270,13 @@ async def test_update_move_and_terminate_one_at_a_time(client, github, session_f
     [active] = _active(client)
     assert (active["operation"], active["subdomain"], active["tier"]) == ("migration", SUBDOMAIN, 2)
     github.finish(move.json()["run_id"])
-    _active(client)
+    await _track(session_factory)
     assert (await _instance_rows(session_factory))[0][1:3] == (2, "running")
 
     terminate = client.post("/api/deploy/terminate", json={"subdomain": SUBDOMAIN})
     assert terminate.status_code == 201
     github.finish(terminate.json()["run_id"])
-    _active(client)
+    await _track(session_factory)
     assert (await _instance_rows(session_factory))[0][2] == "terminated"
 
     # A terminated name can be deployed again.
@@ -254,6 +290,7 @@ async def test_update_move_and_terminate_one_at_a_time(client, github, session_f
 async def test_failed_run_is_reported_then_retryable(client, github, session_factory):
     deployed = client.post("/api/deploy", json=DEPLOY_BODY).json()
     github.finish(deployed["run_id"], "failure")
+    await _track(session_factory)
     [failed] = _active(client)  # failures stay visible for a while
     assert (failed["gh_status"], failed["gh_conclusion"]) == ("completed", "failure")
     assert (await _instance_rows(session_factory))[0][2] == "failed"
@@ -332,8 +369,8 @@ async def test_reconciler_settles_and_abandons_unwatched_operations(client, gith
         await session.commit()
     # GitHub's run listing is not faked, so no run can be matched to it.
 
-    summary = await reconcile_open_operations(session_factory)
-    assert summary == {"checked": 2, "settled": 1, "abandoned": 1}
+    summary = await _track(session_factory)
+    assert summary == {"checked": 2, "settled": 1, "restored": 0, "abandoned": 1}
     async with session_factory() as session:
         rows = dict(
             (await session.execute(text("SELECT subdomain, conclusion FROM pipeline_runs"))).all()

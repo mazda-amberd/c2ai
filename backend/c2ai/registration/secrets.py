@@ -1,4 +1,9 @@
-"""Managed container secrets: metadata here, values only in the secret provider."""
+"""Managed container secrets: metadata here, values only in the secret provider.
+
+Functions here only flush; the route commits. Updates and deletes keep the
+secret row locked while the broker is called, so two rotations of the same
+secret cannot interleave (the broker is internal and answers quickly).
+"""
 
 from __future__ import annotations
 
@@ -8,7 +13,7 @@ from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from c2ai.constants.registered_application import (
@@ -90,7 +95,6 @@ async def prepare_container_application_secret_create(
     try:
         await db.flush()
     except IntegrityError as error:
-        await db.rollback()
         if violated_constraint(error) in _CONTAINER_SECRET_CONSTRAINTS:
             raise DuplicateContainerApplicationSecret() from error
         raise
@@ -110,14 +114,10 @@ async def complete_container_application_secret_write(
     secret.updated_by = updated_by
     db.add(secret)
     try:
-        await db.commit()
+        await db.flush()
     except IntegrityError as error:
-        await db.rollback()
         if violated_constraint(error) in _CONTAINER_SECRET_CONSTRAINTS:
             raise DuplicateContainerApplicationSecret() from error
-        raise
-    except SQLAlchemyError:
-        await db.rollback()
         raise
     return secret
 
@@ -204,7 +204,6 @@ async def prepare_container_application_secret_update(
     try:
         await db.flush()
     except IntegrityError as error:
-        await db.rollback()
         if violated_constraint(error) in _CONTAINER_SECRET_CONSTRAINTS:
             raise DuplicateContainerApplicationSecret() from error
         raise
@@ -235,7 +234,6 @@ async def prepare_container_application_secret_delete(
     )
     deployment_count = int(reference_result.scalar_one())
     if deployment_count:
-        await db.rollback()
         raise ContainerApplicationSecretInUse(secret.name, deployment_count)
     return secret
 
@@ -251,11 +249,7 @@ async def complete_container_application_secret_delete(
     secret.deleted_at = datetime.now(tz=UTC)
     secret.updated_by = deleted_by
     db.add(secret)
-    try:
-        await db.commit()
-    except SQLAlchemyError:
-        await db.rollback()
-        raise
+    await db.flush()
 
 
 async def list_active_container_application_secrets(

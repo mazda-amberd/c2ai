@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from c2ai.api.registered_applications import clients
 from c2ai.api.registered_applications.clients import PREFIX, TAGS
 from c2ai.auth.jwt import AthenaTokenUser, require_admin
+from c2ai.clients.container_secret_provider import ContainerSecretProviderClient
 from c2ai.core.exceptions import (
     ServiceUnavailableError,
 )
@@ -86,6 +87,7 @@ async def create_container_application_secret(
     payload: ContainerApplicationSecretCreate,
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    provider: ContainerSecretProviderClient = Depends(clients.container_secret_provider),
 ) -> ContainerApplicationSecretOut:
     """Write secret material to the provider and persist only its reference."""
 
@@ -95,24 +97,20 @@ async def create_container_application_secret(
         payload,
         created_by=current_user.identifier,
     )
-    try:
-        provider = clients.container_secret_provider()
-        reference = await provider.upsert_secret(
-            secret_id=secret.id,
-            application_id=application_id,
-            name=secret.name,
-            environment_variable=secret.environment_variable,
-            secret_value=payload.secret_value.get_secret_value(),
-        )
-    except Exception:
-        await db.rollback()
-        raise
+    reference = await provider.upsert_secret(
+        secret_id=secret.id,
+        application_id=application_id,
+        name=secret.name,
+        environment_variable=secret.environment_variable,
+        secret_value=payload.secret_value.get_secret_value(),
+    )
     secret = await secret_store.complete_container_application_secret_write(
         db,
         secret,
         reference=reference,
         updated_by=current_user.identifier,
     )
+    await db.commit()
     logger.info(
         "Container application secret created id=%s application=%s by=%s",
         secret.id,
@@ -134,6 +132,7 @@ async def update_container_application_secret(
     payload: ContainerApplicationSecretUpdate,
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    provider: ContainerSecretProviderClient = Depends(clients.container_secret_provider),
 ) -> ContainerApplicationSecretOut:
     """Update metadata and optionally replace the provider-held value."""
 
@@ -144,28 +143,24 @@ async def update_container_application_secret(
         payload,
         updated_by=current_user.identifier,
     )
-    try:
-        provider = clients.container_secret_provider()
-        reference = await provider.upsert_secret(
-            secret_id=secret.id,
-            application_id=application_id,
-            name=secret.name,
-            environment_variable=secret.environment_variable,
-            secret_value=(
-                payload.secret_value.get_secret_value()
-                if payload.secret_value is not None
-                else None
-            ),
-        )
-    except Exception:
-        await db.rollback()
-        raise
+    reference = await provider.upsert_secret(
+        secret_id=secret.id,
+        application_id=application_id,
+        name=secret.name,
+        environment_variable=secret.environment_variable,
+        secret_value=(
+            payload.secret_value.get_secret_value()
+            if payload.secret_value is not None
+            else None
+        ),
+    )
     secret = await secret_store.complete_container_application_secret_write(
         db,
         secret,
         reference=reference,
         updated_by=current_user.identifier,
     )
+    await db.commit()
     logger.info(
         "Container application secret updated id=%s application=%s by=%s",
         secret.id,
@@ -185,6 +180,7 @@ async def delete_container_application_secret(
     secret_id: UUID,
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    provider: ContainerSecretProviderClient = Depends(clients.container_secret_provider),
 ) -> Response:
     """Delete provider material before soft-deleting Athena metadata."""
 
@@ -194,22 +190,17 @@ async def delete_container_application_secret(
         secret_id,
     )
     if not secret.secret_reference:
-        await db.rollback()
         raise ServiceUnavailableError("The managed secret has no provider reference.")
-    try:
-        provider = clients.container_secret_provider()
-        await provider.delete_secret(
-            secret_id=secret.id,
-            reference=secret.secret_reference,
-        )
-    except Exception:
-        await db.rollback()
-        raise
+    await provider.delete_secret(
+        secret_id=secret.id,
+        reference=secret.secret_reference,
+    )
     await secret_store.complete_container_application_secret_delete(
         db,
         secret,
         deleted_by=current_user.identifier,
     )
+    await db.commit()
     logger.info(
         "Container application secret deleted id=%s application=%s by=%s",
         secret.id,

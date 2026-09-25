@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 from uuid import UUID
 
 from sqlalchemy import distinct, func, select
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from c2ai.core.exceptions import DuplicateGitHubConnection, ServiceUnavailableError
@@ -62,16 +62,11 @@ async def create_github_connection(
     db.add(connection)
     try:
         await db.flush()
-        await db.commit()
-        await db.refresh(connection)
     except IntegrityError as error:
-        await db.rollback()
         if violated_constraint(error) == _URL_CONSTRAINT:
             raise DuplicateGitHubConnection(payload.connection_url) from error
         raise
-    except SQLAlchemyError:
-        await db.rollback()
-        raise
+    await db.refresh(connection)
     return connection
 
 

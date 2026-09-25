@@ -6,7 +6,6 @@ from datetime import timedelta
 
 from c2ai.config import get_settings
 from c2ai.crud import session as session_store
-from c2ai.db.session import AsyncSessionLocal
 from c2ai.jobs.worker import JobContext, Schedule, job_handler, register_schedule
 
 KIND = "jobs.purge"
@@ -15,7 +14,7 @@ KIND = "jobs.purge"
 @job_handler(KIND)
 async def purge(ctx: JobContext) -> dict:
     window = timedelta(seconds=get_settings().login_failure_window_seconds)
-    async with AsyncSessionLocal() as db:
+    async with ctx.session_factory() as db:
         sessions = await session_store.purge_expired(db, failure_window=window)
         await db.commit()
     return {"jobs": await ctx.store.purge_expired(), "session_rows": sessions}

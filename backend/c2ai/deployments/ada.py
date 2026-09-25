@@ -26,28 +26,18 @@ from c2ai.clients.github_actions import GitHubActionsClient
 from c2ai.config import get_settings
 from c2ai.constants.registered_application import DeploymentInstanceStatus, DeploymentStep
 from c2ai.core.exceptions import (
-    AppException,
     ConflictError,
     ForbiddenError,
     NotFoundError,
     ServiceUnavailableError,
     UnprocessableEntityError,
 )
-from c2ai.deployments import lifecycle, operations, repository as instances
+from c2ai.deployments import lifecycle, operations, repository as instances, service, tracking
 from c2ai.deployments.configuration import (
     build_deployment_configuration,
 )
-from c2ai.deployments.dispatch import dispatch_deployment
 from c2ai.deployments.lifecycle import Outcome
-from c2ai.deployments.pipelines import (
-    dispatch_registered_application_move_tier,
-    dispatch_registered_application_termination,
-    dispatch_registered_application_upgrade,
-)
-from c2ai.deployments.tracking import (
-    client_for_reference,
-    get_registered_deployment_workflow_progress,
-)
+from c2ai.jobs.store import JobStore
 from c2ai.models.application_instance import ApplicationInstance
 from c2ai.models.pipeline_run import PipelineRun
 from c2ai.models.registered_application import (
@@ -239,8 +229,8 @@ async def _adopt(
         )
     )
     db.add(instance)
-    await db.commit()
-    logger.info("Adopted cluster instance %s as an ADA deployment", subdomain)
+    await db.flush()
+    logger.info("Adopting cluster instance %s as an ADA deployment", subdomain)
     return await instances.get_registered_application_deployment(db, instance.id)
 
 
@@ -253,36 +243,28 @@ def _slack_user(user: AthenaTokenUser) -> str:
     return str(user.metadata.get("slack_username") or user.identifier)
 
 
-async def _dispatch_or_rollback(db: AsyncSession, dispatch, what: str) -> dict:
-    try:
-        return await dispatch
-    except AppException:
-        await db.rollback()
-        raise
-    except Exception as error:
-        await db.rollback()
-        logger.exception("ADA %s dispatch failed", what)
-        raise ServiceUnavailableError(f"The {what} pipeline could not be triggered.") from error
-
-
 async def _operation_row(db: AsyncSession, instance: DeploymentInstance) -> PipelineRun:
+    """The operation just dispatched for ``instance`` (open, or already settled)."""
+
     run = await operations.active_operation(db, instance.id)
-    if run is None:  # settled already (e.g. a synchronous failure callback)
+    if run is None:
         run = await operations.latest_operation_for_subdomain(
             db, operations.log_subdomain(instance)
         )
     return run
 
 
-async def deploy(db: AsyncSession, body: DeployRequest, user: AthenaTokenUser) -> PipelineRun:
+async def deploy(
+    db: AsyncSession, store: JobStore, body: DeployRequest, user: AthenaTokenUser
+) -> PipelineRun:
     subdomain = body.subdomain
+    await ensure_ref_exists(body.branch)  # GitHub first, before any transaction
     existing = await live_instance(db, subdomain)
     entry = await _inventory_entry(db, subdomain)
     if existing is not None or _is_fresh(entry):
         raise ConflictError(
             f"Instance '{subdomain}' is already running. Use the update operation to redeploy it."
         )
-    await ensure_ref_exists(body.branch)
 
     version = await ada_version(db)
     configuration = build_deployment_configuration(
@@ -300,118 +282,69 @@ async def deploy(db: AsyncSession, body: DeployRequest, user: AthenaTokenUser) -
         triggered_by=_slack_user(user),
     )
     configuration["domain"] = body.domain
-    instance = await instances.create_registered_application_deployment(
+    instance = await service.deploy(
         db,
+        store,
         version,
         instance_name=subdomain,
         tier=body.tier,
         configuration=configuration,
         triggered_by=user.identifier,
     )
-    reference = await _dispatch_or_rollback(
-        db,
-        dispatch_deployment(
-            db,
-            version,
-            deployment_id=instance.id,
-            instance_name=subdomain,
-            tier=body.tier,
-            configuration=configuration,
-            triggered_by=user.identifier,
-        ),
-        "deployment",
-    )
-    instance = await instances.complete_registered_application_dispatch(
-        db, instance, {**reference, "subdomain": subdomain}
-    )
     return await _operation_row(db, instance)
 
 
 async def update(
-    db: AsyncSession, body: DeployRequest, user: AthenaTokenUser
+    db: AsyncSession, store: JobStore, body: DeployRequest, user: AthenaTokenUser
 ) -> PipelineRun:
+    await ensure_ref_exists(body.branch)
     instance = await instance_for_operation(
         db, body.subdomain, tier=body.tier, operation="update", user=user
     )
-    await ensure_ref_exists(body.branch)
-    instance = await instances.prepare_registered_application_upgrade(
+    instance = await service.upgrade(
         db,
+        store,
         instance.id,
         target_version=body.branch,
         triggered_by=user.identifier,
         allow_same_version=True,
     )
-    reference = await _dispatch_or_rollback(
-        db,
-        dispatch_registered_application_upgrade(
-            instance.application_version,
-            deployment_id=instance.id,
-            instance_name=instance.instance_name,
-            tier=instance.tier,
-            target_version=body.branch,
-            configuration=instance.configuration,
-            triggered_by=user.identifier,
-        ),
-        "update",
-    )
-    instance = await instances.complete_registered_application_upgrade_dispatch(db, instance, reference)
     return await _operation_row(db, instance)
 
 
 async def move_tier(
-    db: AsyncSession, subdomain: str, tier: int, user: AthenaTokenUser
+    db: AsyncSession, store: JobStore, subdomain: str, tier: int, user: AthenaTokenUser
 ) -> PipelineRun:
     instance = await instance_for_operation(
         db, subdomain, tier=None, operation="move-tier", user=user
     )
-    instance = await instances.prepare_registered_application_move_tier(
-        db, instance.id, target_tier=tier, triggered_by=user.identifier
-    )
-    reference = await _dispatch_or_rollback(
+    instance = await service.move_tier(
         db,
-        dispatch_registered_application_move_tier(
-            instance.application_version,
-            deployment_id=instance.id,
-            instance_name=instance.instance_name,
-            target_tier=tier,
-            configuration=instance.configuration,
-            triggered_by=_slack_user(user),
-        ),
-        "move-to-tier",
-    )
-    instance = await instances.complete_operation_dispatch(
-        db, instance, reference, event_message=f"Move to Tier {tier} pipeline dispatched."
+        store,
+        instance.id,
+        target_tier=tier,
+        triggered_by=user.identifier,
+        dispatch_user=_slack_user(user),
     )
     return await _operation_row(db, instance)
 
 
-async def terminate(db: AsyncSession, subdomain: str, user: AthenaTokenUser) -> PipelineRun:
+async def terminate(
+    db: AsyncSession, store: JobStore, subdomain: str, user: AthenaTokenUser
+) -> PipelineRun:
     instance = await instance_for_operation(
         db, subdomain, tier=None, operation="terminate", user=user
     )
-    instance = await instances.prepare_registered_application_termination(
-        db, instance.id, triggered_by=user.identifier
-    )
-    reference = await _dispatch_or_rollback(
-        db,
-        dispatch_registered_application_termination(
-            instance.application_version,
-            deployment_id=instance.id,
-            instance_name=instance.instance_name,
-            tier=instance.tier,
-            configuration=instance.configuration,
-            triggered_by=user.identifier,
-        ),
-        "termination",
-    )
-    instance = await instances.complete_registered_application_termination_dispatch(
-        db, instance, reference
-    )
+    instance = await service.terminate(db, store, instance.id, triggered_by=user.identifier)
     return await _operation_row(db, instance)
 
 
 async def cancel(db: AsyncSession, operation_id: str, user: AthenaTokenUser) -> PipelineRun:
-    """Cancel an operation's GitHub run (only its requester may) and settle it."""
+    """Cancel an operation's GitHub run (only its requester may) and settle it.
+
+    GitHub is called with no transaction open; the settlement is a short
+    locked write afterwards.
+    """
 
     run = await operations.get_operation(db, operation_id)
     if run is None:
@@ -426,32 +359,38 @@ async def cancel(db: AsyncSession, operation_id: str, user: AthenaTokenUser) -> 
         raise ConflictError("This pipeline run has already finished.")
     if run.triggered_by != user.identifier:
         raise ForbiddenError("You can only cancel runs that you started.")
-    instance = (
-        await instances.get_registered_application_deployment(
-            db, run.deployment_instance_id, for_update=True
-        )
-        if run.deployment_instance_id
-        else None
-    )
-    if instance is None:
+    if run.deployment_instance_id is None:
         raise ConflictError("This pipeline run has no deployment to cancel.")
-    if run.run_id is None:
-        await get_registered_deployment_workflow_progress(db, instance)
-    if run.run_id is None:
+    instance = await instances.get_registered_application_deployment(
+        db, run.deployment_instance_id
+    )
+    reference = dict(instance.dispatch_reference or {})
+    run_id = run.run_id
+    plan = await tracking.plan_fetch(db, instance) if run_id is None else None
+    client = await tracking.client_for_reference(db, reference)
+    await db.commit()  # no transaction while GitHub answers
+
+    if run_id is None and plan is not None:
+        progress, _error = await tracking.fetch(plan)
+        run_id = progress["run_id"] if progress else None
+    if run_id is None:
         raise ConflictError(
             "Cannot cancel yet: the GitHub Actions run is not linked. "
             "Wait a few seconds and try again."
         )
-    if run.ended_at is None:
-        client = await client_for_reference(db, instance.dispatch_reference or {})
-        if client is None:
-            raise ConflictError("This pipeline run cannot be cancelled from Athena.")
-        try:
-            await client.cancel_workflow_run(int(run.run_id))
-        except httpx.HTTPError as error:
-            raise ServiceUnavailableError(
-                f"GitHub refused to cancel run {run.run_id}."
-            ) from error
+    if client is None:
+        raise ConflictError("This pipeline run cannot be cancelled from Athena.")
+    try:
+        await client.cancel_workflow_run(int(run_id))
+    except httpx.HTTPError as error:
+        raise ServiceUnavailableError(f"GitHub refused to cancel run {run_id}.") from error
+
+    instance = await instances.get_registered_application_deployment(
+        db, run.deployment_instance_id, for_update=True
+    )
+    run = await operations.get_operation(db, run.id)
+    if run is not None and run.ended_at is None:
+        run.run_id = run.run_id or int(run_id)
         await instances.settle_operation(
             db,
             instance,
@@ -460,5 +399,5 @@ async def cancel(db: AsyncSession, operation_id: str, user: AthenaTokenUser) -> 
             message=f"Pipeline run cancelled by {user.identifier}.",
             created_by=user.identifier,
         )
-        await db.commit()
+    await db.commit()
     return run

@@ -100,4 +100,5 @@ async def create_github_connection(
         payload,
         created_by=current_user.identifier,
     )
+    await db.commit()
     return _connection_out(connection)

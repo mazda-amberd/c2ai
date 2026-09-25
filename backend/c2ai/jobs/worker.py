@@ -42,6 +42,8 @@ class JobContext:
     job: JobRecord
     store: JobStore
     worker_id: str
+    # Where handlers open database sessions (the worker's, injectable in tests).
+    session_factory: Callable[[], Any]
 
     @property
     def payload(self) -> dict[str, Any]:
@@ -118,8 +120,13 @@ class Worker:
     poll_seconds: float = 1.0
     handlers: dict[str, HandlerSpec] | None = None
     schedules: Sequence[Schedule] | None = None
+    session_factory: Callable[[], Any] | None = None
 
     def __post_init__(self) -> None:
+        if self.session_factory is None:
+            from c2ai.db.session import AsyncSessionLocal
+
+            self.session_factory = AsyncSessionLocal
         if self.handlers is None:
             self.handlers = registered_handlers()
         if self.schedules is None:
@@ -165,7 +172,9 @@ class Worker:
         heartbeat = asyncio.create_task(self._heartbeat(job, spec))
         follow_up = self._follow_up(job)
         try:
-            result = await spec.run(JobContext(job, self.store, self.worker_id))
+            result = await spec.run(
+                JobContext(job, self.store, self.worker_id, self.session_factory)
+            )
         except asyncio.CancelledError:
             # Shutdown: leave the lease to expire so another worker retries it.
             raise

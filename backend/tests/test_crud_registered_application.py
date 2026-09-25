@@ -107,6 +107,8 @@ def _container_payload() -> ContainerRegisteredApplicationCreate:
 
 def _db_with_name_lookup(result_value=None):
     db = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
     lookup_result = MagicMock()
     lookup_result.scalar_one_or_none.return_value = result_value
     db.execute = AsyncMock(return_value=lookup_result)
@@ -154,7 +156,7 @@ async def test_create_github_application_persists_complete_version_graph(monkeyp
     )
 
     db.flush.assert_awaited_once()
-    db.commit.assert_awaited_once()
+    db.commit.assert_not_awaited()  # the route commits
     db.rollback.assert_not_awaited()
 
 
@@ -198,7 +200,7 @@ async def test_create_github_application_maps_concurrent_name_conflict(monkeypat
             created_by="admin-user",
         )
 
-    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
     db.commit.assert_not_awaited()
 
 
@@ -263,7 +265,7 @@ async def test_create_container_application_persists_complete_version_graph(monk
         version.llm_configuration.api_token_encrypted
     )
     db.flush.assert_awaited_once()
-    db.commit.assert_awaited_once()
+    db.commit.assert_not_awaited()  # the route commits
 
 
 @pytest.mark.asyncio
@@ -298,6 +300,8 @@ async def test_resolve_container_registry_credentials_decrypts_runtime_values(
         crypto.encrypt("write-only-registry-password", column=crypto.REGISTRY_PASSWORD),
     )
     db = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
     db.execute = AsyncMock(return_value=result)
 
     runtime = await resolve_container_registry_credentials(
@@ -363,6 +367,8 @@ async def test_list_registered_applications_returns_active_tier_aggregates():
     secret_result = MagicMock()
     secret_result.all.return_value = [(second.id, 1)]
     db = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
     db.execute = AsyncMock(
         side_effect=[count_result, rows_result, tier_result, secret_result]
     )
@@ -407,6 +413,8 @@ async def test_list_registered_applications_skips_tier_query_for_empty_page():
     rows_result = MagicMock()
     rows_result.all.return_value = []
     db = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
     db.execute = AsyncMock(side_effect=[count_result, rows_result])
 
     page = await list_registered_applications(db)
@@ -428,6 +436,8 @@ async def test_delete_registered_application_soft_deletes_when_no_active_instanc
     secret_result = MagicMock()
     secret_result.scalar_one.return_value = 0
     db = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
     db.execute = AsyncMock(
         side_effect=[application_result, instance_result, secret_result]
     )
@@ -444,7 +454,7 @@ async def test_delete_registered_application_soft_deletes_when_no_active_instanc
     assert application.deleted_at is not None
     assert application.updated_by == "admin-user"
     db.add.assert_called_once_with(application)
-    db.commit.assert_awaited_once()
+    db.commit.assert_not_awaited()  # the route commits
 
 
 @pytest.mark.asyncio
@@ -457,6 +467,8 @@ async def test_delete_registered_application_blocks_active_instances():
     instance_result = MagicMock()
     instance_result.all.return_value = [("chat-dev", 1), ("chat-prod", 3)]
     db = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
     db.execute = AsyncMock(side_effect=[application_result, instance_result])
     db.add = MagicMock()
     db.commit = AsyncMock()
@@ -475,7 +487,7 @@ async def test_delete_registered_application_blocks_active_instances():
     assert "'chat-prod' (Tier 3)" in exc_info.value.detail
     db.add.assert_not_called()
     db.commit.assert_not_awaited()
-    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -491,6 +503,8 @@ async def test_delete_registered_application_blocks_managed_secrets():
     secret_result = MagicMock()
     secret_result.scalar_one.return_value = 2
     db = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
     db.execute = AsyncMock(
         side_effect=[application_result, instance_result, secret_result]
     )
@@ -507,7 +521,7 @@ async def test_delete_registered_application_blocks_managed_secrets():
 
     db.add.assert_not_called()
     db.commit.assert_not_awaited()
-    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -515,6 +529,8 @@ async def test_delete_registered_application_returns_not_found_for_deleted_recor
     application_result = MagicMock()
     application_result.scalar_one_or_none.return_value = None
     db = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
     db.execute = AsyncMock(return_value=application_result)
     db.rollback = AsyncMock()
 
@@ -525,7 +541,7 @@ async def test_delete_registered_application_returns_not_found_for_deleted_recor
             deleted_by="admin-user",
         )
 
-    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
 
 
 def _container_application() -> RegisteredApplication:
@@ -544,6 +560,8 @@ async def test_prepare_and_complete_container_secret_store_metadata_only():
     application_result = MagicMock()
     application_result.scalar_one_or_none.return_value = _container_application()
     db = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
     db.execute = AsyncMock(return_value=application_result)
     db.add = MagicMock()
     db.flush = AsyncMock()
@@ -575,8 +593,8 @@ async def test_prepare_and_complete_container_secret_store_metadata_only():
     assert not hasattr(secret, "secret_value")
     assert not hasattr(secret, "value")
     assert "super-sensitive" not in repr(secret.__dict__)
-    db.flush.assert_awaited_once()
-    db.commit.assert_awaited_once()
+    assert db.flush.await_count == 2  # staged, then the provider reference
+    db.commit.assert_not_awaited()  # the route commits
 
 
 @pytest.mark.asyncio
@@ -586,6 +604,8 @@ async def test_container_secret_crud_rejects_github_applications():
     application_result = MagicMock()
     application_result.scalar_one_or_none.return_value = application
     db = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
     db.execute = AsyncMock(return_value=application_result)
 
     with pytest.raises(ContainerSecretsNotSupported):
@@ -606,6 +626,8 @@ async def test_container_secret_maps_concurrent_metadata_conflict():
     application_result = MagicMock()
     application_result.scalar_one_or_none.return_value = application
     db = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
     db.execute = AsyncMock(return_value=application_result)
     db.add = MagicMock()
     db.flush = AsyncMock(
@@ -629,7 +651,7 @@ async def test_container_secret_maps_concurrent_metadata_conflict():
             created_by="admin-user",
         )
 
-    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -651,6 +673,8 @@ async def test_container_secret_delete_is_guarded_while_deployment_references_it
     reference_result = MagicMock()
     reference_result.scalar_one.return_value = 1
     db = MagicMock()
+    db.flush = AsyncMock()
+    db.commit = AsyncMock()
     db.execute = AsyncMock(
         side_effect=[application_result, secret_result, reference_result]
     )
@@ -663,7 +687,7 @@ async def test_container_secret_delete_is_guarded_while_deployment_references_it
             secret.id,
         )
 
-    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio

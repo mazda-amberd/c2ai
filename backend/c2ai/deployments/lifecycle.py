@@ -23,6 +23,7 @@ or terminated); a cancelled first deployment settles as ``cancelled``.
 from __future__ import annotations
 
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import Enum
@@ -173,6 +174,42 @@ def settle(
         else:
             instance.dns_status = "deleted" if operation is Operation.TERMINATE else "active"
     return status
+
+
+_SNAPSHOT_FIELDS = (
+    "status",
+    "configuration",
+    "previous_configuration",
+    "tier",
+    "rollback_count",
+    "current_step",
+    "failure_reason",
+    "completed_at",
+    "terminated_at",
+    "dns_status",
+    "triggered_by",
+    "dispatch_reference",
+)
+
+
+def snapshot(instance) -> dict:
+    """The instance fields an operation may change, JSON-serialisable."""
+
+    values = {}
+    for field in _SNAPSHOT_FIELDS:
+        value = getattr(instance, field)
+        values[field] = value.isoformat() if isinstance(value, datetime) else deepcopy(value)
+    return values
+
+
+def restore(instance, state: dict) -> None:
+    """Undo ``begin``: put back the fields ``snapshot`` recorded."""
+
+    for field in _SNAPSHOT_FIELDS:
+        value = state.get(field)
+        if field in ("completed_at", "terminated_at") and isinstance(value, str):
+            value = datetime.fromisoformat(value)
+        setattr(instance, field, value)
 
 
 def operation_of(instance) -> Operation:

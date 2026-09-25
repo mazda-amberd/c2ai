@@ -1,8 +1,22 @@
-"""Live GitHub Actions progress for registered application lifecycle operations."""
+"""GitHub Actions progress for deployment operations.
+
+Tracking runs in three steps so no database transaction is open while GitHub
+is called:
+
+    plan = await plan_fetch(db, instance)         # database reads only
+    <caller ends the transaction>
+    progress = await fetch(plan)                  # GitHub only
+    await apply_progress(db, run, instance, progress)   # short locked write
+    <caller commits>
+
+The ``deployments.track`` job does this for every open operation, so the
+status endpoints only read what it stored (``pipeline_runs.progress``).
+"""
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -13,14 +27,11 @@ from c2ai.clients.github_actions import GitHubActionsClient
 from c2ai.core.exceptions import ServiceUnavailableError
 from c2ai.crud import github_connection as crud_github_connection
 from c2ai.deployments import lifecycle
-from c2ai.deployments.configuration import (
-    resolve_github_workflow_subdomain,
-)
+from c2ai.deployments.configuration import resolve_github_workflow_subdomain
 from c2ai.deployments.lifecycle import Outcome
-from c2ai.deployments.operations import active_operation, claimed_run_ids, record_dispatch
-from c2ai.deployments.repository import (
-    settle_operation,
-)
+from c2ai.deployments.operations import claimed_run_ids, record_progress
+from c2ai.deployments.repository import settle_operation
+from c2ai.models.pipeline_run import PipelineRun
 from c2ai.models.registered_application import DeploymentInstance
 
 logger = logging.getLogger(__name__)
@@ -59,33 +70,11 @@ def _github_completed_at(progress: dict[str, Any]) -> datetime:
     return datetime.now(UTC)
 
 
-async def _synchronize_terminal_state(
-    db: AsyncSession,
-    instance: DeploymentInstance,
-    progress: dict[str, Any],
-) -> None:
-    """Make GitHub's terminal result authoritative when callbacks are absent."""
-
-    if progress.get("status") != "completed" or instance.status not in lifecycle.IN_PROGRESS:
-        return
-    operation = lifecycle.operation_of(instance)
-    success = progress.get("conclusion") == "success"
-    run_number = progress.get("run_number")
-    run_label = f" #{run_number}" if run_number is not None else ""
-    label = operation.value.replace("_", " ")
-    await settle_operation(
-        db,
-        instance,
-        Outcome.SUCCESS if success else Outcome.FAILURE,
-        at=_github_completed_at(progress),
-        failure_reason=None if success else _failure_reason(progress),
-        message=(
-            f"GitHub Actions {label} workflow{run_label} completed successfully."
-            if success
-            else f"GitHub Actions {label} workflow{run_label} failed."
-        ),
-        created_by="github-actions",
-    )
+def _dispatched_at(reference: dict[str, Any]) -> datetime:
+    try:
+        return datetime.fromisoformat(str(reference["dispatched_at"]).replace("Z", "+00:00"))
+    except (KeyError, ValueError):
+        return datetime.now(UTC) - timedelta(hours=1)
 
 
 async def client_for_reference(
@@ -111,75 +100,93 @@ async def client_for_reference(
     return GitHubActionsClient(**options)
 
 
-def _dispatched_at(reference: dict[str, Any]) -> datetime:
-    try:
-        return datetime.fromisoformat(str(reference["dispatched_at"]).replace("Z", "+00:00"))
-    except (KeyError, ValueError):
-        return datetime.now(UTC) - timedelta(hours=1)
+@dataclass(frozen=True)
+class FetchPlan:
+    client: GitHubActionsClient
+    reference: dict[str, Any]
+    instance_name: str
+    deployment_id: str
+    exclude_run_ids: frozenset[int]
 
 
-async def get_registered_deployment_workflow_progress(
-    db: AsyncSession,
-    instance: DeploymentInstance,
-) -> tuple[dict[str, Any] | None, str | None]:
-    """Load GitHub's jobs/steps and persist correlation plus terminal state."""
+async def plan_fetch(db: AsyncSession, instance: DeploymentInstance) -> FetchPlan | None:
+    """Everything the GitHub lookup needs from the database (credentials, claimed runs)."""
 
     reference = dict(instance.dispatch_reference or {})
     if not reference.get("workflow_id"):
-        return None, None
-    try:
-        client = await client_for_reference(db, reference)
-        if client is None:
-            return None, None
-        exclude: frozenset[int] = frozenset()
-        if reference.get("run_id") is None:
-            claimed = await claimed_run_ids(
-                db, since=_dispatched_at(reference) - timedelta(minutes=5)
-            )
-            exclude = frozenset(claimed)
-        # Runs are titled with the subdomain the workflow was given, which is the
-        # derived host label rather than the Athena instance name.
-        progress = await client.get_workflow_progress(
-            reference,
-            instance_name=str(
-                reference.get("subdomain")
-                or resolve_github_workflow_subdomain(
-                    instance.configuration or {},
-                    instance_name=instance.instance_name,
-                )
-            ),
-            deployment_id=str(instance.id),
-            exclude_run_ids=exclude,
+        return None
+    client = await client_for_reference(db, reference)
+    if client is None:
+        return None
+    exclude: frozenset[int] = frozenset()
+    if reference.get("run_id") is None:
+        since = _dispatched_at(reference) - timedelta(minutes=5)
+        exclude = frozenset(await claimed_run_ids(db, since=since))
+    # Runs are titled with the subdomain the workflow was given, which is the
+    # derived host label rather than the Athena instance name.
+    name = str(
+        reference.get("subdomain")
+        or resolve_github_workflow_subdomain(
+            instance.configuration or {}, instance_name=instance.instance_name
         )
-        if progress is None:
-            return None, "Waiting for the matching GitHub Actions run."
+    )
+    return FetchPlan(client, reference, name, str(instance.id), exclude)
 
-        changed = False
-        if reference.get("run_id") != progress["run_id"]:
-            reference["run_id"] = progress["run_id"]
-            instance.dispatch_reference = reference
-            record_dispatch(await active_operation(db, instance.id), reference)
-            changed = True
-        original_state = (
-            instance.status,
-            instance.current_step,
-            instance.failure_reason,
+
+async def fetch(plan: FetchPlan) -> tuple[dict[str, Any] | None, str | None]:
+    """GitHub's run, jobs and steps for the operation (no database access)."""
+
+    try:
+        progress = await plan.client.get_workflow_progress(
+            plan.reference,
+            instance_name=plan.instance_name,
+            deployment_id=plan.deployment_id,
+            exclude_run_ids=plan.exclude_run_ids,
         )
-        await _synchronize_terminal_state(db, instance, progress)
-        if changed or original_state != (
-            instance.status,
-            instance.current_step,
-            instance.failure_reason,
-        ):
-            db.add(instance)
-            await db.commit()
-        return progress, None
     except (httpx.HTTPError, ServiceUnavailableError, ValueError) as error:
         logger.warning(
-            "GitHub workflow progress unavailable deployment=%s repo=%s/%s: %s",
-            instance.id,
-            reference.get("repo_owner"),
-            reference.get("repo_name"),
-            error,
+            "GitHub workflow progress unavailable deployment=%s: %s", plan.deployment_id, error
         )
         return None, "GitHub Actions progress could not be loaded."
+    if progress is None:
+        return None, "Waiting for the matching GitHub Actions run."
+    return progress, None
+
+
+async def apply_progress(
+    db: AsyncSession,
+    run: PipelineRun,
+    instance: DeploymentInstance,
+    progress: dict[str, Any],
+) -> None:
+    """Store the snapshot, link the run, and settle the operation if GitHub finished it.
+
+    Call with the instance locked; the caller commits.
+    """
+
+    record_progress(run, progress)
+    reference = dict(instance.dispatch_reference or {})
+    linked = {"run_id": progress["run_id"]}
+    if progress.get("html_url") and not reference.get("html_url"):
+        linked["html_url"] = progress["html_url"]
+    if any(reference.get(key) != value for key, value in linked.items()):
+        instance.dispatch_reference = {**reference, **linked}
+    if progress.get("status") != "completed" or instance.status not in lifecycle.IN_PROGRESS:
+        return
+    success = progress.get("conclusion") == "success"
+    run_number = progress.get("run_number")
+    run_label = f" #{run_number}" if run_number is not None else ""
+    label = (run.kind or lifecycle.operation_of(instance).value).replace("_", " ")
+    await settle_operation(
+        db,
+        instance,
+        Outcome.SUCCESS if success else Outcome.FAILURE,
+        at=_github_completed_at(progress),
+        failure_reason=None if success else _failure_reason(progress),
+        message=(
+            f"GitHub Actions {label} workflow{run_label} completed successfully."
+            if success
+            else f"GitHub Actions {label} workflow{run_label} failed."
+        ),
+        created_by="github-actions",
+    )

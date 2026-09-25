@@ -34,6 +34,7 @@ async def client(session_factory):
                 "created_by": "system",
             },
         )
+        await db.commit()
 
     async def _session():
         async with session_factory() as session:

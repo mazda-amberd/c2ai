@@ -19,13 +19,12 @@ from c2ai.core.exceptions import (
     DuplicateDeploymentSubdomain,
 )
 from c2ai.deployments.repository import (
-    complete_registered_application_dispatch,
-    complete_registered_application_termination_dispatch,
-    complete_registered_application_upgrade_dispatch,
     create_registered_application_deployment,
+    fail_dispatch,
     prepare_registered_application_rollback,
     prepare_registered_application_termination,
     prepare_registered_application_upgrade,
+    record_dispatch,
     update_registered_application_deployment_progress,
 )
 from c2ai.models.registered_application import (
@@ -80,21 +79,23 @@ def _db():
 
 
 @pytest.mark.asyncio
-async def test_complete_deployment_dispatch_refreshes_server_timestamp_before_commit():
+async def test_record_dispatch_loads_server_timestamp_and_leaves_commit_to_caller():
     db = _db()
     instance = _instance(status="pending")
 
-    result = await complete_registered_application_dispatch(
+    result = await record_dispatch(
         db,
         instance,
         {"trigger_method": "workflow_dispatch", "workflow_id": "ada-deploy.yaml"},
+        event_message="Deployment pipeline dispatched.",
     )
 
     assert result.status == "deploying"
     assert result.dispatch_reference["workflow_id"] == "ada-deploy.yaml"
+    assert result.events[-1].message == "Deployment pipeline dispatched."
     db.flush.assert_awaited_once()
     db.refresh.assert_awaited_once_with(instance, attribute_names=["updated_at"])
-    db.commit.assert_awaited_once()
+    db.commit.assert_not_awaited()
 
 
 def _container_instance(*, status: str = "running") -> DeploymentInstance:
@@ -172,7 +173,7 @@ async def test_progress_update_persists_stage_and_event():
     assert result.status == "deploying"
     assert result.events[-1].message == "Namespace tier2 created."
     assert result.events[-1].created_by == "deployment-pipeline"
-    db.commit.assert_awaited_once()
+    db.commit.assert_not_awaited()  # the callback route commits
 
 
 @pytest.mark.asyncio
@@ -203,7 +204,7 @@ async def test_progress_update_is_idempotent_and_rejects_backward_steps():
                 backwards,
             )
 
-    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -274,7 +275,7 @@ async def test_rollback_rejects_an_active_deployment():
                 triggered_by="operator",
             )
 
-    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -310,21 +311,22 @@ async def test_prepare_container_upgrade_changes_only_image_tag_and_preserves_hi
 
 
 @pytest.mark.asyncio
-async def test_complete_container_upgrade_dispatch_commits_reference_and_event():
+async def test_record_container_upgrade_dispatch_keeps_updating_status():
     db = _db()
     instance = _container_instance(status="updating")
     instance.configuration["container"]["image_tag"] = "2.0.0"
 
-    result = await complete_registered_application_upgrade_dispatch(
+    result = await record_dispatch(
         db,
         instance,
         {"pipeline": "container-upgrade", "workflow_id": "container-update.yml"},
+        event_message="Application upgrade pipeline dispatched for version '2.0.0'.",
     )
 
     assert result.status == "updating"
     assert result.dispatch_reference["pipeline"] == "container-upgrade"
     assert "2.0.0" in result.events[-1].message
-    db.commit.assert_awaited_once()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -401,10 +403,11 @@ async def test_prepare_github_upgrade_stores_version_without_changing_workflow_c
     assert result.status == "updating"
     assert result.events[-1].status == "updating"
 
-    completed = await complete_registered_application_upgrade_dispatch(
+    completed = await record_dispatch(
         db,
         result,
         {"pipeline": "github-upgrade"},
+        event_message="Application upgrade pipeline dispatched for version '2.0.0'.",
     )
     assert completed.dispatch_reference["pipeline"] == "github-upgrade"
     assert "2.0.0" in completed.events[-1].message
@@ -544,20 +547,65 @@ async def test_prepare_container_termination_preserves_configuration_and_history
 
 
 @pytest.mark.asyncio
-async def test_complete_container_termination_dispatch_commits_reference_and_event():
+async def test_record_container_termination_dispatch_keeps_terminating_status():
     db = _db()
     instance = _container_instance(status="terminating")
 
-    result = await complete_registered_application_termination_dispatch(
+    result = await record_dispatch(
         db,
         instance,
         {"pipeline": "container-termination"},
+        event_message="Application termination pipeline dispatched.",
     )
 
     assert result.status == "terminating"
     assert result.dispatch_reference["pipeline"] == "container-termination"
     assert result.events[-1].status == "terminating"
-    db.commit.assert_awaited_once()
+    db.commit.assert_not_awaited()
+
+
+class _OpenRun:
+    def __init__(self, restore_state=None):
+        self.restore_state = restore_state
+        self.ended_at = None
+        self.conclusion = None
+        self.dispatch_state = "pending"
+        self.tier = None
+        self.kind = "upgrade"
+
+
+@pytest.mark.asyncio
+async def test_failed_dispatch_puts_the_instance_back_as_it_was():
+    from c2ai.deployments import lifecycle
+
+    db = _db()
+    instance = _container_instance(status="running")
+    before = lifecycle.snapshot(instance)
+    # What begin() and the upgrade staging did before the dispatch failed:
+    instance.status = "updating"
+    instance.configuration = {**instance.configuration, "container": {"image_tag": "2.0.0"}}
+    run = _OpenRun(restore_state=before)
+    with patch("c2ai.deployments.repository.active_operation", AsyncMock(return_value=run)):
+        await fail_dispatch(db, instance, "GitHub rejected the inputs")
+
+    assert instance.status == "running"
+    assert instance.configuration["container"]["image_tag"] == "1.2.3"
+    assert (run.dispatch_state, run.conclusion) == ("failed", "failure")
+    assert "GitHub rejected the inputs" in instance.events[-1].message
+
+
+@pytest.mark.asyncio
+async def test_failed_first_deployment_is_cancelled_so_its_name_is_free():
+    db = _db()
+    instance = _instance(status="pending")
+    run = _OpenRun()
+    run.kind = "deploy"
+    with patch("c2ai.deployments.repository.active_operation", AsyncMock(return_value=run)):
+        await fail_dispatch(db, instance, "workflow not found")
+
+    assert instance.status == "cancelled"
+    assert instance.failure_reason == "workflow not found"
+    assert run.conclusion == "failure"
 
 
 @pytest.mark.asyncio
@@ -797,7 +845,7 @@ async def test_container_deployment_cannot_complete_before_dns_stage():
             )
 
     assert instance.dns_status == "pending"
-    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -861,4 +909,4 @@ async def test_create_container_deployment_rejects_duplicate_subdomain():
             triggered_by="admin",
         )
 
-    db.rollback.assert_awaited_once()
+    db.commit.assert_not_awaited()
