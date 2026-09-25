@@ -176,7 +176,9 @@ delete it.
 resets set `metadata.needs_password_reset`. Until the person replaces it,
 every endpoint except `/auth/whoami` and `/users/update_password` answers
 **403** `PasswordChangeRequired`, and the sign-in page asks for a new
-password straight after signing in.
+password straight after signing in. Accounts that existed before this rule
+are not affected: migration 0027 cleared the flag on them, since nothing had
+ever asked anyone to act on it.
 
 **Forgot password** (the link on the sign-in page, as in Amberd Agents) takes
 an address and emails a new temporary password to it; the old one and every

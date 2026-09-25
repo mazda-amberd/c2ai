@@ -1,9 +1,10 @@
-"""Users against PostgreSQL: the 0021 backfill, visibility, and the last-admin lock."""
+"""Users against PostgreSQL: the 0021/0027 backfills, visibility, and the last-admin lock."""
 
 from __future__ import annotations
 
 import os
 import uuid
+from contextlib import contextmanager
 
 import psycopg2
 import pytest
@@ -24,7 +25,10 @@ pytestmark = pytest.mark.skipif(not _SERVER_URL, reason="needs C2AI_TEST_DATABAS
 PASSWORD = "Str0ng!pass"
 
 
-def test_0021_moves_user_type_into_columns():
+@contextmanager
+def _database_migrated_to(until):
+    """A throwaway database migrated up to ``until``; yields a psycopg2 URL."""
+
     name = f"c2ai_test_{uuid.uuid4().hex[:10]}"
     admin = _admin_connection()
     with admin.cursor() as cursor:
@@ -33,8 +37,19 @@ def test_0021_moves_user_type_into_columns():
     os.environ["DATABASE_URL"] = url.render_as_string(hide_password=False)
     get_settings.cache_clear()
     try:
-        run_migrations(until="0020")
-        conn = psycopg2.connect(**psycopg2_connect_kwargs(url.set(drivername="postgresql")))
+        run_migrations(until=until)
+        yield url.set(drivername="postgresql")
+    finally:
+        os.environ.pop("DATABASE_URL", None)
+        get_settings.cache_clear()
+        with admin.cursor() as cursor:
+            cursor.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        admin.close()
+
+
+def test_0021_moves_user_type_into_columns():
+    with _database_migrated_to("0020") as url:
+        conn = psycopg2.connect(**psycopg2_connect_kwargs(url))
         with conn, conn.cursor() as cursor:
             for identifier, meta, created_by in (
                 ("admin", {"user_type": "Admin", "role": "Executive"}, "system"),
@@ -47,7 +62,7 @@ def test_0021_moves_user_type_into_columns():
                     " metadata, created_by) VALUES (%s, 'x', 'F', 'L', %s, %s)",
                     (identifier, Json(meta), created_by),
                 )
-        run_migrations()
+        run_migrations(until="0021")
         with conn, conn.cursor() as cursor:
             cursor.execute(
                 "SELECT u.identifier, u.user_type, u.is_superuser, c.identifier, u.metadata"
@@ -56,17 +71,40 @@ def test_0021_moves_user_type_into_columns():
             )
             rows = {row[0]: row[1:] for row in cursor.fetchall()}
         conn.close()
-    finally:
-        os.environ.pop("DATABASE_URL", None)
-        get_settings.cache_clear()
-        with admin.cursor() as cursor:
-            cursor.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-        admin.close()
 
     assert rows["admin"] == ("admin", True, None, {"role": "Executive"})
     assert rows["ops"][:3] == ("admin", False, "admin")
     assert rows["legacy"][:2] == ("admin", False)  # legacy role=Admin still counts
     assert rows["viewer"] == ("user", False, "ops", {"needs_password_reset": True})
+
+
+def test_0027_existing_accounts_are_not_made_to_change_their_password():
+    with _database_migrated_to("0026") as url:
+        conn = psycopg2.connect(**psycopg2_connect_kwargs(url))
+        with conn, conn.cursor() as cursor:
+            for identifier, meta in (
+                ("invited", {"role": "Engineer", "needs_password_reset": True}),
+                ("legacy", {"needs_password_reset": "true"}),
+                ("settled", {"needs_password_reset": False}),
+                ("plain", {"role": "Executive"}),
+            ):
+                cursor.execute(
+                    "INSERT INTO users (identifier, password, first_name, last_name,"
+                    " metadata, created_by) VALUES (%s, 'x', 'F', 'L', %s, 'system')",
+                    (identifier, Json(meta)),
+                )
+        run_migrations()
+        with conn, conn.cursor() as cursor:
+            cursor.execute("SELECT identifier, metadata FROM users")
+            rows = dict(cursor.fetchall())
+        conn.close()
+
+    assert rows == {
+        "invited": {"role": "Engineer", "needs_password_reset": False},
+        "legacy": {"needs_password_reset": False},
+        "settled": {"needs_password_reset": False},
+        "plain": {"role": "Executive"},
+    }
 
 
 @pytest.fixture
