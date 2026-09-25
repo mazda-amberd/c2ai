@@ -150,3 +150,8 @@ class GrafanaResponse(BaseModel):
     """Full response from Grafana API."""
 
     results: dict[str, GrafanaQueryResult]
+
+
+# In a Grafana data frame, field 0 is the timestamp and field 1 the value
+# (whose labels identify the series).
+FRAME_VALUE_FIELD_INDEX = 1

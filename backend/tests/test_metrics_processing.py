@@ -7,6 +7,7 @@ datasource (docs/grafana-k8s-exploration.md §7).
 
 
 from c2ai.clients.grafana import GrafanaClient
+from c2ai.metrics.tiers import TierMetrics
 from c2ai.schemas.grafana import (
     GrafanaField,
     GrafanaFieldLabels,
@@ -69,37 +70,37 @@ class TestCalculateStatus:
     """Tests for the calculate_status static method."""
 
     def test_healthy_all_low(self):
-        assert GrafanaClient.calculate_status(10.0, 20.0, 30.0) == Status.HEALTHY
+        assert TierMetrics.calculate_status(10.0, 20.0, 30.0) == Status.HEALTHY
 
     def test_healthy_at_threshold(self):
-        assert GrafanaClient.calculate_status(50.0, 50.0, 50.0) == Status.HEALTHY
+        assert TierMetrics.calculate_status(50.0, 50.0, 50.0) == Status.HEALTHY
 
     def test_warning_cpu(self):
-        assert GrafanaClient.calculate_status(60.0, 20.0, 20.0) == Status.WARNING
+        assert TierMetrics.calculate_status(60.0, 20.0, 20.0) == Status.WARNING
 
     def test_warning_memory(self):
-        assert GrafanaClient.calculate_status(10.0, 60.0, 20.0) == Status.WARNING
+        assert TierMetrics.calculate_status(10.0, 60.0, 20.0) == Status.WARNING
 
     def test_warning_gpu(self):
-        assert GrafanaClient.calculate_status(10.0, 20.0, 60.0) == Status.WARNING
+        assert TierMetrics.calculate_status(10.0, 20.0, 60.0) == Status.WARNING
 
     def test_warning_just_over_50(self):
-        assert GrafanaClient.calculate_status(51.0, 50.0, 30.0) == Status.WARNING
+        assert TierMetrics.calculate_status(51.0, 50.0, 30.0) == Status.WARNING
 
     def test_critical_cpu(self):
-        assert GrafanaClient.calculate_status(76.0, 20.0, 20.0) == Status.CRITICAL
+        assert TierMetrics.calculate_status(76.0, 20.0, 20.0) == Status.CRITICAL
 
     def test_critical_memory(self):
-        assert GrafanaClient.calculate_status(10.0, 76.0, 20.0) == Status.CRITICAL
+        assert TierMetrics.calculate_status(10.0, 76.0, 20.0) == Status.CRITICAL
 
     def test_critical_gpu(self):
-        assert GrafanaClient.calculate_status(10.0, 20.0, 76.0) == Status.CRITICAL
+        assert TierMetrics.calculate_status(10.0, 20.0, 76.0) == Status.CRITICAL
 
     def test_critical_overrides_warning(self):
-        assert GrafanaClient.calculate_status(80.0, 20.0, 60.0) == Status.CRITICAL
+        assert TierMetrics.calculate_status(80.0, 20.0, 60.0) == Status.CRITICAL
 
     def test_75_is_warning_not_critical(self):
-        assert GrafanaClient.calculate_status(75.0, 75.0, 75.0) == Status.WARNING
+        assert TierMetrics.calculate_status(75.0, 75.0, 75.0) == Status.WARNING
 
 
 # =============================================================================
@@ -111,7 +112,7 @@ class TestExtractInstances:
 
     def test_extract_raycluster_cpu_frame(self, sample_cpu_frame):
         """namespace + owner_name → groupname key namespace/deployment; nodename = namespace."""
-        instances = GrafanaClient.extract_instances([sample_cpu_frame])
+        instances = TierMetrics.extract_instances([sample_cpu_frame])
 
         assert len(instances) == 1
         assert instances[0]["groupname"] == "tier1/qwen-496gt"
@@ -121,7 +122,7 @@ class TestExtractInstances:
         assert instances[0]["id"] == 1
 
     def test_extract_empty_frames(self):
-        instances = GrafanaClient.extract_instances([])
+        instances = TierMetrics.extract_instances([])
         assert instances == []
 
     def test_extract_multiple_raycluster_frames(self):
@@ -130,7 +131,7 @@ class TestExtractInstances:
             _rc_frame("A", "qwen-496gt", "tier1", 4.0),
             _rc_frame("A", "qwen-hrcg7", "tier2", 8.0),
         ]
-        instances = GrafanaClient.extract_instances(frames)
+        instances = TierMetrics.extract_instances(frames)
 
         assert len(instances) == 2
         assert instances[0]["groupname"] == "tier1/qwen-496gt"
@@ -141,7 +142,7 @@ class TestExtractInstances:
     def test_extract_gpu_frame_uses_ray_io_cluster(self):
         """GPU frames use ray_io_cluster as deployment label in namespace/deployment key."""
         frame = _gpu_frame("A", "qwen-496gt", "tier1", 0.5)
-        instances = GrafanaClient.extract_instances([frame])
+        instances = TierMetrics.extract_instances([frame])
 
         assert len(instances) == 1
         assert instances[0]["groupname"] == "tier1/qwen-496gt"
@@ -161,7 +162,7 @@ class TestExtractInstances:
             ),
             data=GrafanaFrameData(values=[[1234], [15.0]]),
         )
-        instances = GrafanaClient.extract_instances([frame])
+        instances = TierMetrics.extract_instances([frame])
 
         assert len(instances) == 1
         assert instances[0]["groupname"] == "instance-1"
@@ -227,8 +228,9 @@ class TestCombineMetrics:
     def test_basic_structure(self, sample_grafana_response, sample_cpu_total_response):
         """All four tier keys are always present; Tier 4 is None."""
         client = GrafanaClient(api_url="https://test.grafana.io/api")
+        tiers = TierMetrics(client)
 
-        tiers, gpu_totals = client.combine_metrics(
+        tiers, gpu_totals = tiers.combine_metrics(
             sample_grafana_response,
             sample_grafana_response,
             sample_grafana_response,
@@ -244,9 +246,10 @@ class TestCombineMetrics:
 
     def test_empty_response_yields_empty_lists(self, sample_cpu_total_response):
         client = GrafanaClient(api_url="https://test.grafana.io/api")
+        tiers = TierMetrics(client)
         empty = _empty_response()
 
-        tiers, gpu_totals = client.combine_metrics(empty, empty, empty, sample_cpu_total_response)
+        tiers, gpu_totals = tiers.combine_metrics(empty, empty, empty, sample_cpu_total_response)
 
         assert tiers["Tier 1"] == []
         assert tiers["Tier 2"] == []
@@ -258,6 +261,7 @@ class TestCombineMetrics:
         monkeypatch.setenv("ATHENA_CPU_CORES_CAP", "8")
         monkeypatch.setenv("ATHENA_MEMORY_GB_CAP", "80")
         client = GrafanaClient(api_url="https://test.grafana.io/api")
+        tiers = TierMetrics(client)
 
         cpu_resp = GrafanaResponse(
             results={
@@ -270,7 +274,7 @@ class TestCombineMetrics:
         )
         empty = _empty_response()
 
-        tiers, _ = client.combine_metrics(cpu_resp, empty, empty, empty)
+        tiers, _ = tiers.combine_metrics(cpu_resp, empty, empty, empty)
         inst = tiers["Tier 1"][0]
         assert 49 <= inst.cpu <= 51
 
@@ -279,6 +283,7 @@ class TestCombineMetrics:
         monkeypatch.setenv("ATHENA_CPU_CORES_CAP", "8")
         monkeypatch.setenv("ATHENA_MEMORY_GB_CAP", "80")
         client = GrafanaClient(api_url="https://test.grafana.io/api")
+        tiers = TierMetrics(client)
 
         mem_resp = GrafanaResponse(
             results={
@@ -291,7 +296,7 @@ class TestCombineMetrics:
         )
         empty = _empty_response()
 
-        tiers, _ = client.combine_metrics(empty, mem_resp, empty, empty)
+        tiers, _ = tiers.combine_metrics(empty, mem_resp, empty, empty)
         inst = tiers["Tier 1"][0]
         assert 49 <= inst.memory <= 51
 
@@ -301,20 +306,22 @@ class TestCombineMetrics:
         gpu_totals[tier] stores that raw value unchanged.
         """
         client = GrafanaClient(api_url="https://test.grafana.io/api")
+        tiers = TierMetrics(client)
         empty = _empty_response()
         gpu_resp = _tier_total_gpu_frames_response({"tier1": 8.9})
 
-        _, gpu_totals = client.combine_metrics(empty, empty, gpu_resp, empty)
+        _, gpu_totals = tiers.combine_metrics(empty, empty, gpu_resp, empty)
 
         assert abs(gpu_totals["Tier 1"] - 8.9) < 0.01
 
     def test_tier_gpu_total_not_clamped(self):
         """Tier total is the raw 0–num_gpus value; values above 100 are kept."""
         client = GrafanaClient(api_url="https://test.grafana.io/api")
+        tiers = TierMetrics(client)
         empty = _empty_response()
         gpu_resp = _tier_total_gpu_frames_response({"tier1": 200.0})
 
-        _, gpu_totals = client.combine_metrics(empty, empty, gpu_resp, empty)
+        _, gpu_totals = tiers.combine_metrics(empty, empty, gpu_resp, empty)
 
         assert gpu_totals["Tier 1"] == 200.0
 
@@ -325,6 +332,7 @@ class TestCombineMetrics:
         """
         monkeypatch.setenv("ATHENA_CPU_CORES_CAP", "8")
         client = GrafanaClient(api_url="https://test.grafana.io/api")
+        tiers = TierMetrics(client)
 
         cpu_resp = GrafanaResponse(
             results={
@@ -343,7 +351,7 @@ class TestCombineMetrics:
         # Only ns-alpha has token traffic; ns-beta gets 0.
         gpu_per_app = _per_app_gpu_response("ns-alpha", "tier1", 5.5)
 
-        tiers, _ = client.combine_metrics(cpu_resp, empty, empty, empty, gpu_per_app)
+        tiers, _ = tiers.combine_metrics(cpu_resp, empty, empty, empty, gpu_per_app)
 
         instances = {i.nodename: i for i in tiers["Tier 1"]}
         assert abs(instances["ns-alpha"].gpu - 5.5) < 0.01
@@ -352,6 +360,7 @@ class TestCombineMetrics:
     def test_per_app_gpu_zero_when_no_attribution(self):
         """When panel-18 has no entry for an instance's namespace, GPU is 0."""
         client = GrafanaClient(api_url="https://test.grafana.io/api")
+        tiers = TierMetrics(client)
 
         cpu_resp = GrafanaResponse(
             results={
@@ -369,7 +378,7 @@ class TestCombineMetrics:
             results={"A": GrafanaQueryResult(status=200, frames=[])}
         )
 
-        tiers, gpu_totals = client.combine_metrics(
+        tiers, gpu_totals = tiers.combine_metrics(
             cpu_resp, empty, gpu_resp, empty, empty_gpu_attribution
         )
 
@@ -380,6 +389,7 @@ class TestCombineMetrics:
         """8 cores / 8-core cap = 100% → Critical."""
         monkeypatch.setenv("ATHENA_CPU_CORES_CAP", "8")
         client = GrafanaClient(api_url="https://test.grafana.io/api")
+        tiers = TierMetrics(client)
 
         cpu_resp = GrafanaResponse(
             results={
@@ -392,12 +402,13 @@ class TestCombineMetrics:
         )
         empty = _empty_response()
 
-        tiers, _ = client.combine_metrics(cpu_resp, empty, empty, empty)
+        tiers, _ = tiers.combine_metrics(cpu_resp, empty, empty, empty)
         assert tiers["Tier 1"][0].status == Status.CRITICAL
 
     def test_default_name_instances_filtered(self, sample_cpu_total_response):
         """Frames without labels produce 'instance-N' names that are filtered out."""
         client = GrafanaClient(api_url="https://test.grafana.io/api")
+        tiers = TierMetrics(client)
 
         resp = GrafanaResponse(
             results={
@@ -421,7 +432,7 @@ class TestCombineMetrics:
             }
         )
 
-        tiers, _ = client.combine_metrics(resp, resp, resp, sample_cpu_total_response)
+        tiers, _ = tiers.combine_metrics(resp, resp, resp, sample_cpu_total_response)
         assert tiers["Tier 1"] == []
 
 
@@ -433,16 +444,16 @@ class TestParseGpuPerApp:
     """Tests for GrafanaClient._parse_gpu_per_app."""
 
     def test_returns_empty_on_none(self):
-        assert GrafanaClient._parse_gpu_per_app(None) == {}
+        assert TierMetrics._parse_gpu_per_app(None) == {}
 
     def test_returns_empty_on_missing_refid(self):
         resp = GrafanaResponse(results={})
-        assert GrafanaClient._parse_gpu_per_app(resp) == {}
+        assert TierMetrics._parse_gpu_per_app(resp) == {}
 
     def test_parses_namespace_and_value(self):
         """Frames with namespace label are indexed by namespace, value stored as-is."""
         resp = _per_app_gpu_response("amberd-gpu-request2", "tier1", 8.9)
-        result = GrafanaClient._parse_gpu_per_app(resp)
+        result = TierMetrics._parse_gpu_per_app(resp)
 
         assert "amberd-gpu-request2" in result
         assert abs(result["amberd-gpu-request2"] - 8.9) < 0.01
@@ -450,7 +461,7 @@ class TestParseGpuPerApp:
     def test_value_not_clamped(self):
         """Raw panel-18 values are kept as-is (no upper clamp)."""
         resp = _per_app_gpu_response("some-ns", "tier1", 999.0)
-        result = GrafanaClient._parse_gpu_per_app(resp)
+        result = TierMetrics._parse_gpu_per_app(resp)
         assert result["some-ns"] == 999.0
 
     def test_frames_without_namespace_skipped(self):
@@ -468,7 +479,7 @@ class TestParseGpuPerApp:
         resp = GrafanaResponse(
             results={"A": GrafanaQueryResult(status=200, frames=[frame])}
         )
-        assert GrafanaClient._parse_gpu_per_app(resp) == {}
+        assert TierMetrics._parse_gpu_per_app(resp) == {}
 
     def test_exported_namespace_label(self):
         """Relabel-conflicted metrics may expose Kubernetes ns as exported_namespace."""
@@ -489,7 +500,7 @@ class TestParseGpuPerApp:
         resp = GrafanaResponse(
             results={"A": GrafanaQueryResult(status=200, frames=[frame])}
         )
-        assert GrafanaClient._parse_gpu_per_app(resp) == {"amberd-demo": 2.5}
+        assert TierMetrics._parse_gpu_per_app(resp) == {"amberd-demo": 2.5}
 
     def test_namespace_on_time_field_still_parsed(self):
         """Grafana may attach labels to the time field; still resolve namespace."""
@@ -510,4 +521,4 @@ class TestParseGpuPerApp:
         resp = GrafanaResponse(
             results={"A": GrafanaQueryResult(status=200, frames=[frame])}
         )
-        assert GrafanaClient._parse_gpu_per_app(resp) == {"amberd-from-time": 1.25}
+        assert TierMetrics._parse_gpu_per_app(resp) == {"amberd-from-time": 1.25}

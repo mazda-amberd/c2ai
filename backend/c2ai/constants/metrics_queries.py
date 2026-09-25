@@ -19,12 +19,12 @@ Grafana macros (``$__range``, ``$__rate_interval``) are substituted from the req
 
 from __future__ import annotations
 
+from c2ai.metrics.promql import REAL_CONTAINERS, by_deployment
 from c2ai.schemas.metrics import MetricUnit
 
 # Virtual interfaces and pseudo block devices, excluded exactly as the cluster panels do.
 _NET_EXCLUDE = r'device!~"lo|veth.*|cali.*|flannel.*|cni.*|docker.*|br-.*|virbr.*|tun.*|tap.*"'
 _DISK_EXCLUDE = r'device!~"loop.*|ram.*|fd.*|sr.*"'
-_REAL_CONTAINER = 'container!="",container!="POD",image!=""'
 
 AGGREGATION_NOTES = {
     "gpu_utilization_percent": "avg across the tier's GPUs",
@@ -32,23 +32,6 @@ AGGREGATION_NOTES = {
     "gpu_power_watts": "sum — total board power for the tier",
     "gpu_memory_percent": "avg across the tier's GPUs",
 }
-
-
-def _pod_to_deployment() -> str:
-    """Join clauses adding a ``deployment`` label to any pod-level metric."""
-    return (
-        ' * on(namespace, pod) group_left(replicaset)'
-        ' label_replace(kube_pod_owner{owner_kind="ReplicaSet"},'
-        ' "replicaset", "$1", "owner_name", "(.*)")'
-        ' * on(namespace, replicaset) group_left(deployment)'
-        ' label_replace(kube_replicaset_owner{owner_kind="Deployment"},'
-        ' "deployment", "$1", "owner_name", "(.*)")'
-    )
-
-
-def _by_deployment(inner: str) -> str:
-    """Sum a pod-level expression per (namespace, deployment)."""
-    return f"sum by (namespace, deployment) ({inner}{_pod_to_deployment()})"
 
 
 def _dcgm_for_tier(metric_expr: str, tier_ns: str) -> str:
@@ -159,10 +142,10 @@ def application_queries(rng: str, rate: str) -> dict[str, tuple[str, MetricUnit]
     def http_share(codes: str) -> str:
         """Share of requests in a status class; label name varies by app framework."""
         matched = " or ".join(
-            _by_deployment(f'rate(http_requests_total{{{label}=~"{codes}"}}[{rate}])')
+            by_deployment(f'rate(http_requests_total{{{label}=~"{codes}"}}[{rate}])')
             for label in ("status_code", "status", "code")
         )
-        total = _by_deployment(f"rate(http_requests_total[{rate}])")
+        total = by_deployment(f"rate(http_requests_total[{rate}])")
         return f"100 * ({matched}) / ({total})"
 
     return {
@@ -180,34 +163,34 @@ def application_queries(rng: str, rate: str) -> dict[str, tuple[str, MetricUnit]
             MetricUnit.COUNT,
         ),
         "restarts": (
-            _by_deployment(f"round(increase(kube_pod_container_status_restarts_total[{rng}]))"),
+            by_deployment(f"round(increase(kube_pod_container_status_restarts_total[{rng}]))"),
             MetricUnit.COUNT,
         ),
         "cpu_cores": (
-            _by_deployment(
-                f"rate(container_cpu_usage_seconds_total{{{_REAL_CONTAINER}}}[{rate}])"
+            by_deployment(
+                f"rate(container_cpu_usage_seconds_total{{{REAL_CONTAINERS}}}[{rate}])"
             ),
             MetricUnit.CORES,
         ),
         "memory_bytes": (
-            _by_deployment(f"container_memory_working_set_bytes{{{_REAL_CONTAINER}}}"),
+            by_deployment(f"container_memory_working_set_bytes{{{REAL_CONTAINERS}}}"),
             MetricUnit.BYTES,
         ),
         "prompt_tokens_per_second": (
-            _by_deployment(f"rate(llm_input_tokens_total[{rate}])"),
+            by_deployment(f"rate(llm_input_tokens_total[{rate}])"),
             MetricUnit.OPS,
         ),
         "completion_tokens_per_second": (
-            _by_deployment(f"rate(llm_output_tokens_total[{rate}])"),
+            by_deployment(f"rate(llm_output_tokens_total[{rate}])"),
             MetricUnit.OPS,
         ),
         "total_tokens_per_second": (
-            _by_deployment(f"rate(llm_total_tokens_total[{rate}])"),
+            by_deployment(f"rate(llm_total_tokens_total[{rate}])"),
             MetricUnit.OPS,
         ),
         "llm_latency_seconds": (
-            f"({_by_deployment(f'rate(llm_duration_seconds_sum[{rate}])')})"
-            f" / ({_by_deployment(f'rate(llm_duration_seconds_count[{rate}])')})",
+            f"({by_deployment(f'rate(llm_duration_seconds_sum[{rate}])')})"
+            f" / ({by_deployment(f'rate(llm_duration_seconds_count[{rate}])')})",
             MetricUnit.SECONDS,
         ),
         "request_success_percent": (http_share("[23].."), MetricUnit.PERCENT),

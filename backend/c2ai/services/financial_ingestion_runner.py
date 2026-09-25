@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
 from c2ai.clients.grafana import GrafanaClient
 from c2ai.db.session import AsyncSessionLocal, engine
+from c2ai.metrics.gateway import GatewayMetrics
 from c2ai.services.gateway_cost_ingestion import ingest_gateway_costs
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ async def financial_ingestion_advisory_lock(
 async def run_gateway_cost_ingestion_once(
     *,
     observed_at: datetime | None = None,
-    grafana_client: GrafanaClient | None = None,
+    gateway: GatewayMetrics | None = None,
     session_factory: Callable[[], AsyncSession] | None = None,
     lock_context_factory=None,
 ) -> FinancialIngestionRunResult:
@@ -67,12 +68,12 @@ async def run_gateway_cost_ingestion_once(
         if not acquired:
             return FinancialIngestionRunResult(lock_acquired=False)
 
-        grafana = grafana_client or GrafanaClient()
+        gateway = gateway or GatewayMetrics(GrafanaClient())
         make_session = session_factory or AsyncSessionLocal
         async with make_session() as db:
             ingestion = await ingest_gateway_costs(
                 db,
-                grafana,
+                gateway,
                 observed_at=observed_at,
             )
 

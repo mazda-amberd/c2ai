@@ -111,8 +111,8 @@ async def test_periodic_follow_up_is_written_with_the_finish(store):
 async def test_inventory_refresh_job_writes_the_cluster_snapshot(
     store, session_factory, monkeypatch
 ):
-    from c2ai.clients.grafana import GrafanaClient
     from c2ai.jobs.worker import registered_handlers
+    from c2ai.metrics.tiers import TierMetrics
     from c2ai.schemas.grafana import Instance, Status
 
     monkeypatch.setenv("GRAFANA_API_URL", "https://grafana.test/api/ds/query")
@@ -124,7 +124,7 @@ async def test_inventory_refresh_job_writes_the_cluster_snapshot(
         )
         return {"Tier 1": [instance], "Tier 2": [], "Tier 3": [], "Tier 4": None}, {}
 
-    monkeypatch.setattr(GrafanaClient, "get_all_metrics", metrics)
+    monkeypatch.setattr(TierMetrics, "get_all_metrics", metrics)
     async with session_factory() as db:
         await db.execute(text("DELETE FROM application_instances"))
         await db.commit()

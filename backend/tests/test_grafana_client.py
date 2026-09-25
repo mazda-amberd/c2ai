@@ -8,10 +8,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from c2ai.clients.grafana import (
-    GrafanaClient,
-    _build_grafana_query_body as build_grafana_query_body,
-)
+from c2ai.clients.grafana import GrafanaClient
+from c2ai.metrics.gateway import GatewayMetrics
+from c2ai.metrics.tiers import TierMetrics, _build_grafana_query_body as build_grafana_query_body
 from c2ai.schemas.grafana import MetricType
 
 
@@ -159,6 +158,7 @@ class TestGrafanaClient:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
+        tiers = TierMetrics(client)
 
         mock_response = MagicMock()
         mock_response.json.return_value = sample_grafana_response.model_dump(
@@ -173,7 +173,7 @@ class TestGrafanaClient:
             mock_client.__aexit__.return_value = None
             mock_client_class.return_value = mock_client
 
-            result = await client.fetch_grafana_data(MetricType.CPU)
+            result = await tiers.fetch_grafana_data(MetricType.CPU)
 
             assert result.results is not None
             mock_client.post.assert_called_once()
@@ -184,6 +184,7 @@ class TestGrafanaClient:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
+        tiers = TierMetrics(client)
 
         with patch("c2ai.clients.grafana.http_client") as mock_client_class:
             mock_client = AsyncMock()
@@ -197,7 +198,7 @@ class TestGrafanaClient:
             mock_client_class.return_value = mock_client
 
             with pytest.raises(httpx.HTTPStatusError):
-                await client.fetch_grafana_data(MetricType.CPU)
+                await tiers.fetch_grafana_data(MetricType.CPU)
 
     @pytest.mark.asyncio
     async def test_get_all_metrics(
@@ -207,23 +208,21 @@ class TestGrafanaClient:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
+        tiers = TierMetrics(client)
 
         with (
-            patch.object(
-                client, "fetch_grafana_data", new_callable=AsyncMock
+            patch.object(tiers, "fetch_grafana_data", new_callable=AsyncMock
             ) as mock_fetch,
-            patch.object(
-                client, "fetch_gpu_per_app_data", new_callable=AsyncMock
+            patch.object(tiers, "fetch_gpu_per_app_data", new_callable=AsyncMock
             ) as mock_gpu_app,
-            patch.object(
-                client, "fetch_gpu_tier_totals", new_callable=AsyncMock
+            patch.object(tiers, "fetch_gpu_tier_totals", new_callable=AsyncMock
             ) as mock_gpu_tier,
         ):
             mock_fetch.return_value = sample_grafana_response
             mock_gpu_app.return_value = sample_grafana_response
             mock_gpu_tier.return_value = sample_gpu_tier_totals_response
 
-            tiers, gpu_totals = await client.get_all_metrics()
+            tiers, gpu_totals = await tiers.get_all_metrics()
 
             assert "Tier 1" in tiers
             assert "Tier 2" in tiers
@@ -243,23 +242,21 @@ class TestGrafanaClient:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
+        tiers = TierMetrics(client)
 
         with (
-            patch.object(
-                client, "fetch_grafana_data", new_callable=AsyncMock
+            patch.object(tiers, "fetch_grafana_data", new_callable=AsyncMock
             ) as mock_fetch,
-            patch.object(
-                client, "fetch_gpu_per_app_data", new_callable=AsyncMock
+            patch.object(tiers, "fetch_gpu_per_app_data", new_callable=AsyncMock
             ) as mock_gpu_app,
-            patch.object(
-                client, "fetch_gpu_tier_totals", new_callable=AsyncMock
+            patch.object(tiers, "fetch_gpu_tier_totals", new_callable=AsyncMock
             ) as mock_gpu_tier,
         ):
             mock_fetch.return_value = sample_grafana_response
             mock_gpu_app.return_value = sample_grafana_response
             mock_gpu_tier.return_value = sample_gpu_tier_totals_response
 
-            tiers, gpu_totals = await client.get_all_metrics(tier=1)
+            tiers, gpu_totals = await tiers.get_all_metrics(tier=1)
 
             assert "Tier 1" in tiers
             assert len(tiers) == 1
@@ -284,8 +281,9 @@ class TestCombineMetrics:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
+        tiers = TierMetrics(client)
 
-        tiers, _ = client.combine_metrics(
+        tiers, _ = tiers.combine_metrics(
             cpu_data=sample_cpu_used_response,
             memory_data=sample_memory_used_response,
             gpu_data=sample_grafana_response,
@@ -311,8 +309,9 @@ class TestCombineMetrics:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
+        tiers = TierMetrics(client)
 
-        tiers, _ = client.combine_metrics(
+        tiers, _ = tiers.combine_metrics(
             cpu_data=sample_cpu_used_response,
             memory_data=sample_memory_used_response,
             gpu_data=sample_grafana_response,
@@ -336,8 +335,9 @@ class TestCombineMetrics:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
+        tiers = TierMetrics(client)
 
-        tiers, _ = client.combine_metrics(
+        tiers, _ = tiers.combine_metrics(
             cpu_data=sample_cpu_used_response,
             memory_data=sample_memory_used_response,
             gpu_data=sample_grafana_response,
@@ -361,8 +361,9 @@ class TestCombineMetrics:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
+        tiers = TierMetrics(client)
 
-        tiers, gpu_totals = client.combine_metrics(
+        tiers, gpu_totals = tiers.combine_metrics(
             cpu_data=sample_cpu_used_response,
             memory_data=sample_memory_used_response,
             gpu_data=sample_grafana_response,
@@ -374,18 +375,13 @@ class TestCombineMetrics:
 
     def test_status_calculation(self):
         """Status thresholds: Healthy ≤50%, Warning >50% & <76%, Critical ≥76%."""
-        assert GrafanaClient.calculate_status(30, 30, 30).value == "Healthy"
-        assert GrafanaClient.calculate_status(50, 50, 50).value == "Healthy"
-        assert GrafanaClient.calculate_status(30, 51, 30).value == "Warning"
-        assert GrafanaClient.calculate_status(75, 30, 30).value == "Warning"
-        assert GrafanaClient.calculate_status(30, 76, 30).value == "Critical"
-        assert GrafanaClient.calculate_status(80, 30, 30).value == "Critical"
+        assert TierMetrics.calculate_status(30, 30, 30).value == "Healthy"
+        assert TierMetrics.calculate_status(50, 50, 50).value == "Healthy"
+        assert TierMetrics.calculate_status(30, 51, 30).value == "Warning"
+        assert TierMetrics.calculate_status(75, 30, 30).value == "Warning"
+        assert TierMetrics.calculate_status(30, 76, 30).value == "Critical"
+        assert TierMetrics.calculate_status(80, 30, 30).value == "Critical"
 
-    def test_extract_total_value(self, sample_cpu_total_response):
-        """extract_total_value sums frame values (8 cores total for tier1)."""
-        frames = sample_cpu_total_response.results["A"].frames
-        total = GrafanaClient.extract_total_value(frames)
-        assert total == 8.0
 
 
 class TestGpuQueryBuilders:
@@ -452,6 +448,7 @@ class TestGpuQueryBuilders:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
+        tiers = TierMetrics(client)
 
         mock_response = MagicMock()
         mock_response.json.return_value = sample_grafana_response.model_dump(
@@ -466,7 +463,7 @@ class TestGpuQueryBuilders:
             mock_http.__aexit__.return_value = None
             mock_client_class.return_value = mock_http
 
-            result = await client.fetch_gpu_per_app_data()
+            result = await tiers.fetch_gpu_per_app_data()
 
             assert result.results is not None
             call_kwargs = mock_http.post.call_args
@@ -480,75 +477,7 @@ class TestGpuQueryBuilders:
             assert "llm_total_tokens_total" in body["queries"][0]["expr"]
             assert "ray_node_gpus_utilization" in body["queries"][0]["expr"]
 
-    @pytest.mark.asyncio
-    async def test_fetch_gpu_tier_range_posts_historical_query(
-        self, sample_grafana_response
-    ):
-        client = GrafanaClient(
-            api_url="https://test.grafana.io/api", api_token="test-token"
-        )
-        start = datetime(2026, 8, 1, tzinfo=UTC)
-        end = start + timedelta(hours=1)
 
-        with patch.object(
-            client,
-            "fetch_grafana_query",
-            new_callable=AsyncMock,
-            return_value=sample_grafana_response,
-        ) as fetch_query:
-            result = await client.fetch_gpu_tier_range(
-                period_start=start,
-                period_end=end,
-                step_seconds=300,
-            )
-
-        assert result is sample_grafana_response
-        body = fetch_query.await_args.args[0]
-        query = body["queries"][0]
-        assert query["instant"] is False
-        assert query["range"] is True
-        assert query["intervalMs"] == 300_000
-        assert query["maxDataPoints"] == 13
-        assert "ray_node_gpus_utilization" in query["expr"]
-        assert "llm_total_tokens_total" not in query["expr"]
-        assert body["from"] == str(int(start.timestamp() * 1000))
-        assert body["to"] == str(int(end.timestamp() * 1000))
-
-    @pytest.mark.asyncio
-    async def test_fetch_gateway_tokens_uses_interval_and_namespace_filter(
-        self, sample_grafana_response
-    ):
-        client = GrafanaClient(
-            api_url="https://test.grafana.io/api", api_token="test-token"
-        )
-        start = datetime(2026, 8, 1, tzinfo=UTC)
-        end = start + timedelta(hours=6)
-
-        with patch.object(
-            client,
-            "fetch_grafana_query",
-            new_callable=AsyncMock,
-            return_value=sample_grafana_response,
-        ) as fetch_query:
-            await client.fetch_llm_gateway_tokens_by_namespace(
-                period_start=start,
-                period_end=end,
-                source_namespace="customer.app",
-            )
-
-        body = fetch_query.await_args.args[0]
-        expression = body["queries"][0]["expr"]
-        assert "sum by (source_namespace)" in expression
-        assert "increase(llm_total_tokens_total" in expression
-        assert '"pod_ip", "$1", "requested_host"' in expression
-        assert "* on (pod_ip) group_left(source_namespace)" in expression
-        assert "max_over_time(kube_pod_info" in expression
-        assert 'host_network="false"' in expression
-        assert 'namespace=~"customer\\.app"' in expression
-        assert '"source_namespace", "$1", "namespace"' in expression
-        assert "[21600s]" in expression
-        assert body["from"] == str(int(start.timestamp() * 1000))
-        assert body["to"] == str(int(end.timestamp() * 1000))
 
     @pytest.mark.asyncio
     async def test_fetch_gateway_request_duration_uses_interval_and_namespace_filter(
@@ -557,6 +486,7 @@ class TestGpuQueryBuilders:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
+        gateway = GatewayMetrics(client)
         start = datetime(2026, 8, 1, tzinfo=UTC)
         end = start + timedelta(hours=6)
 
@@ -566,7 +496,7 @@ class TestGpuQueryBuilders:
             new_callable=AsyncMock,
             return_value=sample_grafana_response,
         ) as fetch_query:
-            await client.fetch_llm_gateway_request_duration_by_namespace(
+            await gateway.fetch_llm_gateway_request_duration_by_namespace(
                 period_start=start,
                 period_end=end,
                 source_namespace="customer.app",
@@ -591,6 +521,7 @@ class TestGpuQueryBuilders:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
+        gateway = GatewayMetrics(client)
         start = datetime(2026, 8, 1, tzinfo=UTC)
         end = start + timedelta(hours=2)
 
@@ -600,7 +531,7 @@ class TestGpuQueryBuilders:
             new_callable=AsyncMock,
             return_value=sample_grafana_response,
         ) as fetch_query:
-            await client.fetch_llm_gateway_namespace_tiers(
+            await gateway.fetch_llm_gateway_namespace_tiers(
                 period_start=start,
                 period_end=end,
             )
@@ -622,6 +553,7 @@ class TestGpuTierTotals:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
+        tiers = TierMetrics(client)
 
         mock_response = MagicMock()
         mock_response.json.return_value = sample_grafana_response.model_dump(
@@ -636,7 +568,7 @@ class TestGpuTierTotals:
             mock_http.__aexit__.return_value = None
             mock_client_class.return_value = mock_http
 
-            await client.fetch_gpu_tier_totals()
+            await tiers.fetch_gpu_tier_totals()
 
             body = mock_http.post.call_args[1]["json"]
             assert len(body["queries"]) == 1
@@ -651,7 +583,7 @@ class TestGpuTierTotals:
         GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
-        out = GrafanaClient._parse_gpu_tier_totals(sample_gpu_tier_totals_response)
+        out = TierMetrics._parse_gpu_tier_totals(sample_gpu_tier_totals_response)
         assert out["tier1"] == 0.5
         assert out["tier2"] == 0.5
         assert out["tier3"] == 0.5
@@ -664,7 +596,7 @@ class TestGatewayCounterQueries:
     PERIOD_END = PERIOD_START + timedelta(hours=1)
 
     def _body(self, **overrides) -> dict:
-        return GrafanaClient._gateway_counter_by_namespace_body(
+        return GatewayMetrics._gateway_counter_by_namespace_body(
             counter_name="llm_input_tokens_total",
             period_start=self.PERIOD_START,
             period_end=self.PERIOD_END,
@@ -674,7 +606,7 @@ class TestGatewayCounterQueries:
 
     def test_duration_query_counts_only_the_private_gpu_provider(self):
         """GPU time must not be charged for calls served by a public API."""
-        body = GrafanaClient._gateway_counter_by_namespace_body(
+        body = GatewayMetrics._gateway_counter_by_namespace_body(
             counter_name="llm_duration_seconds_sum",
             period_start=self.PERIOD_START,
             period_end=self.PERIOD_END,
@@ -710,6 +642,7 @@ class TestGatewayCounterQueries:
         client = GrafanaClient(
             api_url="https://test.grafana.io/api", api_token="test-token"
         )
+        gateway = GatewayMetrics(client)
         bodies = []
 
         async def capture(body):
@@ -717,15 +650,15 @@ class TestGatewayCounterQueries:
             return MagicMock()
 
         with patch.object(client, "fetch_grafana_query", side_effect=capture):
-            await client.fetch_llm_gateway_public_input_tokens_by_model(
+            await gateway.fetch_llm_gateway_public_input_tokens_by_model(
                 period_start=self.PERIOD_START,
                 period_end=self.PERIOD_END,
             )
-            await client.fetch_llm_gateway_public_output_tokens_by_model(
+            await gateway.fetch_llm_gateway_public_output_tokens_by_model(
                 period_start=self.PERIOD_START,
                 period_end=self.PERIOD_END,
             )
-            await client.fetch_llm_gateway_request_duration_by_namespace(
+            await gateway.fetch_llm_gateway_request_duration_by_namespace(
                 period_start=self.PERIOD_START,
                 period_end=self.PERIOD_END,
             )

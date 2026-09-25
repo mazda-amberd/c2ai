@@ -19,16 +19,14 @@ import sys
 # Make the backend package importable when run as scripts/check_grafana_queries.py
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from c2ai.clients.grafana import (
-    GrafanaClient,
-    _build_grafana_query_body as build_grafana_query_body,
-)
+from c2ai.clients.grafana import GrafanaClient
 from c2ai.config import get_settings
 from c2ai.constants.prometheus import TIER_CONFIG
+from c2ai.metrics.tiers import TierMetrics, _build_grafana_query_body as build_grafana_query_body
 from c2ai.schemas.grafana import MetricType
 
 
-async def test_single_query(client: GrafanaClient, metric_type: MetricType, name: str):
+async def test_single_query(client: TierMetrics, metric_type: MetricType, name: str):
     """Test a single query and print results."""
     print(f"\n{'='*60}")
     print(f"Testing: {name} ({metric_type.value})")
@@ -67,7 +65,7 @@ async def test_single_query(client: GrafanaClient, metric_type: MetricType, name
 
 async def test_all_queries(token: str):
     """Test all query types."""
-    client = GrafanaClient(api_token=token)
+    client = TierMetrics(GrafanaClient(api_token=token))
     
     print("\n" + "="*60)
     print("TIER CONFIGURATION")
@@ -98,7 +96,7 @@ async def probe_metrics_twice(token: str, wait_seconds: float) -> None:
     Use this when Athena/Grafana disagree: if both samples are identical but Grafana
     moves, check GRAFANA_API_URL / GRAFANA_PROMETHEUS_DATASOURCE_UID / ATHENA_TIER*_GPU_CLUSTER.
     """
-    client = GrafanaClient(api_token=token)
+    client = TierMetrics(GrafanaClient(api_token=token))
     print("\n" + "=" * 60)
     print(f"METRICS PROBE (two samples, {wait_seconds}s apart)")
     print("=" * 60)
@@ -145,7 +143,7 @@ async def test_full_metrics(token: str):
     print("FULL METRICS (with percentage calculations)")
     print("="*60)
     
-    client = GrafanaClient(api_token=token)
+    client = TierMetrics(GrafanaClient(api_token=token))
     
     try:
         tiers, _gpu_totals = await client.get_all_metrics()

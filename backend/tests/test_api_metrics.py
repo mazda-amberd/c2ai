@@ -4,7 +4,7 @@ Tests for the metrics API endpoints.
 
 from unittest.mock import AsyncMock, patch
 
-from c2ai.clients.grafana import grafana_client
+from c2ai.api.grafana import tier_metrics
 from c2ai.schemas.grafana import Instance, Status
 from tests.helpers import override_dependency
 
@@ -44,7 +44,7 @@ class TestMetricsEndpoint:
         mock_gpu_totals = {"Tier 1": 8.9, "Tier 2": 0.0, "Tier 3": 0.0, "Tier 4": None}
 
         with (
-            override_dependency(grafana_client) as mock_get_client,
+            override_dependency(tier_metrics) as mock_get_client,
             patch(
                 "c2ai.crud.application_instance.replace_application_instances_for_tiers",
                 new_callable=AsyncMock,
@@ -93,7 +93,7 @@ class TestMetricsEndpoint:
         mock_gpu_totals = {"Tier 2": 6.5}
 
         with (
-            override_dependency(grafana_client) as mock_get_client,
+            override_dependency(tier_metrics) as mock_get_client,
             patch(
                 "c2ai.crud.application_instance.replace_application_instances_for_tiers",
                 new_callable=AsyncMock,
@@ -147,7 +147,7 @@ class TestMetricsEndpoint:
             return None
 
         with (
-            override_dependency(grafana_client) as mock_get_client,
+            override_dependency(tier_metrics) as mock_get_client,
             patch(
                 "c2ai.crud.application_instance.replace_application_instances_for_tiers",
                 new_callable=AsyncMock,
@@ -187,7 +187,7 @@ class TestMetricsEndpoint:
     def test_get_metrics_error_handling(self, deploy_auth_client):
         """Test error handling when Grafana API fails."""
         with (
-            override_dependency(grafana_client) as mock_get_client,
+            override_dependency(tier_metrics) as mock_get_client,
             patch(
                 "c2ai.crud.application_instance.replace_application_instances_for_tiers",
                 new_callable=AsyncMock,
@@ -210,7 +210,7 @@ class TestMetricsEndpoint:
         mock_gpu_totals = {"Tier 1": 0.0, "Tier 2": 0.0, "Tier 3": 0.0, "Tier 4": None}
 
         with (
-            override_dependency(grafana_client) as mock_get_client,
+            override_dependency(tier_metrics) as mock_get_client,
             patch(
                 "c2ai.crud.application_instance.replace_application_instances_for_tiers",
                 new_callable=AsyncMock,

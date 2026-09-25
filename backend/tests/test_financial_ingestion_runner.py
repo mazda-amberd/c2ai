@@ -114,7 +114,7 @@ async def test_runner_polls_once_under_one_global_lock():
     ) as ingest:
         result = await run_gateway_cost_ingestion_once(
             observed_at=END,
-            grafana_client=grafana,
+            gateway=grafana,
             session_factory=session_factory,
             lock_context_factory=acquired_lock,
         )
@@ -170,7 +170,7 @@ async def test_grafana_failure_propagates_and_releases_lock():
         pytest.raises(RuntimeError, match="grafana unavailable"),
     ):
         await run_gateway_cost_ingestion_once(
-            grafana_client=MagicMock(),
+            gateway=MagicMock(),
             session_factory=session_factory,
             lock_context_factory=acquired_lock,
         )

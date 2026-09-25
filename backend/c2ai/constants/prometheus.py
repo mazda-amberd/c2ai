@@ -40,6 +40,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from c2ai.config import get_settings
+from c2ai.metrics.promql import APP_CONTAINERS, BYTES_PER_GIB, POD_TO_DEPLOYMENT
 from c2ai.schemas.grafana import MetricType
 
 # =============================================================================
@@ -144,20 +145,8 @@ def _memory_gb_cap() -> float:
 # =============================================================================
 
 def _pod_to_deployment_filter(tier_label_re: str) -> str:
-    """
-    PromQL suffix that:
-      1. Maps pod → replicaset → deployment labels.
-      2. Filters to deployments whose label_tier matches tier_label_re.
-    Returns the two binary-join clauses to append after a pod-level metric.
-    """
-    return (
-        '* on(namespace, pod) group_left(replicaset)'
-        ' label_replace(kube_pod_owner{owner_kind="ReplicaSet"},'
-        ' "replicaset", "$1", "owner_name", "(.*)")'
-        ' * on(namespace, replicaset) group_left(deployment)'
-        ' label_replace(kube_replicaset_owner{owner_kind="Deployment"},'
-        ' "deployment", "$1", "owner_name", "(.*)")'
-    )
+    """Join clauses mapping pod-level series to their Deployment (see ``metrics.promql``)."""
+    return POD_TO_DEPLOYMENT.lstrip()
 
 
 def _tier_filter(tier_label_re: str) -> str:
@@ -172,7 +161,7 @@ def _k8s_cpu_by_deployment(tier_label_re: str) -> str:
     return (
         f'sum by (namespace, deployment) ('
         f'  rate(container_cpu_usage_seconds_total{{'
-        f'container!="",container!="POD"}}[5m])'
+        f'{APP_CONTAINERS}}}[5m])'
         f'  {join}'
         f') * on(namespace, deployment) group_left() {mask}'
     )
@@ -185,9 +174,9 @@ def _k8s_memory_by_deployment(tier_label_re: str) -> str:
     return (
         f'sum by (namespace, deployment) ('
         f'  container_memory_working_set_bytes{{'
-        f'container!="",container!="POD"}}'
+        f'{APP_CONTAINERS}}}'
         f'  {join}'
-        f') / 1073741824'
+        f') / {BYTES_PER_GIB}'
         f' * on(namespace, deployment) group_left() {mask}'
     )
 
@@ -268,10 +257,10 @@ def _k8s_memory_total(tier_label_re: str) -> str:
         f'sum('
         f'  sum by (namespace, deployment) ('
         f'    container_memory_working_set_bytes{{'
-        f'container!="",container!="POD"}}'
+        f'{APP_CONTAINERS}}}'
         f'    {join}'
         f'  ) * on(namespace, deployment) group_left() {mask}'
-        f') / 1073741824'
+        f') / {BYTES_PER_GIB}'
     )
 
 
@@ -283,7 +272,7 @@ def _k8s_cpu_total(tier_label_re: str) -> str:
         f'sum('
         f'  sum by (namespace, deployment) ('
         f'    rate(container_cpu_usage_seconds_total{{'
-        f'container!="",container!="POD"}}[5m])'
+        f'{APP_CONTAINERS}}}[5m])'
         f'    {join}'
         f'  ) * on(namespace, deployment) group_left() {mask}'
         f')'

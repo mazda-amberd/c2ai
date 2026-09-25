@@ -16,6 +16,7 @@ from c2ai.clients.grafana import GrafanaClient
 from c2ai.config import get_settings
 from c2ai.crud.application_instance import replace_application_instances_for_tiers
 from c2ai.jobs.worker import JobContext, Schedule, job_handler, register_schedule
+from c2ai.metrics.tiers import TierMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ KIND = "inventory.refresh"
 
 @job_handler(KIND, lease=timedelta(minutes=2))
 async def refresh(ctx: JobContext) -> dict:
-    tiers, _gpu_totals = await GrafanaClient().get_all_metrics()
+    tiers, _gpu_totals = await TierMetrics(GrafanaClient()).get_all_metrics()
     async with ctx.session_factory() as db:
         await replace_application_instances_for_tiers(db, tiers)
         await db.commit()

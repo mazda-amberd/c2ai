@@ -28,15 +28,20 @@ from decimal import ROUND_HALF_UP, Decimal
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from c2ai.clients.grafana import GrafanaClient
 from c2ai.config import get_settings
 from c2ai.crud.financial import (
     FinancialRateNotFoundError,
     record_private_llm_cost,
     record_public_api_cost,
 )
+from c2ai.metrics.gateway import GatewayMetrics
 from c2ai.models.financial import FinancialCostRecord, LlmGatewayTokenCheckpoint
-from c2ai.schemas.grafana import GrafanaFieldLabels, GrafanaFrame, GrafanaResponse
+from c2ai.schemas.grafana import (
+    FRAME_VALUE_FIELD_INDEX,
+    GrafanaFieldLabels,
+    GrafanaFrame,
+    GrafanaResponse,
+)
 from c2ai.services.financial import FINANCIAL_QUANTUM
 
 logger = logging.getLogger(__name__)
@@ -107,12 +112,12 @@ def _frame_labels_and_value(
     Frames without a value field, without labels, or carrying only missing or
     negative samples contribute nothing to a counter increase.
     """
-    if len(frame.schema_.fields) <= GrafanaClient.VALUE_FIELD_INDEX:
+    if len(frame.schema_.fields) <= FRAME_VALUE_FIELD_INDEX:
         return None
-    labels = frame.schema_.fields[GrafanaClient.VALUE_FIELD_INDEX].labels
-    if labels is None or len(frame.data.values) <= GrafanaClient.VALUE_FIELD_INDEX:
+    labels = frame.schema_.fields[FRAME_VALUE_FIELD_INDEX].labels
+    if labels is None or len(frame.data.values) <= FRAME_VALUE_FIELD_INDEX:
         return None
-    values = frame.data.values[GrafanaClient.VALUE_FIELD_INDEX]
+    values = frame.data.values[FRAME_VALUE_FIELD_INDEX]
     numeric_value = next(
         (
             value
@@ -226,9 +231,9 @@ def parse_namespace_tier_mappings(response: GrafanaResponse) -> dict[str, int]:
         return {}
 
     for frame in result.frames:
-        if len(frame.schema_.fields) <= GrafanaClient.VALUE_FIELD_INDEX:
+        if len(frame.schema_.fields) <= FRAME_VALUE_FIELD_INDEX:
             continue
-        labels = frame.schema_.fields[GrafanaClient.VALUE_FIELD_INDEX].labels
+        labels = frame.schema_.fields[FRAME_VALUE_FIELD_INDEX].labels
         if labels is None:
             continue
         namespace = (labels.namespace or "").strip()
@@ -420,7 +425,7 @@ async def _record_public_api_costs(
 
 async def ingest_gateway_costs(
     db: AsyncSession,
-    grafana_client: GrafanaClient,
+    gateway: GatewayMetrics,
     *,
     observed_at: datetime | None = None,
     resource_type: str = DEFAULT_GPU_RESOURCE_TYPE,
@@ -481,19 +486,19 @@ async def ingest_gateway_costs(
         )
 
     duration_response = (
-        await grafana_client.fetch_llm_gateway_request_duration_by_namespace(
+        await gateway.fetch_llm_gateway_request_duration_by_namespace(
             period_start=period_start,
             period_end=period_end,
         )
     )
     input_token_response = (
-        await grafana_client.fetch_llm_gateway_public_input_tokens_by_model(
+        await gateway.fetch_llm_gateway_public_input_tokens_by_model(
             period_start=period_start,
             period_end=period_end,
         )
     )
     output_token_response = (
-        await grafana_client.fetch_llm_gateway_public_output_tokens_by_model(
+        await gateway.fetch_llm_gateway_public_output_tokens_by_model(
             period_start=period_start,
             period_end=period_end,
         )
@@ -535,7 +540,7 @@ async def ingest_gateway_costs(
     attributed_tokens = Decimal("0")
 
     if duration_by_namespace or public_usage:
-        mapping_response = await grafana_client.fetch_llm_gateway_namespace_tiers(
+        mapping_response = await gateway.fetch_llm_gateway_namespace_tiers(
             period_start=period_start,
             period_end=period_end,
         )
