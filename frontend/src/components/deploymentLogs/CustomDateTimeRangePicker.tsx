@@ -18,6 +18,17 @@ function applyCalendarDay(base: Date, day: Date): Date {
   return d;
 }
 
+/** Logs only exist up to now, so neither end of the range may be later. */
+function notAfterNow(date: Date): Date {
+  const now = new Date();
+  return date > now ? now : date;
+}
+
+function startOfToday(): Date {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+}
+
 function applyTimeHHmm(base: Date, hhmm: string): Date {
   const [hs, ms] = hhmm.split(":");
   const h = Number(hs);
@@ -50,11 +61,13 @@ export type CustomDateTimeRangePickerProps = {
 export function CustomDateTimeRangePicker({
   from,
   to,
-  onFromChange,
-  onToChange,
+  onFromChange: setFrom,
+  onToChange: setTo,
   onBeforeUserEdit,
 }: CustomDateTimeRangePickerProps) {
   const bump = () => onBeforeUserEdit?.();
+  const onFromChange = (next: Date) => setFrom(notAfterNow(next));
+  const onToChange = (next: Date) => setTo(notAfterNow(next));
   const fromRef = useRef(from);
   const toRef = useRef(to);
 
@@ -82,8 +95,8 @@ export function CustomDateTimeRangePicker({
 
   const applyQuickRange = ({ from, to }: { from: Date; to: Date }) => {
     bump();
-    const nextFrom = applyCalendarDay(fromRef.current, from);
-    const nextTo = applyCalendarDay(toRef.current, to);
+    const nextFrom = notAfterNow(applyCalendarDay(fromRef.current, from));
+    const nextTo = notAfterNow(applyCalendarDay(toRef.current, to));
     onFromChange(nextFrom);
     onToChange(nextTo);
     setRangeDraft({ from: nextFrom, to: nextTo });
@@ -119,6 +132,7 @@ export function CustomDateTimeRangePicker({
         </p>
         <Calendar
           value={rangeDraft}
+          maxDate={startOfToday()}
           onChange={(range) => {
             bump();
             if (!range?.from || !range?.to) {
