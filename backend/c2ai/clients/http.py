@@ -20,6 +20,8 @@ from contextlib import asynccontextmanager, contextmanager
 
 import httpx
 
+from c2ai.core.observability import mark_outbound_start, record_outbound_response
+
 DEFAULT_TIMEOUT = 15.0
 # Connection-level failures (DNS, refused, reset before a response) are
 # retried; HTTP error statuses never are, because dispatches are not idempotent.
@@ -37,7 +39,13 @@ def _new_client(timeout: float | None, follow_redirects: bool) -> httpx.AsyncCli
         retries=_CONNECT_RETRIES, limits=_LIMITS
     )
     return httpx.AsyncClient(
-        timeout=timeout, transport=transport, follow_redirects=follow_redirects
+        timeout=timeout,
+        transport=transport,
+        follow_redirects=follow_redirects,
+        event_hooks={
+            "request": [mark_outbound_start],
+            "response": [record_outbound_response],
+        },
     )
 
 

@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     serve_frontend: bool = Field(True, validation_alias="C2AI_SERVE_FRONTEND")
     frontend_dist: str = Field("", validation_alias="C2AI_FRONTEND_DIST")
     run_worker: bool = Field(True, validation_alias="C2AI_RUN_WORKER")
+    log_format: str = Field("text", pattern="^(text|json)$", validation_alias="C2AI_LOG_FORMAT")
+    # Bearer token required by /metrics when set (Prometheus scrape config).
+    metrics_token: str = Field("", validation_alias="C2AI_METRICS_TOKEN")
+    # Start even if the database is behind the code (not recommended).
+    allow_pending_migrations: bool = Field(
+        False, validation_alias="C2AI_ALLOW_PENDING_MIGRATIONS"
+    )
     worker_poll_seconds: float = Field(1.0, gt=0, validation_alias="C2AI_WORKER_POLL_SECONDS")
 
     # --- Database --------------------------------------------------------

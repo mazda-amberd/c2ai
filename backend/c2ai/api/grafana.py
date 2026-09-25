@@ -48,10 +48,3 @@ async def get_metrics(
     tiers = await enrich_tiers_with_versions(tiers)
     tiers = await enrich_tiers_with_instance_metadata(db, tiers)
     return TiersResponse(tiers=tiers, tier_gpu_totals=gpu_totals)
-
-
-@router.get("/health")
-async def health_check() -> dict:
-    """Liveness probe (no authentication, no dependencies)."""
-
-    return {"status": "ok"}

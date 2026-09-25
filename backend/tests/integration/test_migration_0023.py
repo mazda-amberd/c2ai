@@ -127,3 +127,56 @@ def test_legacy_runs_become_ada_instances_with_an_operation_log():
     billing = [value for value in runs.values() if value[0] == "billing-tier-1"]
     assert billing == [("billing-tier-1", True, None, "update")]
     assert deployments_table is None
+
+
+def test_readiness_and_startup_follow_the_schema(monkeypatch):
+    """/ready is 503 and startup refuses while migrations are pending."""
+
+    import asyncio
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from c2ai import app as app_module
+    from c2ai.app import app
+    from c2ai.db.session import get_db_session
+
+    name = f"c2ai_test_{uuid.uuid4().hex[:10]}"
+    admin = _admin_connection()
+    with admin.cursor() as cursor:
+        cursor.execute(f'CREATE DATABASE "{name}"')
+    url = make_url(_SERVER_URL).set(database=name, drivername="postgresql+asyncpg")
+    monkeypatch.setenv("DATABASE_URL", url.render_as_string(hide_password=False))
+    engine = create_async_engine(url.render_as_string(hide_password=False), poolclass=NullPool)
+    factory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+    async def _session():
+        async with factory() as session:
+            yield session
+
+    app.dependency_overrides[get_db_session] = _session
+    monkeypatch.setattr(app_module, "AsyncSessionLocal", factory)
+    try:
+        run_migrations(until="0024")
+        client = TestClient(app)
+        behind = client.get("/ready")
+        assert behind.status_code == 503
+        assert behind.json()["checks"]["schema"].startswith("pending: 0025")
+        with pytest.raises(RuntimeError, match=r"python -m c2ai\.db\.migrate"):
+            asyncio.run(app_module._check_schema())
+
+        run_migrations()
+        ready = client.get("/ready")
+        assert ready.status_code == 200
+        assert ready.json() == {
+            "status": "ready",
+            "checks": {"database": "ok", "schema": ready.json()["checks"]["schema"]},
+        }
+        asyncio.run(app_module._check_schema())
+    finally:
+        app.dependency_overrides.pop(get_db_session, None)
+        asyncio.run(engine.dispose())
+        with admin.cursor() as cursor:
+            cursor.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
+        admin.close()

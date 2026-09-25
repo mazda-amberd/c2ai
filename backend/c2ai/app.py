@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
@@ -16,6 +17,7 @@ from c2ai.api.github_connections import router as github_connections_router
 from c2ai.api.grafana import router as grafana_router
 from c2ai.api.logs import router as logs_router
 from c2ai.api.metrics import router as metrics_v2_router
+from c2ai.api.ops import router as ops_router
 from c2ai.api.registered_applications import router as registered_applications_router
 from c2ai.api.troubleshooting import router as troubleshooting_router
 from c2ai.api.users import router as users_router
@@ -23,13 +25,36 @@ from c2ai.clients.http import close_http_clients
 from c2ai.config import check_startup_settings, get_settings
 from c2ai.core.exception_handlers import attach_exception_handlers
 from c2ai.core.frontend import setup_frontend_serving
+from c2ai.core.observability import RequestContextMiddleware
+from c2ai.db.migrate import schema_status
+from c2ai.db.session import AsyncSessionLocal
 from c2ai.jobs import Worker, get_job_store
 from c2ai.jobs.worker import set_in_process_worker
+
+logger = logging.getLogger(__name__)
+
+
+async def _check_schema() -> None:
+    """Refuse to serve a database that is behind this build's migrations."""
+
+    async with AsyncSessionLocal() as db:
+        status = await schema_status(db)
+    if status.current:
+        return
+    message = (
+        f"The database schema is behind this build (pending: {', '.join(status.pending)}). "
+        "Run `python -m c2ai.db.migrate`."
+    )
+    if get_settings().allow_pending_migrations:
+        logger.error("%s Starting anyway (C2AI_ALLOW_PENDING_MIGRATIONS).", message)
+        return
+    raise RuntimeError(message)
 
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     check_startup_settings()
+    await _check_schema()
     settings = get_settings()
     worker_task = None
     stop = asyncio.Event()
@@ -53,6 +78,7 @@ def create_app(*, serve_frontend: bool = True) -> FastAPI:
     """Build the API with its routers, error handlers, and optional SPA serving."""
 
     application = FastAPI(title="C2AI Athena Service", lifespan=_lifespan)
+    application.add_middleware(RequestContextMiddleware)
 
     origins = get_settings().cors_origin_list
     if origins:
@@ -66,6 +92,7 @@ def create_app(*, serve_frontend: bool = True) -> FastAPI:
         )
 
     for router in (
+        ops_router,
         base_router,
         grafana_router,
         github_connections_router,

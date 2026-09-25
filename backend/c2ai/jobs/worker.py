@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import socket
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
@@ -19,6 +20,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Any
 
+from c2ai.core.observability import JOB_DURATION, JOB_LEASES_EXPIRED, JOB_RUNS, correlation_id
 from c2ai.jobs.store import FollowUp, JobRecord, JobStore
 
 logger = logging.getLogger(__name__)
@@ -169,6 +171,9 @@ class Worker:
 
     async def execute(self, job: JobRecord) -> None:
         spec = (self.handlers or {})[job.kind]
+        token = correlation_id.set(f"job:{job.kind}:{str(job.id)[:8]}")
+        started = time.perf_counter()
+        outcome = "succeeded"
         heartbeat = asyncio.create_task(self._heartbeat(job, spec))
         follow_up = self._follow_up(job)
         try:
@@ -179,6 +184,7 @@ class Worker:
             # Shutdown: leave the lease to expire so another worker retries it.
             raise
         except JobFailed as error:
+            outcome = "failed"
             retry_at = self.store.now() + spec.retry_backoff * job.attempts if error.retry else None
             await self.store.fail(
                 job.id,
@@ -189,6 +195,7 @@ class Worker:
                 follow_up=follow_up,
             )
         except Exception:
+            outcome = "error"
             logger.exception("Job %s (%s) failed", job.id, job.kind)
             await self.store.fail(
                 job.id,
@@ -204,6 +211,9 @@ class Worker:
             heartbeat.cancel()
             with suppress(asyncio.CancelledError):
                 await heartbeat
+            JOB_RUNS.labels(job.kind, outcome).inc()
+            JOB_DURATION.labels(job.kind).observe(time.perf_counter() - started)
+            correlation_id.reset(token)
 
     async def _claim(self, slots: int) -> list[JobRecord]:
         claimed: list[JobRecord] = []
@@ -219,7 +229,7 @@ class Worker:
     async def run_once(self) -> int:
         """Recover, schedule, and run every ready job to completion (tests, CLI)."""
 
-        await self.store.recover_expired_leases()
+        JOB_LEASES_EXPIRED.inc(await self.store.recover_expired_leases())
         await self.ensure_schedules()
         total = 0
         while jobs := await self._claim(self.concurrency):
@@ -237,7 +247,7 @@ class Worker:
             while not stop.is_set():
                 try:
                     if loop.time() >= next_maintenance:
-                        await self.store.recover_expired_leases()
+                        JOB_LEASES_EXPIRED.inc(await self.store.recover_expired_leases())
                         await self.ensure_schedules()
                         next_maintenance = loop.time() + 30
                     slots = self.concurrency - len(self._running)

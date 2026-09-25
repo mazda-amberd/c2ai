@@ -51,9 +51,17 @@ class ColorFormatter(logging.Formatter):
 
 
 def _make_colored_handler() -> logging.Handler:
+    from c2ai.config import get_settings
+    from c2ai.core.observability import CorrelationIdFilter, JsonFormatter
+
     handler = logging.StreamHandler(stream=sys.stdout)
     handler._sql_chat_colored = True  # sentinel to avoid duplicates
-    fmt = "%(asctime)s - %(colored_level)s: %(message)s"
+    handler.addFilter(CorrelationIdFilter())
+    if get_settings().log_format == "json":
+        handler.setFormatter(JsonFormatter())
+        return handler
+    # [request or job id] on every line ties together what one request did.
+    fmt = "%(asctime)s - %(colored_level)s [%(correlation_id)s]: %(message)s"
     datefmt = "%Y-%m-%d %H:%M:%S"
     handler.setFormatter(ColorFormatter(fmt=fmt, datefmt=datefmt))
     return handler

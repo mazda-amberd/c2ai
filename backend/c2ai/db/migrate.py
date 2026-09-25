@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import psycopg2
@@ -37,6 +38,32 @@ def pending_migrations(applied: set[str]) -> list[Path]:
     """Migration files not yet recorded, in lexical (= numeric) order."""
 
     return [path for path in sorted(MIGRATIONS_DIR.glob("*.sql")) if path.stem not in applied]
+
+
+@dataclass(frozen=True)
+class SchemaStatus:
+    latest_applied: str | None
+    pending: list[str]
+
+    @property
+    def current(self) -> bool:
+        return not self.pending
+
+
+async def schema_status(db) -> SchemaStatus:
+    """Compare the database's applied migrations with the files in this build."""
+
+    from sqlalchemy import text
+    from sqlalchemy.exc import ProgrammingError
+
+    try:
+        result = await db.execute(text("SELECT version FROM schema_migrations"))
+        applied = {row[0] for row in result.all()}
+    except ProgrammingError:  # a database that was never migrated
+        await db.rollback()
+        applied = set()
+    pending = [path.stem for path in pending_migrations(applied)]
+    return SchemaStatus(latest_applied=max(applied) if applied else None, pending=pending)
 
 
 def run_migrations(stamp: bool = False, *, until: str | None = None) -> int:
