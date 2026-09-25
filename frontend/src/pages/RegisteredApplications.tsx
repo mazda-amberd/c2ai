@@ -5,6 +5,7 @@ import { ArrowLeft, Box, Github, Loader2, Plus, Search, Trash2 } from "lucide-re
 import { Button } from "@ui/button";
 import { Dialog, DialogContent } from "@ui/dialog";
 import { useToast } from "@components/Toast";
+import ApplicationSummaryModal from "@components/registerApp/ApplicationSummaryModal";
 import RegisterApplicationModal from "@components/registerApp/RegisterApplicationModal";
 import { ACCENT, PANEL_BACKGROUND, Select } from "@components/registerApp/wizardStyles";
 import {
@@ -72,6 +73,7 @@ export default function RegisteredApplications() {
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [registerOpen, setRegisterOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<RegisteredApp | null>(null);
+  const [summaryApp, setSummaryApp] = useState<RegisteredApp | null>(null);
   const [deleting, setDeleting] = useState(false);
   const { showToast } = useToast();
 
@@ -276,6 +278,7 @@ export default function RegisteredApplications() {
                   return (
                     <tr
                       key={app.id}
+                      onClick={() => setSummaryApp(app)}
                       className="cursor-pointer border-b border-[#1f3348] transition-colors last:border-b-0 hover:bg-[rgba(24,48,73,0.35)]"
                     >
                       <td className="px-3.5 py-3.5">
@@ -378,6 +381,8 @@ export default function RegisteredApplications() {
         onOpenChange={setRegisterOpen}
         onRegistered={loadApps}
       />
+
+      <ApplicationSummaryModal app={summaryApp} onOpenChange={(o) => !o && setSummaryApp(null)} />
 
       {/* Delete confirmation — same panel language as the wizards. */}
       <Dialog open={deleteTarget !== null} onOpenChange={(o) => !o && !deleting && setDeleteTarget(null)}>

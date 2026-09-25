@@ -67,7 +67,8 @@ export const listRegisteredApplications = async (
 /* ---------------- Detail ---------------- */
 
 export type ApiGithubWorkflowConfiguration = {
-  github_connection_id: string;
+  /** Serialized under this name (the backend field is aliased). */
+  github_connection: string;
   trigger_method: "workflow_dispatch" | "repository_dispatch";
   repository: string;
   code_repository: string | null;
