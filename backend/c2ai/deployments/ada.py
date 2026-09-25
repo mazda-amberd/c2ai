@@ -24,7 +24,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from c2ai.auth.jwt import AthenaTokenUser
 from c2ai.clients.github_actions import GitHubActionsClient
 from c2ai.config import get_settings
-from c2ai.constants.registered_application import DeploymentInstanceStatus, DeploymentStep
+from c2ai.constants.registered_application import (
+    ADA_APPLICATION_ID,
+    DeploymentInstanceStatus,
+    DeploymentStep,
+)
 from c2ai.core.exceptions import (
     ConflictError,
     ForbiddenError,
@@ -52,7 +56,6 @@ from c2ai.schemas.registered_application import RegisteredApplicationDeploymentC
 
 logger = logging.getLogger(__name__)
 
-ADA_APPLICATION_ID = UUID("ada00000-0000-4000-8000-000000000001")
 ADA_WORKFLOW_PATH = ".github/workflows/ada-deploy.yaml"
 # With a fresh Grafana inventory, an unknown instance really does not exist;
 # with a stale one the check is advisory.

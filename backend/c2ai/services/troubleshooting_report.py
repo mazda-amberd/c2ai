@@ -24,7 +24,6 @@ from c2ai.services.troubleshooting_data import (
     TroubleshootingDataProvider,
     get_troubleshooting_data_provider,
 )
-from c2ai.services.troubleshooting_metric_plot import with_metric_plots
 from c2ai.services.troubleshooting_metrics import (
     select_available_metric_queries,
     unavailable_metrics,
@@ -244,7 +243,6 @@ async def build_troubleshooting_report(
             exc,
         )
         application_metrics = unavailable_metrics(metric_queries)
-    application_metrics = with_metric_plots(application_metrics)
 
     events_by_id = {event.id: event for event in events}
     relevant_events = _events_for_ids(

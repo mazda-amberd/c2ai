@@ -1,6 +1,7 @@
 """Shared registered-application domain values."""
 
 from enum import Enum
+from uuid import UUID
 
 
 class ApplicationType(str, Enum):
@@ -87,3 +88,16 @@ ACTIVE_DEPLOYMENT_INSTANCE_STATUSES = (
     DeploymentInstanceStatus.UPDATING.value,
     DeploymentInstanceStatus.TERMINATING.value,
 )
+
+
+# The legacy ADA pipeline, seeded as a registered GitHub workflow application
+# by migration 0023.
+ADA_APPLICATION_ID = UUID("ada00000-0000-4000-8000-000000000001")
+
+# Values the Deploy Application form sends for every deployment. A workflow
+# that declares them as parameters receives them as inputs; for any other
+# application they are recorded on the deployment but never sent, because
+# workflow_dispatch rejects inputs a workflow does not declare.
+CUSTOMER_NAME_PARAMETER = "customer_name"
+ENV_INSTANCE_PARAMETER = "env_instance"
+DEPLOYMENT_IDENTITY_PARAMETERS = frozenset({CUSTOMER_NAME_PARAMETER, ENV_INSTANCE_PARAMETER})

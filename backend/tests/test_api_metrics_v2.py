@@ -31,10 +31,23 @@ def _frame(ref: str, value: float, **labels) -> dict:
     }
 
 
+SERIES_START_MS = 1768229453154
+SERIES_END_MS = 1768233053154
+
+
+def _series_frame(ref: str, value: float, **labels) -> dict:
+    """One range frame: two samples across the window, ending at ``value``."""
+    frame = _frame(ref, value, **labels)
+    frame["data"] = {"values": [[SERIES_START_MS, SERIES_END_MS], [value / 2, value]]}
+    return frame
+
+
 def _fake_grafana(value=1.0, per_app=None, fail_refs=(), empty=False, bodies=None,
                   only_refs=None):
     """Stub returning one frame per refId, or labelled frames at application level.
 
+    Range refIds (``q0_range``) get a two-sample series; ``fail_refs`` and
+    ``only_refs`` name the metric's instant refId and apply to both.
     ``only_refs`` limits which refIds return data, mimicking metrics no app emits.
     """
 
@@ -44,9 +57,11 @@ def _fake_grafana(value=1.0, per_app=None, fail_refs=(), empty=False, bodies=Non
         results = {}
         for query in body["queries"]:
             ref = query["refId"]
-            if only_refs is not None and ref not in only_refs:
+            base = ref.removesuffix("_range")
+            frame = _series_frame if query.get("range") else _frame
+            if only_refs is not None and base not in only_refs:
                 results[ref] = {"status": 200, "frames": []}
-            elif ref in fail_refs:
+            elif base in fail_refs:
                 results[ref] = {"status": 500, "error": "upstream exploded", "frames": []}
             elif empty:
                 results[ref] = {"status": 200, "frames": []}
@@ -54,12 +69,12 @@ def _fake_grafana(value=1.0, per_app=None, fail_refs=(), empty=False, bodies=Non
                 results[ref] = {
                     "status": 200,
                     "frames": [
-                        _frame(ref, value, namespace=ns, deployment=dep)
+                        frame(ref, value, namespace=ns, deployment=dep)
                         for ns, dep in per_app
                     ],
                 }
             else:
-                results[ref] = {"status": 200, "frames": [_frame(ref, value)]}
+                results[ref] = {"status": 200, "frames": [frame(ref, value)]}
         return {"results": results}
 
     client = AsyncMock()
@@ -192,7 +207,11 @@ class TestWindowIsSentToGrafana:
         bodies = []
         _get(metrics_client, _fake_grafana(bodies=bodies), level="cluster", range="1h")
         assert len(bodies) == 1
-        assert len(bodies[0]["queries"]) == 13
+        queries = bodies[0]["queries"]
+        # Each metric: an instant query for its value and a range query for its chart.
+        assert len(queries) == 26
+        assert sum(1 for q in queries if q.get("instant")) == 13
+        assert {q["intervalMs"] for q in queries if q.get("range")} == {60_000}
 
 
 class TestClusterLevel:
@@ -262,7 +281,14 @@ class TestApplicationLevel:
         assert len(body["series"]) == 1
         metrics = _metrics(body)
         assert metrics["cpu_cores"] == {
-            "value": 2.5, "unit": "cores", "status": None, "available": True
+            "value": 2.5,
+            "unit": "cores",
+            "status": None,
+            "available": True,
+            "points": [
+                {"timestamp": SERIES_START_MS, "value": 1.25},
+                {"timestamp": SERIES_END_MS, "value": 2.5},
+            ],
         }
         assert metrics["memory_bytes"]["unit"] == "bytes"
         assert metrics["total_tokens_per_second"]["unit"] == "ops"
@@ -277,7 +303,7 @@ class TestApplicationLevel:
         assert len(metrics) == 12
         assert metrics["health"]["available"] is True
         assert metrics["request_error_percent"] == {
-            "value": None, "unit": "percent", "status": None, "available": False
+            "value": None, "unit": "percent", "status": None, "available": False, "points": []
         }
 
     def test_scope_id_is_unique_per_workload(self, metrics_client):
@@ -366,8 +392,30 @@ class TestFailureHandling:
         """Dropping the key would hide the failure from a frontend iterating metrics."""
         body = _get(metrics_client, _fake_grafana(fail_refs={"q0"}), level="cluster").json()
         assert _metrics(body)["nodes_ready"] == {
-            "value": None, "unit": "count", "status": None, "available": False
+            "value": None, "unit": "count", "status": None, "available": False, "points": []
         }
+
+    def test_a_failed_series_keeps_the_value(self, metrics_client):
+        """Only the chart is lost when the range query fails; the value still shows."""
+        body = _get(
+            metrics_client, _fake_grafana(value=3.0, fail_refs=set()), level="cluster"
+        ).json()
+        assert _metrics(body)["nodes_ready"]["points"][-1]["value"] == 3.0
+
+        failing = _fake_grafana(value=3.0)
+        original = failing.fetch_grafana_query_raw.side_effect
+
+        async def _without_series(request):
+            payload = await original(request)
+            payload["results"]["q0_range"] = {"status": 500, "error": "boom", "frames": []}
+            return payload
+
+        failing.fetch_grafana_query_raw.side_effect = _without_series
+        clear_cache()
+        body = _get(metrics_client, failing, level="cluster").json()
+        assert body["degraded"] is False
+        assert _metrics(body)["nodes_ready"]["value"] == 3.0
+        assert _metrics(body)["nodes_ready"]["points"] == []
 
     def test_error_message_does_not_leak_upstream_detail(self, metrics_client):
         response = _get(metrics_client, _fake_grafana(fail_refs={"q0"}), level="cluster")

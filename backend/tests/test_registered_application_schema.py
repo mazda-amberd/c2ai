@@ -141,16 +141,22 @@ def test_container_registration_rejects_a_typed_parameter_definition():
         _CREATE_ADAPTER.validate_python(payload)
 
 
-def test_container_deployment_contract_contains_only_instance_and_version():
+def test_container_deployment_contract_is_instance_version_and_customer():
     payload = ContainerRegisteredApplicationDeploymentCreate(
         instance_name=" chat-service-tier-2 ",
         version=" 2.0.0 ",
+        customer_name=" Acme Corp ",
     )
 
     assert payload.model_dump() == {
+        "customer_name": "Acme Corp",
         "instance_name": "chat-service-tier-2",
         "version": "2.0.0",
     }
+    # The customer is optional for API callers; the form always sends it.
+    assert ContainerRegisteredApplicationDeploymentCreate(
+        instance_name="chat-service-tier-2", version="2.0.0"
+    ).customer_name is None
 
 
 @pytest.mark.parametrize(

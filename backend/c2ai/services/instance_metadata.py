@@ -45,7 +45,8 @@ async def load_instance_metadata_map(
     Client and instance names per subdomain from the deployment records.
 
     Deployments that were given a customer and environment (ADA and other
-    GitHub workflows) supply them; the newest instance at a subdomain wins.
+    GitHub workflows) supply them, as does the customer recorded by the Deploy
+    Application form; the newest instance at a subdomain wins.
     """
     if not subdomains:
         return {}
@@ -68,6 +69,13 @@ async def load_instance_metadata_map(
             continue
         client_name = _parameter(instance, "customer_name")
         environment = _parameter(instance, "env_instance")
+        if client_name is None:
+            # Recorded from the Deploy Application form for templates whose
+            # workflow (or container) takes no customer parameter.
+            recorded = (instance.configuration or {}).get("customer_name")
+            if isinstance(recorded, str):
+                client_name = recorded
+                environment = environment or instance.instance_name
         if client_name is None and environment is None:
             continue
         metadata_by_subdomain[subdomain] = InstanceMetadata(

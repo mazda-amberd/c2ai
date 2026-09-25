@@ -36,6 +36,13 @@ class MetricUnit(str, Enum):
     GPUS = "gpus"
 
 
+class MetricPoint(BaseModel):
+    """One sample inside the requested window."""
+
+    timestamp: int = Field(description="Milliseconds since the epoch.")
+    value: float
+
+
 class MetricValue(BaseModel):
     """One metric for one scope; ``value`` is null when Grafana did not return it."""
 
@@ -43,6 +50,7 @@ class MetricValue(BaseModel):
     unit: MetricUnit = MetricUnit.PERCENT
     status: str | None = None
     available: bool = True
+    points: list[MetricPoint] = Field(default_factory=list)
 
 
 class Scope(BaseModel):

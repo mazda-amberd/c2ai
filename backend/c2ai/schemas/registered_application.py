@@ -535,6 +535,12 @@ class RegisteredApplicationDeploymentCreate(_ContractModel):
 class ContainerRegisteredApplicationDeploymentCreate(_ContractModel):
     """Deployment-specific values for one registered container template."""
 
+    customer_name: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=200,
+        description="Who this instance is deployed for; shown with the instance.",
+    )
     instance_name: str = Field(
         ...,
         min_length=1,

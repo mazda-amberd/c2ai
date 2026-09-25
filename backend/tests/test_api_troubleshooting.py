@@ -16,6 +16,7 @@ from c2ai.jobs import MemoryJobStore, Worker, get_job_notifier, get_job_store
 from c2ai.schemas.troubleshooting import (
     TroubleshootingEvent,
     TroubleshootingMetric,
+    TroubleshootingMetricPoint,
     TroubleshootingMetricQuery,
 )
 from c2ai.services import troubleshooting_report as reports
@@ -138,7 +139,15 @@ class FakeDataProvider:
             "end": end,
         }
         return [
-            metric.model_copy(update={"value": float(index + 1)})
+            metric.model_copy(
+                update={
+                    "value": float(index + 1),
+                    "points": [
+                        TroubleshootingMetricPoint(timestamp=start, value=0.5),
+                        TroubleshootingMetricPoint(timestamp=end, value=float(index + 1)),
+                    ],
+                }
+            )
             for index, metric in enumerate(unavailable_metrics(queries))
         ]
 
@@ -291,13 +300,15 @@ class TestTroubleshootingReport:
             "memory_usage",
             "network_in",
         ]
+        # The UI draws the samples itself; no image is rendered any more.
         assert all(
-            metric["plot_data_url"].startswith("data:image/svg+xml;base64,")
+            metric["plot_data_url"] is None
             for metric in report["application_metrics"]
         )
-        assert all(
-            "points" not in metric for metric in report["application_metrics"]
-        )
+        assert [
+            [point["value"] for point in metric["points"]]
+            for metric in report["application_metrics"]
+        ] == [[0.5, 1.0], [0.5, 2.0], [0.5, 3.0], [0.5, 4.0]]
         assert data_provider.metric_call_args["subdomain"] == "amberd-acme-ada"
         assert data_provider.metric_queries_call_args["subdomain"] == (
             "amberd-acme-ada"
@@ -541,14 +552,21 @@ class TestTroubleshootingJobs:
                 },
             )
             job_id = created.json()["job_id"]
-            response = deploy_auth_client.get(
-                f"/jobs/{job_id}/report.pdf"
-            )
+            with patch.object(
+                api, "build_troubleshooting_pdf", wraps=api.build_troubleshooting_pdf
+            ) as build_pdf:
+                response = deploy_auth_client.get(
+                    f"/jobs/{job_id}/report.pdf"
+                )
         finally:
             _clear_dependencies()
 
         assert response.status_code == 200
         assert response.headers["content-type"] == "application/pdf"
+        # The PDF is rebuilt from the stored job result, so the samples its
+        # charts draw must survive that round trip.
+        stored_report = build_pdf.call_args.args[0]
+        assert all(metric.points for metric in stored_report.application_metrics)
         assert response.headers["cache-control"] == "no-store"
         report_date = datetime.now().astimezone().strftime("%d-%m-%Y")
         assert response.headers["content-disposition"] == (

@@ -19,7 +19,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from c2ai.constants.registered_application import DeploymentInstanceStatus
+from c2ai.constants.registered_application import (
+    ADA_APPLICATION_ID,
+    DeploymentInstanceStatus,
+)
 from c2ai.deployments import operations
 from c2ai.deployments.configuration import (
     configured_version,
@@ -72,6 +75,15 @@ def _active_job_and_step(progress: dict[str, Any]) -> tuple[str | None, str | No
     return None, None
 
 
+def _application_name(instance: DeploymentInstance | None) -> str | None:
+    """Registered application shown on the operation's card; ADA cards show the customer."""
+    if instance is None or instance.application is None:
+        return None
+    if instance.application.id == ADA_APPLICATION_ID:
+        return None
+    return instance.application.name
+
+
 def _base_values(run: PipelineRun, instance: DeploymentInstance | None) -> dict[str, Any]:
     reference = (instance.dispatch_reference or {}) if instance is not None else {}
     finished = run.ended_at is not None
@@ -96,6 +108,7 @@ def _base_values(run: PipelineRun, instance: DeploymentInstance | None) -> dict[
         "current_step": None,
         "started_at": _iso(run.dispatched_at),
         "completed_at": _iso(run.ended_at),
+        "application_name": _application_name(instance),
     }
     if instance is not None:
         values["active_job"] = None if finished else _step_label(instance.current_step)

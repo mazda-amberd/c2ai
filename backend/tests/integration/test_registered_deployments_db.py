@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from c2ai.api.registered_applications import clients
 from c2ai.app import app
-from c2ai.auth.jwt import AthenaTokenUser, require_admin
+from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token, require_admin
 from c2ai.clients.container_registry import ContainerRegistryTag
 from c2ai.core.exceptions import ContainerImageTagNotFound
 from c2ai.db.session import get_db_session
@@ -19,6 +19,7 @@ from c2ai.deployments.service import DISPATCH_JOB, DispatchRequest
 from c2ai.jobs import PostgresJobStore, Worker, get_job_store
 from c2ai.jobs.handlers.deployments import track_open_operations
 from c2ai.jobs.worker import registered_handlers
+from c2ai.services.instance_metadata import load_instance_metadata_map
 from tests.integration.conftest import _SERVER_URL
 from tests.integration.test_deployments_db import FakeGitHub
 
@@ -228,6 +229,79 @@ async def test_github_deploy_falls_back_to_a_generated_name(env):
     assert response.json()["instance_name"] == "billing-sync-tier-3"
 
 
+async def test_the_deploy_forms_customer_is_recorded_but_not_sent_when_undeclared(env):
+    """The Deploy Application form always sends customer_name and env_instance.
+
+    A workflow that does not declare them must not receive them (workflow_dispatch
+    rejects undeclared inputs), and they must not rename the host label; the
+    customer is still recorded and shown with the instance.
+    """
+
+    client, github, _registry, session_factory = env
+    application_id = _register_github(client, parameters=("region",), name="Billing Sync")
+    response = client.post(
+        f"{BASE}/{application_id}/deployments",
+        json={
+            "tier": 3,
+            "instance_name": "billing-sync-tier-3",
+            "parameters": {
+                "region": "eu",
+                "customer_name": "Acme Corp",
+                "env_instance": "billing-sync-tier-3",
+            },
+        },
+    )
+    assert response.status_code == 201, response.text
+    deployment = response.json()
+    assert deployment["instance_name"] == "billing-sync-tier-3"
+    _workflow, inputs = github.dispatches[-1]
+    assert "customer_name" not in inputs and "env_instance" not in inputs
+    assert inputs["region"] == "eu"
+    assert deployment["configuration"]["customer_name"] == "Acme Corp"
+    assert "customer_name" not in deployment["configuration"]["parameters"]
+
+    async with session_factory() as db:
+        metadata = await load_instance_metadata_map(db, ["billing-sync-tier-3"])
+    assert metadata["billing-sync-tier-3"].client_name == "Acme Corp"
+    assert metadata["billing-sync-tier-3"].instance_name == "billing-sync-tier-3"
+
+    # Pending cards are titled with the registered application's name.
+    app.dependency_overrides[get_current_user_token] = lambda: AthenaTokenUser(identifier="admin")
+    try:
+        active = client.get("/api/pipeline/active")
+    finally:
+        app.dependency_overrides.pop(get_current_user_token, None)
+    assert active.status_code == 200, active.text
+    assert [(row["subdomain"], row["application_name"]) for row in active.json()] == [
+        ("billing-sync-tier-3", "Billing Sync")
+    ]
+
+
+async def test_declared_customer_parameters_still_reach_the_workflow(env):
+    client, github, _registry, _sf = env
+    application_id = _register_github(client)
+    response = client.post(
+        f"{BASE}/{application_id}/deployments",
+        json={"tier": 2, "version": "main", "instance_name": "chat-prod",
+              "parameters": {"customer_name": "acme", "env_instance": "chat-prod"}},
+    )
+    assert response.status_code == 201, response.text
+    _workflow, inputs = github.dispatches[-1]
+    assert (inputs["customer_name"], inputs["env_instance"]) == ("acme", "chat-prod")
+    assert response.json()["instance_name"] == "amberd-acme-chat-prod"
+
+
+async def test_undeclared_customer_name_must_be_text(env):
+    client, _github, _registry, _sf = env
+    application_id = _register_github(client, parameters=("region",))
+    response = client.post(
+        f"{BASE}/{application_id}/deployments",
+        json={"tier": 3, "parameters": {"region": "eu", "customer_name": 42}},
+    )
+    assert response.status_code == 422
+    assert "customer_name" in response.text
+
+
 async def test_github_upgrade_and_retry_of_a_failed_upgrade(env):
     client, github, _registry, session_factory = env
     application_id = _register_github(client)
@@ -278,6 +352,28 @@ async def test_container_deploy_validates_the_tag_and_sends_credentials(env):
     assert sent["llm_api_token"] == "llm-secret"
     assert len(sent["callback_token"]) == 64  # per-operation HMAC
     assert "registry-secret" not in response.text
+
+
+async def test_container_deploy_records_the_customer(env):
+    client, github, _registry, _sf = env
+    application_id = _register_container(client)
+    response = client.post(
+        f"{BASE}/{application_id}/tiers/2/deployments",
+        json={"instance_name": "chat-prod", "version": "1.2.3", "customer_name": "Acme Corp"},
+    )
+    assert response.status_code == 201, response.text
+    configuration = response.json()["configuration"]
+    assert configuration["customer_name"] == "Acme Corp"
+    # Not a container environment variable.
+    assert "customer_name" not in configuration["container"]["environment_variables"]
+    # Recorded only: the container pipeline's contract has no customer field.
+    assert "Acme Corp" not in str(github.events[-1][1])
+
+    blank = client.post(
+        f"{BASE}/{application_id}/tiers/2/deployments",
+        json={"instance_name": "chat-dev", "version": "1.2.3", "customer_name": "  "},
+    )
+    assert blank.status_code == 422
 
 
 async def test_container_upgrade_rollback_and_callbacks(env):

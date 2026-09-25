@@ -3,11 +3,16 @@
 All queries for a level go out in one Grafana request with a refId each. Grafana reports
 status per refId, so a single failing metric degrades that metric only while the rest of
 the payload is returned with ``degraded=true``.
+
+Each metric is asked for twice: an instant query gives ``value`` (as the dashboards
+show it) and a range query over the window, at the window's step, gives the ``points``
+the cards chart. A failed range query only loses that metric's chart.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -24,6 +29,7 @@ from c2ai.constants.prometheus import (
 from c2ai.constants.time_ranges import Window
 from c2ai.schemas.metrics import (
     MetricLevel,
+    MetricPoint,
     MetricSeries,
     MetricsError,
     MetricsResponse,
@@ -121,17 +127,33 @@ def _build_queries(level: MetricLevel, window: Window, tier: int | None) -> list
 
 
 
+def _range_ref(ref: str) -> str:
+    return f"{ref}_range"
+
+
+# A 2-day window at its 30-minute step is 96 samples; this only guards custom windows.
+_MAX_POINTS = 200
+
+
 async def _fetch(client: GrafanaClient, window: Window, queries: list[_Query]) -> dict[str, Any]:
-    """Run every query in one Grafana request, evaluated at the window's end."""
+    """Run every query in one Grafana request: at the window's end, and across it."""
+    datasource = get_grafana_prometheus_datasource()
     body = {
         "queries": [
-            {
-                "refId": q.ref,
-                "datasource": get_grafana_prometheus_datasource(),
-                "expr": q.expr,
-                "instant": True,
-            }
+            request
             for q in queries
+            for request in (
+                {"refId": q.ref, "datasource": datasource, "expr": q.expr, "instant": True},
+                {
+                    "refId": _range_ref(q.ref),
+                    "datasource": datasource,
+                    "expr": q.expr,
+                    "instant": False,
+                    "range": True,
+                    "intervalMs": window.step_seconds * 1000,
+                    "maxDataPoints": _MAX_POINTS,
+                },
+            )
         ],
         "from": str(int(window.start.timestamp() * 1000)),
         "to": str(int(window.end.timestamp() * 1000)),
@@ -168,6 +190,46 @@ def _round(value: float) -> float:
     return round(value * 1000) / 1000
 
 
+def _frame_points(frame: dict) -> dict[int, float]:
+    """Samples of one range frame, keyed by epoch milliseconds."""
+    values = (frame.get("data") or {}).get("values") or []
+    if len(values) < 2:
+        return {}
+    samples: dict[int, float] = {}
+    for timestamp, value in zip(values[0], values[1]):
+        if (
+            isinstance(timestamp, (int, float))
+            and isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+        ):
+            samples[int(timestamp)] = float(value)
+    return samples
+
+
+def _points(samples: dict[int, float]) -> list[MetricPoint]:
+    return [
+        MetricPoint(timestamp=timestamp, value=_round(value))
+        for timestamp, value in sorted(samples.items())[-_MAX_POINTS:]
+    ]
+
+
+def _range_frames(payload: dict[str, Any], query: _Query) -> list[dict]:
+    frames, error = _frames(payload, _range_ref(query.ref))
+    if error:
+        logger.warning("Grafana series for %s failed: %s", query.metric, error)
+    return frames
+
+
+def _summed_points(frames: list[dict]) -> list[MetricPoint]:
+    """One series for a scope-level metric, summing frames the way ``_scalar`` does."""
+    totals: dict[int, float] = {}
+    for frame in frames:
+        for timestamp, value in _frame_points(frame).items():
+            totals[timestamp] = totals.get(timestamp, 0.0) + value
+    return _points(totals)
+
+
 def _scalar(frames: list[dict]) -> float | None:
     """Single value for a scope-level metric; None when Grafana returned nothing."""
     total = 0.0
@@ -197,13 +259,24 @@ def build_series(
             logger.warning("Grafana metric %s failed: %s", query.metric, error)
             errors.append(MetricsError(metric=query.metric, message=_GRAFANA_ERROR))
 
+        range_frames = [] if error else _range_frames(payload, query)
         if query.scope_id is not None:
             bucket = fixed.setdefault(query.scope_id, {})
             value = None if error else _scalar(frames)
             bucket[query.metric] = MetricValue(
-                value=value, unit=query.unit, available=value is not None
+                value=value,
+                unit=query.unit,
+                available=value is not None,
+                points=_summed_points(range_frames) if value is not None else [],
             )
             continue
+
+        series_by_workload: dict[tuple[str, str], list[MetricPoint]] = {}
+        for frame in range_frames:
+            labels = _labels_and_value(frame)[0]
+            namespace, deployment = labels.get("namespace"), labels.get("deployment")
+            if namespace and deployment:
+                series_by_workload[(namespace, deployment)] = _points(_frame_points(frame))
 
         for frame in frames:
             labels, value = _labels_and_value(frame)
@@ -214,6 +287,11 @@ def build_series(
                 value=_round(value) if value is not None else None,
                 unit=query.unit,
                 available=value is not None,
+                points=(
+                    series_by_workload.get((namespace, deployment), [])
+                    if value is not None
+                    else []
+                ),
             )
 
     series = [

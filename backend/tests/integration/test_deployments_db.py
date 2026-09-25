@@ -198,6 +198,7 @@ async def test_ada_deploy_is_a_registered_deployment_with_legacy_inputs(client, 
     calls = github.calls
     [active] = _active(client)
     assert (active["id"], active["gh_status"]) == (operation["id"], "queued")
+    assert active["application_name"] is None  # ADA cards are titled by customer
     assert github.calls == calls  # status reads never call GitHub
     await _track(session_factory)  # the tracker does
     assert github.calls > calls

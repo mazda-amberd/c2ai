@@ -215,6 +215,9 @@ class PipelineRunOut(BaseModel):
     operation: str
     event_type: str
     triggered_by: str
+    # The registered application being deployed; None for ADA, whose cards
+    # are titled by customer instead.
+    application_name: str | None = None
     run_id: int | None = None
     tier: int | None = None
     branch: str | None = None

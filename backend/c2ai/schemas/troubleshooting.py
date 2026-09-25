@@ -105,11 +105,12 @@ class TroubleshootingMetric(BaseModel):
     label: str
     value: float | None = None
     unit: str = ""
+    # No longer rendered: the UI and the PDF both draw ``points``. Kept so
+    # the contract matches Athena's.
     plot_data_url: str | None = Field(default=None, max_length=100_000)
     points: list[TroubleshootingMetricPoint] = Field(
         default_factory=list,
         max_length=120,
-        exclude=True,
     )
 
 

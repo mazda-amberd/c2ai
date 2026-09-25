@@ -9,7 +9,11 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from c2ai.config import get_settings
-from c2ai.constants.registered_application import ApplicationType
+from c2ai.constants.registered_application import (
+    CUSTOMER_NAME_PARAMETER,
+    DEPLOYMENT_IDENTITY_PARAMETERS,
+    ApplicationType,
+)
 from c2ai.core.exceptions import UnprocessableEntityError
 from c2ai.models.registered_application import RegisteredApplicationVersion
 from c2ai.schemas.registered_application import (
@@ -229,6 +233,7 @@ def build_container_deployment_configuration(
     service_type = "Ingress" if template.expose_public_service else "ClusterIP"
     return {
         "parameters": resolved_parameters,
+        **({CUSTOMER_NAME_PARAMETER: payload.customer_name} if payload.customer_name else {}),
         **({"llm": llm} if llm is not None else {}),
         "container": {
             "registry": template.registry,
@@ -353,6 +358,31 @@ def _resolve_deployment_parameters(
     return resolved_parameters
 
 
+def _undeclared_identity_values(
+    version: RegisteredApplicationVersion,
+    supplied_parameters: dict[str, Any],
+) -> dict[str, str]:
+    """Customer and environment values sent for a workflow that does not declare them.
+
+    They are recorded on the deployment (``customer_name`` names who it is for)
+    but kept out of the workflow inputs and out of the host label, since the
+    workflow never receives them.
+    """
+
+    declared = {definition.key for definition in version.parameters}
+    values: dict[str, str] = {}
+    for key in DEPLOYMENT_IDENTITY_PARAMETERS - declared:
+        if key not in supplied_parameters:
+            continue
+        value = supplied_parameters[key]
+        if not isinstance(value, str) or not value.strip() or len(value) > 200:
+            raise UnprocessableEntityError(
+                f"Deployment parameter '{key}' must be text of at most 200 characters."
+            )
+        values[key] = value.strip()
+    return values
+
+
 def build_deployment_configuration(
     version: RegisteredApplicationVersion,
     payload: RegisteredApplicationDeploymentCreate,
@@ -369,6 +399,9 @@ def build_deployment_configuration(
 
     resolved_instance_name = instance_name or payload.instance_name or ""
     supplied_parameters = dict(payload.parameters)
+    identity = _undeclared_identity_values(version, supplied_parameters)
+    for key in identity:
+        del supplied_parameters[key]
     if payload.version is not None and any(p.key == "branch" for p in version.parameters):
         supplied_parameters["branch"] = payload.version
     resolved_parameters = _resolve_deployment_parameters(
@@ -385,8 +418,12 @@ def build_deployment_configuration(
     if github is None:
         raise RuntimeError("GitHub registered application has no workflow configuration")
     llm = _runtime_llm_configuration(version, payload.tier)
+    customer_name = resolved_parameters.get(CUSTOMER_NAME_PARAMETER)
+    if not isinstance(customer_name, str) or not customer_name.strip():
+        customer_name = identity.get(CUSTOMER_NAME_PARAMETER)
     return {
         "parameters": resolved_parameters,
+        **({CUSTOMER_NAME_PARAMETER: customer_name} if customer_name else {}),
         **({"llm": llm} if llm is not None else {}),
         "github": {
             "connection": github.github_connection_id,
