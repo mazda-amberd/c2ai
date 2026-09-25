@@ -1,6 +1,6 @@
 """Who may call what: Admins change things, Users look.
 
-Admins create and delete application templates, deploy, update, move,
+Admins create, edit and delete application templates, deploy, update, move,
 terminate and cancel, and manage GitHub connections and people. A User
 sees what runs on the tiers, browses the catalog of templates, reads
 metrics and logs, and troubleshoots.
@@ -45,9 +45,10 @@ ADMIN = {
     ("GET", "/api/registered-applications/deployments/{deployment_id}"),
     ("GET", "/api/registered-applications/{application_id}/github-tags"),
     ("GET", "/api/registered-applications/{application_id}/image-tags"),
-    # Application templates: registering, deleting, their secrets.
+    # Application templates: registering, editing, deleting, their secrets.
     ("POST", "/api/registered-applications/github"),
     ("POST", "/api/registered-applications/container"),
+    ("PUT", "/api/registered-applications/{application_id}"),
     ("DELETE", "/api/registered-applications/{application_id}"),
     ("GET", "/api/registered-applications/{application_id}/secrets"),
     ("POST", "/api/registered-applications/{application_id}/secrets"),
@@ -194,6 +195,7 @@ DEPLOY_BODY = {
         ("post", "/api/deploy/terminate", {"subdomain": "amberd-acme-ada"}),
         ("post", "/api/pipeline/cancel", {"pipeline_run_id": "run-1"}),
         ("get", "/api/github/branches?repo=devops", None),
+        ("put", f"/api/registered-applications/{uuid4()}", {}),
         ("delete", f"/api/registered-applications/{uuid4()}", None),
         ("post", f"/api/registered-applications/{uuid4()}/tiers/1/deployments", {}),
     ],

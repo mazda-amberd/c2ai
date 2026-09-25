@@ -1,4 +1,4 @@
-"""The registered-application catalog: registration, versions, listing, deletion.
+"""The registered-application catalog: registration, edits, versions, listing, deletion.
 
 Functions here only flush; the route commits.
 """
@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+from pydantic import SecretStr
 from sqlalchemy import and_, exists, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,20 +18,24 @@ from sqlalchemy.orm import aliased, joinedload, selectinload
 
 from c2ai.constants.registered_application import (
     ACTIVE_DEPLOYMENT_INSTANCE_STATUSES,
+    ADA_APPLICATION_ID,
     ApplicationStatus,
     ApplicationType,
     ParameterType,
 )
 from c2ai.core.exceptions import (
+    BuiltInApplicationNotEditable,
     DuplicateRegisteredApplication,
     RegisteredApplicationHasManagedSecrets,
     RegisteredApplicationHasRunningInstances,
     RegisteredApplicationNotFound,
+    UnprocessableEntityError,
 )
 from c2ai.db.errors import violated_constraint
 from c2ai.models.registered_application import (
     ApplicationLLMConfiguration,
     ApplicationParameterDefinition,
+    ApplicationSecretReference,
     ContainerApplicationConfiguration,
     ContainerApplicationSecret,
     DeploymentInstance,
@@ -40,7 +45,10 @@ from c2ai.models.registered_application import (
 )
 from c2ai.schemas.registered_application import (
     ContainerRegisteredApplicationCreate,
+    ContainerRegisteredApplicationUpdate,
     GitHubRegisteredApplicationCreate,
+    GitHubRegisteredApplicationUpdate,
+    LLMConfigurationCreate,
 )
 from c2ai.security import crypto
 
@@ -65,6 +73,12 @@ class RegisteredApplicationCatalogRecord:
         """Deletion needs no active instances and no provider-held secrets."""
 
         return self.total_deployed_instances == 0 and self.managed_secret_count == 0
+
+    @property
+    def can_edit(self) -> bool:
+        """An edit waits until nothing of the template is deployed; ADA is never edited here."""
+
+        return self.total_deployed_instances == 0 and self.application.id != ADA_APPLICATION_ID
 
 
 @dataclass(frozen=True)
@@ -106,6 +120,132 @@ async def _persist_new_application(
         raise
 
 
+def _sealed(secret: SecretStr | None, *, column: str, kept: bytes | None) -> bytes | None:
+    """Encrypt a newly supplied secret; without one, the stored one carries over."""
+
+    if secret is None:
+        return kept
+    return crypto.encrypt(secret.get_secret_value(), column=column)
+
+
+def _llm_configuration(
+    llm: LLMConfigurationCreate,
+    *,
+    kept: ApplicationLLMConfiguration | None,
+) -> ApplicationLLMConfiguration:
+    token = _sealed(
+        llm.api_token,
+        column=crypto.LLM_API_TOKEN,
+        kept=kept.api_token_encrypted if kept else None,
+    )
+    if token is None:
+        raise UnprocessableEntityError(
+            "Enter the LLM API token: none is stored for this application yet.",
+            code="LLMApiTokenRequired",
+        )
+    return ApplicationLLMConfiguration(
+        endpoint=llm.endpoint,
+        api_token_encrypted=token,
+        model_name=llm.model_name,
+    )
+
+
+def _github_version(
+    payload: GitHubRegisteredApplicationCreate,
+    *,
+    number: int,
+    created_by: str,
+    previous: RegisteredApplicationVersion | None = None,
+) -> RegisteredApplicationVersion:
+    """A GitHub Workflow version graph; ``previous`` supplies secrets left out of an edit."""
+
+    application_version = RegisteredApplicationVersion(
+        version=number,
+        description=payload.description,
+        created_by=created_by,
+    )
+    application_version.github_configuration = GitHubApplicationConfiguration(
+        github_connection_id=payload.github.github_connection_id,
+        trigger_method=payload.github.trigger_method.value,
+        repository=payload.github.repository,
+        code_repository=payload.github.code_repository,
+        workflow_file_path=payload.github.workflow_file_path,
+        ref=payload.github.ref,
+    )
+    application_version.llm_configuration = _llm_configuration(
+        payload.llm, kept=previous.llm_configuration if previous else None
+    )
+    application_version.parameters = [
+        ApplicationParameterDefinition(
+            position=position,
+            label=parameter.key,
+            key=parameter.key,
+            parameter_type=parameter.parameter_type.value,
+            required=True,
+            default_value=None,
+            options=[],
+        )
+        for position, parameter in enumerate(payload.parameters)
+    ]
+    return application_version
+
+
+def _container_version(
+    payload: ContainerRegisteredApplicationCreate,
+    *,
+    number: int,
+    created_by: str,
+    previous: RegisteredApplicationVersion | None = None,
+) -> RegisteredApplicationVersion:
+    """A Containerized version graph; ``previous`` supplies secrets left out of an edit."""
+
+    kept = previous.container_configuration if previous else None
+    application_version = RegisteredApplicationVersion(
+        version=number,
+        description=payload.description,
+        created_by=created_by,
+    )
+    application_version.container_configuration = ContainerApplicationConfiguration(
+        registry=payload.container.registry,
+        registry_credential_id=kept.registry_credential_id if kept else None,
+        registry_username=payload.container.registry_username,
+        registry_password_encrypted=_sealed(
+            payload.container.registry_password,
+            column=crypto.REGISTRY_PASSWORD,
+            kept=kept.registry_password_encrypted if kept else None,
+        ),
+        image_repository=payload.container.image_registry,
+        default_image_tag=payload.container.tag,
+        image_pull_policy=payload.container.pull_policy.value,
+        container_port=payload.container.port,
+        expose_public_service=payload.container.expose_public_service,
+        gpu_request=payload.container.gpu_request,
+        cpu_request=payload.container.cpu_request,
+        memory_request=payload.container.memory_request,
+        scaling=payload.container.scaling,
+        storage=payload.container.storage,
+        environment_variables=list(kept.environment_variables or []) if kept else [],
+    )
+    application_version.llm_configuration = _llm_configuration(
+        payload.llm, kept=previous.llm_configuration if previous else None
+    )
+    # Container environment values are fixed at registration, so each key is
+    # stored with the value every deployment of this template will use.
+    application_version.parameters = [
+        ApplicationParameterDefinition(
+            position=position,
+            label=parameter.key,
+            key=parameter.key,
+            parameter_type=ParameterType.TEXT.value,
+            required=True,
+            default_value=parameter.value,
+            options=[],
+        )
+        for position, parameter in enumerate(payload.parameters)
+    ]
+    return application_version
+
+
 async def create_github_registered_application(
     db: AsyncSession,
     payload: GitHubRegisteredApplicationCreate,
@@ -124,38 +264,7 @@ async def create_github_registered_application(
         current_version=1,
         created_by=created_by,
     )
-    application_version = RegisteredApplicationVersion(
-        version=1,
-        description=payload.description,
-        created_by=created_by,
-    )
-    application_version.github_configuration = GitHubApplicationConfiguration(
-        github_connection_id=payload.github.github_connection_id,
-        trigger_method=payload.github.trigger_method.value,
-        repository=payload.github.repository,
-        code_repository=payload.github.code_repository,
-        workflow_file_path=payload.github.workflow_file_path,
-        ref=payload.github.ref,
-    )
-    application_version.llm_configuration = ApplicationLLMConfiguration(
-        endpoint=payload.llm.endpoint,
-        api_token_encrypted=crypto.encrypt(
-            payload.llm.api_token.get_secret_value(), column=crypto.LLM_API_TOKEN
-        ),
-        model_name=payload.llm.model_name,
-    )
-    application_version.parameters = [
-        ApplicationParameterDefinition(
-            position=position,
-            label=parameter.key,
-            key=parameter.key,
-            parameter_type=parameter.parameter_type.value,
-            required=True,
-            default_value=None,
-            options=[],
-        )
-        for position, parameter in enumerate(payload.parameters)
-    ]
+    application_version = _github_version(payload, number=1, created_by=created_by)
     application.versions.append(application_version)
 
     await _persist_new_application(db, application)
@@ -187,52 +296,7 @@ async def create_container_registered_application(
         current_version=1,
         created_by=created_by,
     )
-    application_version = RegisteredApplicationVersion(
-        version=1,
-        description=payload.description,
-        created_by=created_by,
-    )
-    application_version.container_configuration = ContainerApplicationConfiguration(
-        registry=payload.container.registry,
-        registry_credential_id=None,
-        registry_username=payload.container.registry_username,
-        registry_password_encrypted=crypto.encrypt(
-            payload.container.registry_password.get_secret_value(),
-            column=crypto.REGISTRY_PASSWORD,
-        ),
-        image_repository=payload.container.image_registry,
-        default_image_tag=payload.container.tag,
-        image_pull_policy=payload.container.pull_policy.value,
-        container_port=payload.container.port,
-        expose_public_service=payload.container.expose_public_service,
-        gpu_request=payload.container.gpu_request,
-        cpu_request=payload.container.cpu_request,
-        memory_request=payload.container.memory_request,
-        scaling=payload.container.scaling,
-        storage=payload.container.storage,
-        environment_variables=[],
-    )
-    application_version.llm_configuration = ApplicationLLMConfiguration(
-        endpoint=payload.llm.endpoint,
-        api_token_encrypted=crypto.encrypt(
-            payload.llm.api_token.get_secret_value(), column=crypto.LLM_API_TOKEN
-        ),
-        model_name=payload.llm.model_name,
-    )
-    # Container environment values are fixed at registration, so each key is
-    # stored with the value every deployment of this template will use.
-    application_version.parameters = [
-        ApplicationParameterDefinition(
-            position=position,
-            label=parameter.key,
-            key=parameter.key,
-            parameter_type=ParameterType.TEXT.value,
-            required=True,
-            default_value=parameter.value,
-            options=[],
-        )
-        for position, parameter in enumerate(payload.parameters)
-    ]
+    application_version = _container_version(payload, number=1, created_by=created_by)
     application.versions.append(application_version)
 
     await _persist_new_application(db, application)
@@ -244,6 +308,111 @@ async def create_container_registered_application(
         created_by,
     )
     return application_version
+
+
+async def _active_instances(db: AsyncSession, application_id: UUID) -> list[tuple[str, int]]:
+    """(name, tier) of every instance of the template that is not finished."""
+
+    result = await db.execute(
+        select(DeploymentInstance.instance_name, DeploymentInstance.tier)
+        .where(
+            DeploymentInstance.application_id == application_id,
+            DeploymentInstance.status.in_(ACTIVE_DEPLOYMENT_INSTANCE_STATUSES),
+        )
+        .order_by(DeploymentInstance.tier.asc(), DeploymentInstance.instance_name.asc())
+    )
+    return [(str(name), int(tier)) for name, tier in result.all()]
+
+
+async def _locked_application(db: AsyncSession, application_id: UUID) -> RegisteredApplication:
+    result = await db.execute(
+        select(RegisteredApplication)
+        .where(
+            RegisteredApplication.id == application_id,
+            RegisteredApplication.deleted_at.is_(None),
+        )
+        .with_for_update()
+    )
+    application = result.scalar_one_or_none()
+    if application is None:
+        raise RegisteredApplicationNotFound(application_id)
+    return application
+
+
+async def update_registered_application(
+    db: AsyncSession,
+    application_id: UUID,
+    payload: GitHubRegisteredApplicationUpdate | ContainerRegisteredApplicationUpdate,
+    *,
+    updated_by: str,
+) -> RegisteredApplicationVersion:
+    """Save an edit as the template's next version, while nothing of it is deployed.
+
+    Deployments point at the version they ran, so an edit never rewrites one:
+    it adds the next, and a finished instance still shows what it ran. A
+    secret left out of the edit carries over from the current version.
+    """
+
+    application = await _locked_application(db, application_id)
+    # ADA's workflow settings are synced from configuration, and the tier
+    # pages deploy it with fixed parameters.
+    if application.id == ADA_APPLICATION_ID:
+        raise BuiltInApplicationNotEditable(application.name)
+    if payload.application_type.value != application.application_type:
+        raise UnprocessableEntityError(
+            "An application's type cannot be changed. Register a new application instead.",
+            code="RegisteredApplicationTypeChange",
+        )
+    remaining = await _active_instances(db, application_id)
+    if remaining:
+        raise RegisteredApplicationHasRunningInstances(
+            application.name, remaining, action="edited"
+        )
+    if payload.name.lower() != application.name.lower() and await get_registered_application_by_name(
+        db, payload.name
+    ):
+        raise DuplicateRegisteredApplication(payload.name)
+
+    previous = await get_current_registered_application_version(db, application_id)
+    if previous is None:
+        raise RegisteredApplicationNotFound(application_id)
+    number = application.current_version + 1
+    if isinstance(payload, GitHubRegisteredApplicationUpdate):
+        version = _github_version(payload, number=number, created_by=updated_by, previous=previous)
+    else:
+        version = _container_version(payload, number=number, created_by=updated_by, previous=previous)
+    version.secret_references = [
+        ApplicationSecretReference(
+            position=reference.position,
+            label=reference.label,
+            key=reference.key,
+            required=reference.required,
+            secret_reference=reference.secret_reference,
+        )
+        for reference in previous.secret_references
+    ]
+    # Set from this side: application.versions is not loaded, and loading it
+    # just to append would read every version.
+    version.application = application
+    db.add(version)
+    application.name = payload.name
+    application.current_version = number
+    application.updated_by = updated_by
+    try:
+        await db.flush()
+    except IntegrityError as error:
+        if violated_constraint(error) == _APPLICATION_NAME_CONSTRAINT:
+            raise DuplicateRegisteredApplication(payload.name) from error
+        raise
+
+    logger.info(
+        "Edited registered application id=%s name=%s version=%s by=%s",
+        application.id,
+        application.name,
+        number,
+        updated_by,
+    )
+    return version
 
 
 def _catalog_filters(
@@ -445,27 +614,8 @@ async def delete_registered_application(
 ) -> None:
     """Soft-delete a template after locking it and checking active instances."""
 
-    application_result = await db.execute(
-        select(RegisteredApplication)
-        .where(
-            RegisteredApplication.id == application_id,
-            RegisteredApplication.deleted_at.is_(None),
-        )
-        .with_for_update()
-    )
-    application = application_result.scalar_one_or_none()
-    if application is None:
-        raise RegisteredApplicationNotFound(application_id)
-
-    instance_result = await db.execute(
-        select(DeploymentInstance.instance_name, DeploymentInstance.tier)
-        .where(
-            DeploymentInstance.application_id == application_id,
-            DeploymentInstance.status.in_(ACTIVE_DEPLOYMENT_INSTANCE_STATUSES),
-        )
-        .order_by(DeploymentInstance.tier.asc(), DeploymentInstance.instance_name.asc())
-    )
-    remaining_instances = [(str(name), int(tier)) for name, tier in instance_result.all()]
+    application = await _locked_application(db, application_id)
+    remaining_instances = await _active_instances(db, application_id)
     if remaining_instances:
         raise RegisteredApplicationHasRunningInstances(
             application.name,

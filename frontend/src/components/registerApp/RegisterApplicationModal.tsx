@@ -22,12 +22,15 @@ import {
   PANEL_BACKGROUND,
   Select,
 } from "./wizardStyles";
-import { isApplicationNameTaken } from "@/utils/registeredAppsApi";
+import { getRegisteredApplication } from "@api/services/registeredApplications";
+import { isApplicationNameTaken, type RegisteredApp } from "@/utils/registeredAppsApi";
 import {
   emptyParameterDef,
   fetchContainerRegistries,
   fetchGithubConnections,
   registerApplication,
+  registrationFromDetail,
+  saveApplicationEdit,
   saveGithubConnection,
   validateGithubConnection,
   type AppRegistration,
@@ -45,7 +48,10 @@ type Kind = "github" | "container";
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** After a registration, or a saved edit. */
   onRegistered?: () => void;
+  /** The template to edit; absent to register a new one. */
+  editing?: RegisteredApp | null;
 };
 
 type StepDef = {
@@ -551,14 +557,30 @@ const emptyContainerValues = (): ContainerFormValues => ({
   ...DEFAULT_LLM,
 });
 
+/** Shown in an edit's secret fields: blank keeps the stored secret. */
+const KEEP_SECRET = "Unchanged — type a new one to replace it";
+
 export default function RegisterApplicationModal({
   open,
   onOpenChange,
   onRegistered,
+  editing = null,
 }: Props) {
   const [kind, setKind] = useState<Kind>("github");
   const [stepIndex, setStepIndex] = useState(0);
   const [submitting, setSubmitting] = useState(false);
+  // The template toast system surfaces validation, as the template does.
+  const { showToast } = useToast();
+
+  /* Editing: the saved template fills the wizard. "loading" until it has,
+   * an error if it could not be read. */
+  const [edit, setEdit] = useState<{ status: "loading" | "ready" | "error"; message: string }>({
+    status: "ready",
+    message: "",
+  });
+  // Whether the template already has an LLM token, which a blank field keeps.
+  const [storedLlmToken, setStoredLlmToken] = useState(false);
+  const editingId = editing?.id;
 
   const githubFormApi = useForm<GithubFormValues>({
     mode: "onChange",
@@ -593,7 +615,10 @@ export default function RegisterApplicationModal({
 
   const [registries, setRegistries] = useState<ContainerRegistryOption[]>([]);
 
-  const steps = kind === "container" ? CONTAINER_STEPS : GITHUB_STEPS;
+  // An edit keeps the application's type, so it has no type step.
+  const steps = (kind === "container" ? CONTAINER_STEPS : GITHUB_STEPS).filter(
+    (s) => !editing || s.id !== "type",
+  );
   const stepIndexClamped = Math.min(stepIndex, steps.length - 1);
   const step = steps[stepIndexClamped];
   const name = kind === "container" ? containerForm.name : githubForm.name;
@@ -613,6 +638,38 @@ export default function RegisterApplicationModal({
       .catch(() => setConnections([]));
     fetchContainerRegistries().then(setRegistries);
   }, [open]);
+
+  useEffect(() => {
+    if (!open || !editingId) return;
+    let cancelled = false;
+    setEdit({ status: "loading", message: "" });
+    // The connections too, so the saved one is an option when the form fills.
+    Promise.all([
+      getRegisteredApplication(editingId),
+      fetchGithubConnections().catch(() => [] as GithubConnection[]),
+    ])
+      .then(([detail, saved]) => {
+        if (cancelled) return;
+        setConnections(saved);
+        const { kind: savedKind, ...values } = registrationFromDetail(detail);
+        if (savedKind === "github") githubFormApi.reset(values as GithubFormValues);
+        else containerFormApi.reset(values as ContainerFormValues);
+        setKind(savedKind);
+        setStepIndex(0);
+        setStoredLlmToken(detail.llm !== null);
+        setEdit({ status: "ready", message: "" });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setEdit({
+          status: "error",
+          message: err instanceof Error ? err.message : "Could not load the application.",
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, editingId, githubFormApi, containerFormApi]);
 
   /** The Basic step's fields are entered before the type is chosen, into
    *  whichever form is active at the time. Switching type must carry them
@@ -644,6 +701,8 @@ export default function RegisterApplicationModal({
     setShowConnForm(false);
     setNewConn({ name: "", repoUrl: "", token: "" });
     setValidation({ status: "idle", message: "" });
+    setEdit({ status: "ready", message: "" });
+    setStoredLlmToken(false);
   };
 
   const handleClose = (next: boolean) => {
@@ -653,15 +712,14 @@ export default function RegisterApplicationModal({
 
   const nameError = useMemo(() => {
     if (!name.trim()) return null;
-    return isApplicationNameTaken(name)
+    return isApplicationNameTaken(name, editingId)
       ? "An application with this name already exists."
       : null;
-  }, [name]);
+  }, [name, editingId]);
 
   /* ---------------- Validation gating Next ---------------- */
   // The template surfaces these as showToast(...) calls, not inline
   // banners — matched here via the app's toast system.
-  const { showToast } = useToast();
 
   const validateStep = (): boolean => {
     switch (step.id) {
@@ -692,11 +750,16 @@ export default function RegisterApplicationModal({
           return fail("Container Registry is required.");
         if (!containerForm.imageRegistry.trim())
           return fail("Image Registry is required.");
+        // An edit may leave the password blank: the stored one is kept.
         if (
           !containerForm.registryUsername.trim() ||
-          !containerForm.registryPassword.trim()
+          (!editing && !containerForm.registryPassword.trim())
         ) {
-          return fail("Registry Username and Password / Token are required.");
+          return fail(
+            editing
+              ? "Registry Username is required."
+              : "Registry Username and Password / Token are required.",
+          );
         }
         if (!containerForm.tag.trim()) return fail("Default Image Tag is required.");
         if (!containerForm.port.trim()) return fail("Container Port is required.");
@@ -709,9 +772,10 @@ export default function RegisterApplicationModal({
         return true;
       case "llm": {
         const f = kind === "container" ? containerForm : githubForm;
+        const tokenKept = !!editing && storedLlmToken;
         if (
           !f.llmEndpoint.trim() ||
-          !f.llmApiToken.trim() ||
+          (!tokenKept && !f.llmApiToken.trim()) ||
           !f.llmModelName.trim()
         ) {
           return fail(
@@ -807,14 +871,21 @@ export default function RegisterApplicationModal({
         kind === "github"
           ? { kind: "github", ...githubFormApi.getValues() }
           : { kind: "container", ...containerFormApi.getValues() };
-      await registerApplication(registration);
-      showToast(`"${registration.name}" registered successfully.`);
+      if (editing) {
+        const { version } = await saveApplicationEdit(editing.id, registration);
+        showToast(`"${registration.name.trim()}" saved as version ${version}.`);
+      } else {
+        await registerApplication(registration);
+        showToast(`"${registration.name}" registered successfully.`);
+      }
       onRegistered?.();
       handleClose(false);
     } catch (err) {
-      // 409 / 422 from the API (duplicate name, contract violation) — surface
-      // the backend's detail message in the template's toast.
-      showToast(err instanceof Error ? err.message : "Registration failed.");
+      // 409 / 422 from the API (duplicate name, contract violation, an
+      // instance deployed meanwhile) — surface the backend's detail message
+      // in the template's toast.
+      const fallback = editing ? "Could not save the application." : "Registration failed.";
+      showToast(err instanceof Error ? err.message : fallback);
     } finally {
       setSubmitting(false);
     }
@@ -864,7 +935,7 @@ export default function RegisterApplicationModal({
               Step {stepIndexClamped + 1} of {steps.length} · {step.kicker}
             </p>
             <h3 className="text-lg font-bold text-[#eef2f6]">
-              Register Application
+              {editing ? `Edit ${editing.name}` : "Register Application"}
             </h3>
           </div>
         </div>
@@ -874,7 +945,23 @@ export default function RegisterApplicationModal({
 
         {/* Body */}
         <div className="space-y-2">
-          {step.id === "basic" && (
+          {edit.status === "loading" && (
+            <p className="flex items-center gap-2 py-6 text-[12.5px] text-[#8b97a5]">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading the application…
+            </p>
+          )}
+          {edit.status === "error" && (
+            <p role="alert" className="py-6 text-[12.5px] text-[#f0655f]">
+              Could not load the application: {edit.message}
+            </p>
+          )}
+          {edit.status === "ready" && editing && step.id === "basic" && (
+            <p className="rounded-[8px] border border-[#1c2836] px-3 py-2 text-[12px] text-[#8b97a5]">
+              Saving makes this version {editing.version + 1}. Anything deployed from now on
+              uses it; past deployments keep the version they ran.
+            </p>
+          )}
+          {edit.status === "ready" && step.id === "basic" && (
             <>
               <Field label="Application Name" required>
                 <input
@@ -901,7 +988,7 @@ export default function RegisterApplicationModal({
             </>
           )}
 
-          {step.id === "type" && (
+          {edit.status === "ready" && step.id === "type" && (
             <ChoiceList
               value={kind}
               onChange={handleKindChange}
@@ -922,7 +1009,7 @@ export default function RegisterApplicationModal({
             />
           )}
 
-          {step.id === "workflow" && (
+          {edit.status === "ready" && step.id === "workflow" && (
             <>
               <Field label="GitHub Connection" required>
                 <Select {...githubFormApi.register("connectionId")}>
@@ -1091,7 +1178,7 @@ export default function RegisterApplicationModal({
             </>
           )}
 
-          {step.id === "container" && (
+          {edit.status === "ready" && step.id === "container" && (
             <>
               <Field label="Container Registry" required>
                 <Select {...containerFormApi.register("containerRegistry")}>
@@ -1121,10 +1208,12 @@ export default function RegisterApplicationModal({
                     {...containerFormApi.register("registryUsername")}
                   />
                 </Field>
-                <Field label="Registry Password / Token" required>
+                <Field label="Registry Password / Token" required={!editing}>
                   <input
                     type="password"
+                    autoComplete="new-password"
                     className={FIELD_CLASS}
+                    placeholder={editing ? KEEP_SECRET : undefined}
                     {...containerFormApi.register("registryPassword")}
                   />
                 </Field>
@@ -1162,7 +1251,7 @@ export default function RegisterApplicationModal({
             </>
           )}
 
-          {step.id === "resources" && (
+          {edit.status === "ready" && step.id === "resources" && (
             <>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="CPU Request" optional>
@@ -1191,7 +1280,7 @@ export default function RegisterApplicationModal({
             </>
           )}
 
-          {step.id === "params" && kind === "github" && (
+          {edit.status === "ready" && step.id === "params" && kind === "github" && (
             <TypedParamsTable
               rows={githubForm.parameters}
               onAdd={() => githubParams.append(emptyParameterDef())}
@@ -1208,7 +1297,7 @@ export default function RegisterApplicationModal({
             />
           )}
 
-          {step.id === "params" && kind === "container" && (
+          {edit.status === "ready" && step.id === "params" && kind === "container" && (
             <ParamsTable
               title="Environment Variables"
               addLabel="Add Variable"
@@ -1225,7 +1314,7 @@ export default function RegisterApplicationModal({
             />
           )}
 
-          {step.id === "llm" && (
+          {edit.status === "ready" && step.id === "llm" && (
             <>
               <Field label="LLM Endpoint" required>
                 <input
@@ -1235,11 +1324,12 @@ export default function RegisterApplicationModal({
                     : githubFormApi.register("llmEndpoint"))}
                 />
               </Field>
-              <Field label="LLM API Token" required>
+              <Field label="LLM API Token" required={!(editing && storedLlmToken)}>
                 <input
                   type="password"
+                  autoComplete="new-password"
                   className={FIELD_CLASS}
-                  placeholder="sk-••••••••••••"
+                  placeholder={editing && storedLlmToken ? KEEP_SECRET : "sk-••••••••••••"}
                   {...(kind === "container"
                     ? containerFormApi.register("llmApiToken")
                     : githubFormApi.register("llmApiToken"))}
@@ -1318,14 +1408,14 @@ export default function RegisterApplicationModal({
             <button
               type="button"
               onClick={goNext}
-              disabled={submitting}
+              disabled={submitting || edit.status !== "ready"}
               className="flex items-center gap-1.5 rounded-[6px] px-3.5 py-2 text-[12.5px] font-semibold text-[#04121a] transition-colors disabled:opacity-60"
               style={{ background: "#5eead4" }}
             >
               {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               {step.final ? (
                 <>
-                  <Check className="h-3.5 w-3.5" /> Create Application
+                  <Check className="h-3.5 w-3.5" /> {editing ? "Save Changes" : "Create Application"}
                 </>
               ) : (
                 <>Next →</>

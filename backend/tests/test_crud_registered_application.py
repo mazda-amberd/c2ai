@@ -17,8 +17,10 @@ from c2ai.core.exceptions import (
     RegisteredApplicationHasRunningInstances,
     RegisteredApplicationNotFound,
     ServiceUnavailableError,
+    UnprocessableEntityError,
 )
 from c2ai.models.registered_application import (
+    ApplicationLLMConfiguration,
     ContainerApplicationSecret,
     RegisteredApplication,
 )
@@ -26,6 +28,7 @@ from c2ai.registration.credentials import (
     resolve_container_registry_credentials,
 )
 from c2ai.registration.repository import (
+    _llm_configuration,
     create_container_registered_application,
     create_github_registered_application,
     delete_registered_application,
@@ -42,6 +45,7 @@ from c2ai.schemas.registered_application import (
     ContainerApplicationSecretCreate,
     ContainerRegisteredApplicationCreate,
     GitHubRegisteredApplicationCreate,
+    LLMConfigurationUpdate,
 )
 from c2ai.security import crypto
 
@@ -699,3 +703,18 @@ async def test_name_lookup_ignores_soft_deleted_applications():
     statement = db.execute.await_args.args[0]
     compiled = str(statement.compile(dialect=postgresql.dialect()))
     assert "deleted_at IS NULL" in compiled
+
+
+def test_an_edit_without_an_llm_token_needs_one_stored():
+    edit = LLMConfigurationUpdate(endpoint="https://llm.example.com", model_name="qwen3-6")
+    with pytest.raises(UnprocessableEntityError) as refused:
+        _llm_configuration(edit, kept=None)
+    assert refused.value.code == "LLMApiTokenRequired"
+
+    stored = ApplicationLLMConfiguration(
+        endpoint="https://old.example.com", api_token_encrypted=b"sealed", model_name="old"
+    )
+    kept = _llm_configuration(edit, kept=stored)
+    assert (kept.endpoint, kept.api_token_encrypted, kept.model_name) == (
+        "https://llm.example.com", b"sealed", "qwen3-6"
+    )

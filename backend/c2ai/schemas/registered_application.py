@@ -116,6 +116,12 @@ class LLMConfigurationCreate(_ContractModel):
     model_name: str = Field(..., min_length=1, max_length=255)
 
 
+class LLMConfigurationUpdate(LLMConfigurationCreate):
+    """LLM settings on an edit; leaving the token out keeps the stored one."""
+
+    api_token: SecretStr | None = Field(default=None, min_length=1, max_length=65536)
+
+
 class LLMConfigurationOut(_ContractModel):
     """Safe LLM settings response; API tokens are intentionally absent."""
 
@@ -328,6 +334,12 @@ class ContainerConfigurationCreate(_ContainerConfigurationBase):
     port: int = Field(..., ge=1, le=65535)
 
 
+class ContainerConfigurationUpdate(ContainerConfigurationCreate):
+    """Container fields on an edit; leaving the password out keeps the stored one."""
+
+    registry_password: SecretStr | None = Field(default=None, min_length=1, max_length=65536)
+
+
 class ContainerConfigurationOut(_ContainerConfigurationBase):
     """Safe container response; the registry password is intentionally absent."""
 
@@ -433,6 +445,25 @@ RegisteredApplicationCreate = Annotated[
 ]
 
 
+class GitHubRegisteredApplicationUpdate(GitHubRegisteredApplicationCreate):
+    """An edit of a GitHub Workflow application: every field, secrets optional."""
+
+    llm: LLMConfigurationUpdate
+
+
+class ContainerRegisteredApplicationUpdate(ContainerRegisteredApplicationCreate):
+    """An edit of a Containerized application: every field, secrets optional."""
+
+    container: ContainerConfigurationUpdate
+    llm: LLMConfigurationUpdate
+
+
+RegisteredApplicationUpdate = Annotated[
+    GitHubRegisteredApplicationUpdate | ContainerRegisteredApplicationUpdate,
+    Field(discriminator="application_type"),
+]
+
+
 class TierDeploymentSummary(_ContractModel):
     """Number of deployed instances in one tier."""
 
@@ -452,6 +483,7 @@ class RegisteredApplicationCatalogItem(_ContractModel):
     total_deployed_instances: int = Field(..., ge=0)
     tiers_deployed_to: list[TierDeploymentSummary] = Field(default_factory=list)
     can_delete: bool
+    can_edit: bool
     created_at: datetime
     updated_at: datetime
 

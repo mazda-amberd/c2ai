@@ -4,6 +4,8 @@ upgrade/rollback/terminate, dispatch failures, callbacks, and the outbox."""
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import text
@@ -12,6 +14,8 @@ from c2ai.api.registered_applications import clients
 from c2ai.app import app
 from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token, require_admin
 from c2ai.clients.container_registry import ContainerRegistryTag
+from c2ai.config import get_settings
+from c2ai.constants.registered_application import ADA_APPLICATION_ID
 from c2ai.core.exceptions import ContainerImageTagNotFound
 from c2ai.db.session import get_db_session
 from c2ai.deployments import operations, repository as instances
@@ -463,6 +467,178 @@ async def test_termination_requires_the_exact_name(env):
     assert response.status_code == 202, response.text
     assert response.json()["status"] == "terminating"
     assert github.dispatches[-1][0] == "containerized-app-terminate.yaml"
+
+
+# --- Editing a template --------------------------------------------------------------
+
+
+def _github_edit(name="example-chatbot"):
+    """_register_github's body as an edit: the LLM token left out, so it is kept."""
+
+    return {
+        "application_type": "github_workflow",
+        "name": name,
+        "github": {
+            "github_connection": "github-app-1",
+            "trigger_method": "workflow_dispatch",
+            "repository": "amberd-ai/example-chatbot",
+            "workflow_file_path": ".github/workflows/deploy.yml",
+            "ref": "main",
+        },
+        "parameters": [{"key": "customer_name", "type": "text"}],
+        "llm": {"endpoint": "https://llm.example.com/v1", "model_name": "qwen3-coder-next"},
+    }
+
+
+def _container_edit():
+    """_register_container's body as an edit: both secrets left out, so they are kept."""
+
+    return {
+        "application_type": "containerized",
+        "name": "chat-service",
+        "container": {
+            "registry": "Docker Hub",
+            "image_registry": "amberd/chat-service",
+            "registry_username": "amberd",
+            "tag": "1.2.3",
+            "pull_policy": "IfNotPresent",
+            "port": 8080,
+            "expose_public_service": True,
+            "cpu_request": "500m",
+            "memory_request": "512Mi",
+            "scaling": "1",
+        },
+        "parameters": [{"key": "LOG_LEVEL", "value": "info"}],
+        "llm": {"endpoint": "https://amberd-llm-gateway:8010", "model_name": "qwen3-6"},
+    }
+
+
+def _catalog_entry(client, application_id):
+    app.dependency_overrides[get_current_user_token] = lambda: AthenaTokenUser(identifier="admin")
+    try:
+        listed = client.get(BASE)
+    finally:
+        app.dependency_overrides.pop(get_current_user_token, None)
+    assert listed.status_code == 200, listed.text
+    return next(item for item in listed.json()["items"] if item["id"] == application_id)
+
+
+async def test_an_edit_is_the_next_version_and_keeps_the_secrets_left_out(env):
+    client, github, registry, session_factory = env
+    application_id = _register_container(client)
+    body = _container_edit()
+    body["name"] = "chat-service-2"
+    body["container"]["tag"] = "2.0.0"
+    body["parameters"] = [{"key": "LOG_LEVEL", "value": "debug"}, {"key": "REGION", "value": "us"}]
+
+    response = client.put(f"{BASE}/{application_id}", json=body)
+    assert response.status_code == 200, response.text
+    edited = response.json()
+    assert (edited["version"], edited["name"], edited["container"]["tag"]) == (
+        2, "chat-service-2", "2.0.0"
+    )
+    entry = _catalog_entry(client, application_id)
+    assert (entry["name"], entry["current_version"], entry["can_edit"]) == ("chat-service-2", 2, True)
+
+    deployed = _deploy_container(client, application_id, version="2.0.0")
+    assert deployed.status_code == 201, deployed.text
+    deployment = deployed.json()
+    assert deployment["application_version"] == 2
+    parameters = deployment["configuration"]["parameters"]
+    assert (parameters["LOG_LEVEL"], parameters["REGION"]) == ("debug", "us")
+    # The secrets the edit left out are the ones registered.
+    assert registry.calls[-1]["password"] == "registry-secret"
+    sent = github.events[-1][1]["deployment"]
+    assert (sent["registry_token"], sent["llm_api_token"]) == ("registry-secret", "llm-secret")
+
+    # Version 1 stays, for whatever ran it.
+    async with session_factory() as db:
+        versions = await db.execute(
+            text(
+                "SELECT version FROM registered_application_versions"
+                " WHERE application_id = :id ORDER BY version"
+            ),
+            {"id": application_id},
+        )
+        assert list(versions.scalars()) == [1, 2]
+
+
+async def test_an_edit_replaces_a_secret_it_supplies(env):
+    client, github, registry, _sf = env
+    application_id = _register_container(client)
+    body = _container_edit()
+    body["container"]["registry_password"] = "new-registry-secret"
+    body["llm"]["api_token"] = "new-llm-secret"
+
+    response = client.put(f"{BASE}/{application_id}", json=body)
+    assert response.status_code == 200, response.text
+    assert "new-registry-secret" not in response.text and "new-llm-secret" not in response.text
+
+    assert _deploy_container(client, application_id).status_code == 201
+    assert registry.calls[-1]["password"] == "new-registry-secret"
+    sent = github.events[-1][1]["deployment"]
+    assert (sent["registry_token"], sent["llm_api_token"]) == (
+        "new-registry-secret", "new-llm-secret"
+    )
+
+
+async def test_an_edit_waits_until_nothing_of_the_template_is_live(env, monkeypatch):
+    # So the termination pipeline is given a callback token to finish with.
+    monkeypatch.setenv("CONTAINER_WORKFLOWS_ACCEPT_CALLBACK_TOKEN", "true")
+    get_settings.cache_clear()
+    client, github, _registry, _sf = env
+    application_id = _register_container(client)
+    deployment = _deploy_container(client, application_id).json()
+    _complete_container_deploy(client, github, deployment)
+    assert _catalog_entry(client, application_id)["can_edit"] is False
+
+    refused = client.put(f"{BASE}/{application_id}", json=_container_edit())
+    assert refused.status_code == 409
+    assert refused.json()["code"] == "RegisteredApplicationHasRunningInstances"
+    assert "cannot be edited" in refused.json()["detail"]
+    assert "'chat-prod' (Tier 2)" in refused.json()["detail"]
+
+    terminate = client.post(
+        f"{BASE}/deployments/{deployment['id']}/terminate", json={"confirmation": "chat-prod"}
+    )
+    assert terminate.status_code == 202, terminate.text
+    # Terminating is not finished.
+    assert client.put(f"{BASE}/{application_id}", json=_container_edit()).status_code == 409
+
+    token = github.dispatches[-1][1]["callback_token"]
+    dns = _report(client, deployment["id"], token, "configuring_dns", "terminating")
+    assert dns.status_code == 200, dns.text
+    terminated = _report(client, deployment["id"], token, "completed", "terminated")
+    assert terminated.status_code == 200, terminated.text
+    assert _catalog_entry(client, application_id)["can_edit"] is True
+    edited = client.put(f"{BASE}/{application_id}", json=_container_edit())
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["version"] == 2
+
+
+async def test_an_edit_keeps_the_type_and_a_free_name_and_leaves_ada_alone(env):
+    client, _github, _registry, _sf = env
+    application_id = _register_github(client)
+    _register_container(client)
+
+    ada = client.put(f"{BASE}/{ADA_APPLICATION_ID}", json=_github_edit(name="ADA"))
+    assert (ada.status_code, ada.json()["code"]) == (409, "BuiltInApplicationNotEditable")
+    assert _catalog_entry(client, str(ADA_APPLICATION_ID))["can_edit"] is False
+
+    other_type = client.put(f"{BASE}/{application_id}", json=_container_edit())
+    assert (other_type.status_code, other_type.json()["code"]) == (
+        422, "RegisteredApplicationTypeChange"
+    )
+    taken = client.put(f"{BASE}/{application_id}", json=_github_edit(name="Chat-Service"))
+    assert (taken.status_code, taken.json()["code"]) == (409, "DuplicateRegisteredApplication")
+    missing = client.put(f"{BASE}/{uuid4()}", json=_github_edit())
+    assert missing.status_code == 404
+
+    # Its own name, recased, is not taken; and a parameter can be dropped.
+    recased = client.put(f"{BASE}/{application_id}", json=_github_edit(name="Example-Chatbot"))
+    assert recased.status_code == 200, recased.text
+    assert (recased.json()["name"], recased.json()["version"]) == ("Example-Chatbot", 2)
+    assert recased.json()["parameters"] == [{"key": "customer_name", "type": "text"}]
 
 
 # --- The outbox -------------------------------------------------------------------

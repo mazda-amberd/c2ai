@@ -1,4 +1,4 @@
-"""Registering, listing, reading and deleting application templates."""
+"""Registering, listing, reading, editing and deleting application templates."""
 
 from __future__ import annotations
 
@@ -53,6 +53,7 @@ from c2ai.schemas.registered_application import (
     RegisteredApplicationCatalogItem,
     RegisteredApplicationCatalogResponse,
     RegisteredApplicationDetail,
+    RegisteredApplicationUpdate,
     RegisteredContainerParameterValue,
     RegisteredParameterDefinition,
     TierDeploymentSummary,
@@ -192,6 +193,7 @@ def _catalog_item(
             for tier, count in sorted(record.tiers_deployed_to.items())
         ],
         can_delete=record.can_delete,
+        can_edit=record.can_edit,
         created_at=application.created_at,
         updated_at=application.updated_at,
     )
@@ -220,8 +222,8 @@ async def list_registered_applications(
 ) -> RegisteredApplicationCatalogResponse:
     """Search, filter, sort, and paginate the global application catalog.
 
-    Any signed-in user may read the catalog; registering and deleting are
-    for Admins.
+    Any signed-in user may read the catalog; registering, editing and
+    deleting are for Admins.
     """
 
     page = await applications.list_registered_applications(
@@ -296,6 +298,37 @@ async def register_container_application(
         payload.name,
         current_user.identifier,
     )
+    return _container_registration_detail(version)
+
+
+@router.put(
+    "/{application_id}",
+    response_model=RegisteredApplicationDetail,
+    status_code=status.HTTP_200_OK,
+    summary="Edit a registered application",
+)
+async def update_registered_application(
+    application_id: UUID,
+    payload: RegisteredApplicationUpdate,
+    current_user: AthenaTokenUser = Depends(require_admin),
+    db: AsyncSession = Depends(db_session),
+    applications: ModuleType = Depends(applications_repository),
+) -> RegisteredApplicationDetail:
+    """Save an edit as the template's next version.
+
+    Refused while any instance of the template is live on a tier. The type
+    is fixed; a secret left out keeps the stored one.
+    """
+
+    version = await applications.update_registered_application(
+        db,
+        application_id,
+        payload,
+        updated_by=current_user.identifier,
+    )
+    await db.commit()
+    if version.application.application_type == ApplicationType.GITHUB_WORKFLOW.value:
+        return _github_registration_detail(version)
     return _container_registration_detail(version)
 
 

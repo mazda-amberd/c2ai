@@ -18,6 +18,7 @@ const app = (overrides: Partial<RegisteredApp> = {}): RegisteredApp => ({
   instances: 0,
   tiers: {},
   canDelete: true,
+  canEdit: true,
   created: "2026-09-24",
   ...overrides,
 });

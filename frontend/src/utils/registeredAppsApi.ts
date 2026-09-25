@@ -9,10 +9,9 @@ import {
   listGithubTags,
   listImageTags,
   type ApiCatalogItem,
-  type ApiParameterType,
   type ApiRegisteredApplicationDetail,
 } from "@api/services/registeredApplications";
-import type { ParameterDef, ParamType } from "./registrationApi";
+import { fromApiParamType, type ParameterDef } from "./registrationApi";
 
 export type RegisteredAppType = "github" | "container";
 export type RegisteredAppStatus = "active" | "draft" | "deprecated";
@@ -31,6 +30,8 @@ export type RegisteredApp = {
   tiers: Record<string, number>;
   /** Server-side delete gate (no instances, no managed secrets). */
   canDelete: boolean;
+  /** Server-side edit gate: nothing of it live on a tier, and not ADA. */
+  canEdit: boolean;
   /** yyyy-mm-dd */
   created: string;
 };
@@ -48,21 +49,6 @@ export type RegisteredAppDetail = {
   parameters: ParameterDef[];
 };
 
-function toParamType(type: ApiParameterType): ParamType {
-  switch (type) {
-    case "number":
-      return "number";
-    case "boolean":
-      return "boolean";
-    case "key_value":
-      return "key-value";
-    default:
-      // "select" has no dedicated control yet — a free-text field is the
-      // safe rendering until option lists are surfaced.
-      return "text";
-  }
-}
-
 export function normalizeCatalogItem(item: ApiCatalogItem): RegisteredApp {
   const tiers: Record<string, number> = {};
   for (const { tier, instances } of item.tiers_deployed_to ?? []) {
@@ -78,6 +64,7 @@ export function normalizeCatalogItem(item: ApiCatalogItem): RegisteredApp {
     instances: item.total_deployed_instances,
     tiers,
     canDelete: item.can_delete,
+    canEdit: item.can_edit,
     created: (item.created_at ?? "").slice(0, 10),
   };
 }
@@ -91,7 +78,7 @@ export function normalizeDetail(detail: ApiRegisteredApplicationDetail): Registe
       defaultVersion: detail.github.ref,
       parameters: detail.parameters.map<ParameterDef>((p) => ({
         name: p.key,
-        type: toParamType(p.type),
+        type: fromApiParamType(p.type),
         value: "",
         boolValue: false,
         kvKey: "",
@@ -163,10 +150,13 @@ export async function fetchAppVersions(detail: RegisteredAppDetail): Promise<str
 
 /** Unique within the C2AI instance (case-insensitive), per Story 3.1/3.2.
  *  Checks against the most recently loaded catalog; the backend is the
- *  final authority and returns 409/422 on a real collision. */
-export function isApplicationNameTaken(name: string): boolean {
+ *  final authority and returns 409/422 on a real collision. An edit passes
+ *  its own id, so keeping (or recasing) its name is not a collision. */
+export function isApplicationNameTaken(name: string, exceptId?: string): boolean {
   const normalized = name.trim().toLowerCase();
-  return lastLoadedApps.some((a) => a.name.trim().toLowerCase() === normalized);
+  return lastLoadedApps.some(
+    (a) => a.id !== exceptId && a.name.trim().toLowerCase() === normalized,
+  );
 }
 
 export const TYPE_LABEL: Record<RegisteredAppType, string> = {

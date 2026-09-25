@@ -33,6 +33,7 @@ const ADA: RegisteredApp = {
   instances: 0,
   tiers: {},
   canDelete: true,
+  canEdit: true,
   created: "2026-09-24",
 };
 

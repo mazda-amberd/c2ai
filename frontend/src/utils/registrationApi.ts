@@ -7,8 +7,12 @@ import {
   listGithubConnections,
   registerContainerApplication,
   registerGithubApplication,
+  updateRegisteredApplication,
   validateGithubConnectionRequest,
   type ApiParameterType,
+  type ApiRegisteredApplicationDetail,
+  type RegisterContainerApplicationPayload,
+  type RegisterGithubApplicationPayload,
 } from "@api/services/registeredApplications";
 
 export type GithubConnection = {
@@ -158,41 +162,59 @@ function toApiParamType(type: ParamType): ApiParameterType {
   return type;
 }
 
-export async function registerApplication(
-  registration: AppRegistration,
-): Promise<{ id: string }> {
-  if (registration.kind === "github") {
-    const created = await registerGithubApplication({
-      application_type: "github_workflow",
-      name: registration.name.trim(),
-      description: registration.description.trim(),
-      github: {
-        github_connection: registration.connectionId,
-        trigger_method: registration.triggerMethod,
-        repository: registration.workflowRepository.trim(),
-        // Required by the wizard.
-        code_repository: registration.codeRepository.trim(),
-        workflow_file_path: registration.workflowFile.trim(),
-        ref: registration.branch.trim() || "main",
-      },
-      parameters: registration.parameters
-        .filter((p) => p.name.trim())
-        .map((p) => ({ key: p.name.trim(), type: toApiParamType(p.type) })),
-      llm: {
-        endpoint: registration.llmEndpoint.trim(),
-        api_token: registration.llmApiToken,
-        model_name: registration.llmModelName.trim(),
-      },
-    });
-    return { id: created.id };
+export function fromApiParamType(type: ApiParameterType): ParamType {
+  switch (type) {
+    case "number":
+      return "number";
+    case "boolean":
+      return "boolean";
+    case "key_value":
+      return "key-value";
+    default:
+      // "select" has no dedicated control yet — a free-text field is the
+      // safe rendering until option lists are surfaced.
+      return "text";
   }
+}
 
+/** A blank secret is left out: required to register (the wizard insists),
+ *  and on an edit it means "keep the stored one". */
+const secret = (key: string, value: string) => (value ? { [key]: value } : {});
+
+function githubPayload(registration: GithubWorkflowRegistration): RegisterGithubApplicationPayload {
+  return {
+    application_type: "github_workflow",
+    name: registration.name.trim(),
+    description: registration.description.trim(),
+    github: {
+      github_connection: registration.connectionId,
+      trigger_method: registration.triggerMethod,
+      repository: registration.workflowRepository.trim(),
+      // Required by the wizard.
+      code_repository: registration.codeRepository.trim(),
+      workflow_file_path: registration.workflowFile.trim(),
+      ref: registration.branch.trim() || "main",
+    },
+    parameters: registration.parameters
+      .filter((p) => p.name.trim())
+      .map((p) => ({ key: p.name.trim(), type: toApiParamType(p.type) })),
+    llm: {
+      endpoint: registration.llmEndpoint.trim(),
+      ...secret("api_token", registration.llmApiToken),
+      model_name: registration.llmModelName.trim(),
+    },
+  };
+}
+
+function containerPayload(
+  registration: ContainerizedRegistration,
+): RegisterContainerApplicationPayload {
   // ContainerConfigurationCreate: optional resource fields are `str | None`
   // with min_length=1, so a blank field must be omitted, not sent as "".
   const optional = (key: string, value: string) =>
     value.trim() ? { [key]: value.trim() } : {};
 
-  const created = await registerContainerApplication({
+  return {
     application_type: "containerized",
     name: registration.name.trim(),
     description: registration.description.trim(),
@@ -200,7 +222,7 @@ export async function registerApplication(
       registry: registration.containerRegistry,
       image_registry: registration.imageRegistry.trim(),
       registry_username: registration.registryUsername.trim(),
-      registry_password: registration.registryPassword,
+      ...secret("registry_password", registration.registryPassword),
       tag: registration.tag.trim(),
       port: Number(registration.port),
       pull_policy: registration.pullPolicy,
@@ -216,9 +238,80 @@ export async function registerApplication(
       .map((p) => ({ key: p.key.trim(), value: p.value })),
     llm: {
       endpoint: registration.llmEndpoint.trim(),
-      api_token: registration.llmApiToken,
+      ...secret("api_token", registration.llmApiToken),
       model_name: registration.llmModelName.trim(),
     },
-  });
+  };
+}
+
+export async function registerApplication(
+  registration: AppRegistration,
+): Promise<{ id: string }> {
+  const created =
+    registration.kind === "github"
+      ? await registerGithubApplication(githubPayload(registration))
+      : await registerContainerApplication(containerPayload(registration));
   return { id: created.id };
+}
+
+/** PUT /{id} — saved as the template's next version; the result's number. */
+export async function saveApplicationEdit(
+  applicationId: string,
+  registration: AppRegistration,
+): Promise<{ version: number }> {
+  const saved = await updateRegisteredApplication(
+    applicationId,
+    registration.kind === "github" ? githubPayload(registration) : containerPayload(registration),
+  );
+  return { version: saved.version };
+}
+
+/** A saved template as the wizard's values, for editing. The secrets are
+ *  never sent back, so they start blank ("keep the stored one"). */
+export function registrationFromDetail(detail: ApiRegisteredApplicationDetail): AppRegistration {
+  const llm = {
+    llmEndpoint: detail.llm?.endpoint ?? "",
+    llmApiToken: "",
+    llmModelName: detail.llm?.model_name ?? "",
+  };
+  if (detail.application_type === "github_workflow") {
+    return {
+      kind: "github",
+      name: detail.name,
+      description: detail.description ?? "",
+      connectionId: detail.github.github_connection,
+      codeRepository: detail.github.code_repository ?? "",
+      workflowRepository: detail.github.repository,
+      triggerMethod: detail.github.trigger_method,
+      workflowFile: detail.github.workflow_file_path,
+      branch: detail.github.ref,
+      parameters: detail.parameters.map((p) => ({
+        ...emptyParameterDef(),
+        name: p.key,
+        type: fromApiParamType(p.type),
+      })),
+      ...llm,
+    };
+  }
+  const container = detail.container;
+  return {
+    kind: "container",
+    name: detail.name,
+    description: detail.description ?? "",
+    containerRegistry: container.registry,
+    imageRegistry: container.image_registry,
+    registryUsername: container.registry_username ?? "",
+    registryPassword: "",
+    tag: container.tag ?? "",
+    port: container.port == null ? "" : String(container.port),
+    pullPolicy: container.pull_policy,
+    exposePublicly: container.expose_public_service,
+    gpuRequest: container.gpu_request ?? "",
+    cpuRequest: container.cpu_request ?? "",
+    memoryRequest: container.memory_request ?? "",
+    replicas: container.scaling ?? "",
+    storage: container.storage ?? "",
+    parameters: detail.parameters.map((p) => ({ key: p.key, value: p.value })),
+    ...llm,
+  };
 }

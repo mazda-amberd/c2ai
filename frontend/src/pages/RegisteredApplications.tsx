@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Box, Eye, Github, Loader2, Plus, Search, Trash2 } from "lucide-react";
+import { ArrowLeft, Box, Eye, Github, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react";
 
 import { useAuth } from "@auth/AuthContext";
 import { Button } from "@ui/button";
@@ -64,8 +64,8 @@ function TypeIcon({ type, className }: { type: RegisteredAppType; className?: st
 
 export default function RegisteredApplications() {
   const navigate = useNavigate();
-  // Everyone may browse the catalog; registering and deleting templates is
-  // for Admins (the API refuses the rest).
+  // Everyone may browse the catalog; registering, editing and deleting
+  // templates is for Admins (the API refuses the rest).
   const { isAdmin } = useAuth();
 
   const [apps, setApps] = useState<RegisteredApp[]>([]);
@@ -76,6 +76,7 @@ export default function RegisteredApplications() {
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [registerOpen, setRegisterOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<RegisteredApp | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<RegisteredApp | null>(null);
   const [summaryApp, setSummaryApp] = useState<RegisteredApp | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -94,6 +95,28 @@ export default function RegisteredApplications() {
       return;
     }
     setDeleteTarget(app);
+  };
+
+  /** A template is edited only while nothing of it is live on a tier —
+   *  deployments run the version they started with. Blocked, the button
+   *  says why instead. */
+  const handleEditClick = (e: React.MouseEvent, app: RegisteredApp) => {
+    e.stopPropagation();
+    if (app.instances > 0) {
+      showToast(
+        `Can't edit '${app.name}' while it's deployed — terminate its ${app.instances} instance${
+          app.instances === 1 ? "" : "s"
+        } first.`,
+      );
+      return;
+    }
+    if (!app.canEdit) {
+      showToast(
+        `'${app.name}' is C2AI's built-in application — its settings come from C2AI's configuration.`,
+      );
+      return;
+    }
+    setEditTarget(app);
   };
 
   const confirmDelete = async () => {
@@ -192,7 +215,7 @@ export default function RegisteredApplications() {
             </Button>
           ) : (
             <span
-              title="Ask an Admin to register or delete applications"
+              title="Ask an Admin to register, edit or delete applications"
               className="inline-flex items-center gap-1.5 rounded-full border border-[#1c2836] px-2.5 py-1 text-[11.5px] text-[#8b97a5]"
             >
               <Eye className="h-3.5 w-3.5" />
@@ -355,9 +378,29 @@ export default function RegisteredApplications() {
                       </td>
                       <td className="px-3.5 py-3.5">
                         {isAdmin && (
-                          <div className="flex items-center justify-end">
+                          <div className="flex items-center justify-end gap-1">
                             {/* aria-disabled (not `disabled`) so the click still
-                                lands and can explain why deletion is blocked. */}
+                                lands and can explain why it is blocked. */}
+                            <button
+                              type="button"
+                              aria-disabled={!app.canEdit}
+                              aria-label={`Edit ${app.name}`}
+                              title={
+                                app.instances > 0
+                                  ? "Terminate its deployed instances to edit it"
+                                  : app.canEdit
+                                    ? "Edit application"
+                                    : "C2AI's built-in application can't be edited"
+                              }
+                              onClick={(e) => handleEditClick(e, app)}
+                              className={`grid h-7 w-7 place-items-center rounded-[6px] transition-colors ${
+                                app.canEdit
+                                  ? "text-[#20abc7]/80 hover:bg-[rgba(32,171,199,0.12)] hover:text-[#20abc7]"
+                                  : "cursor-not-allowed text-[#57606c]/50"
+                              }`}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </button>
                             <button
                               type="button"
                               aria-disabled={app.instances > 0}
@@ -394,8 +437,13 @@ export default function RegisteredApplications() {
 
       {isAdmin && (
         <RegisterApplicationModal
-          open={registerOpen}
-          onOpenChange={setRegisterOpen}
+          open={registerOpen || editTarget !== null}
+          editing={editTarget}
+          onOpenChange={(next) => {
+            if (next) return;
+            setRegisterOpen(false);
+            setEditTarget(null);
+          }}
           onRegistered={loadApps}
         />
       )}

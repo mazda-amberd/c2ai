@@ -402,13 +402,15 @@ class RegisteredApplicationNotFound(NotFoundError):
 
 
 class RegisteredApplicationHasRunningInstances(ConflictError):
-    """Raised when deletion would orphan active deployment instances.
+    """Raised when deleting or editing a template that still has active instances.
 
     The message names every remaining instance and its tier, so the user knows
     exactly what to terminate first.
     """
 
-    def __init__(self, name: str, instances: "list[tuple[str, int]] | int"):
+    def __init__(
+        self, name: str, instances: "list[tuple[str, int]] | int", *, action: str = "deleted"
+    ):
         if isinstance(instances, int):
             listing = f"{instances} active deployment instance(s)"
         else:
@@ -416,10 +418,24 @@ class RegisteredApplicationHasRunningInstances(ConflictError):
             listing = f"{len(instances)} active deployment instance(s): {described}"
         super().__init__(
             detail=(
-                f"Registered application '{name}' cannot be deleted while it has "
+                f"Registered application '{name}' cannot be {action} while it has "
                 f"{listing}. Terminate them first."
             ),
             code="RegisteredApplicationHasRunningInstances",
+        )
+
+
+class BuiltInApplicationNotEditable(ConflictError):
+    """Raised when editing ADA, whose settings come from C2AI's configuration."""
+
+    def __init__(self, name: str):
+        super().__init__(
+            detail=(
+                f"'{name}' is C2AI's built-in application: its workflow settings come "
+                "from C2AI's configuration and the tier pages deploy it with fixed "
+                "parameters, so it cannot be edited here."
+            ),
+            code="BuiltInApplicationNotEditable",
         )
 
 

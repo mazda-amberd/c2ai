@@ -75,4 +75,90 @@ describe("RegisterApplicationModal", () => {
       llmModelName: "qwen3-coder-next",
     });
   });
+
+  it("edits a saved container application, keeping the secrets left blank", async () => {
+    vi.spyOn(registrationApi, "fetchContainerRegistries").mockResolvedValue([
+      { value: "Docker Hub", label: "Docker Hub" },
+    ]);
+    vi.spyOn(registeredApplicationsApi, "getRegisteredApplication").mockResolvedValue({
+      id: "app-1",
+      name: "chat-service",
+      description: "Chat",
+      status: "active",
+      version: 3,
+      created_by: "admin@amberd.ai",
+      created_at: "2026-09-24T00:00:00Z",
+      application_type: "containerized",
+      container: {
+        registry: "Docker Hub",
+        image_registry: "amberd/chat-service",
+        registry_username: "amberd",
+        tag: "1.2.3",
+        port: 8080,
+        pull_policy: "IfNotPresent",
+        expose_public_service: true,
+        gpu_request: null,
+        cpu_request: "500m",
+        memory_request: "512Mi",
+        scaling: "1",
+        storage: null,
+      },
+      parameters: [{ key: "LOG_LEVEL", value: "info" }],
+      llm: { endpoint: "http://amberd-llm-gateway:8010", model_name: "qwen3-6" },
+    });
+    const update = vi
+      .spyOn(registeredApplicationsApi, "updateRegisteredApplication")
+      .mockResolvedValue({ version: 4 } as Awaited<
+        ReturnType<typeof registeredApplicationsApi.updateRegisteredApplication>
+      >);
+    const saved = vi.fn();
+    const editing = {
+      id: "app-1",
+      name: "chat-service",
+      desc: "Chat",
+      type: "container" as const,
+      status: "active" as const,
+      version: 3,
+      instances: 0,
+      tiers: {},
+      canDelete: true,
+      canEdit: true,
+      created: "2026-09-24",
+    };
+    render(
+      <ToastProvider>
+        <RegisterApplicationModal open onOpenChange={() => {}} onRegistered={saved} editing={editing} />
+      </ToastProvider>,
+    );
+
+    expect(await screen.findByDisplayValue("chat-service")).toBeTruthy();
+    expect(screen.getByText("Edit chat-service")).toBeTruthy();
+    expect(screen.getByText(/Saving makes this version 4/)).toBeTruthy();
+    next(); // the type is fixed: straight to the image
+    expect(screen.getByText(/Step 2 of 5 · Container \/ Image Configuration/)).toBeTruthy();
+    expect(field("Registry Password / Token").value).toBe("");
+    fireEvent.change(field("Default Image Tag"), { target: { value: "2.0.0" } });
+    next(); // -> resources
+    next(); // -> environment
+    next(); // -> llm
+    expect(field("LLM API Token").value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: /Save Changes/ }));
+
+    await waitFor(() => expect(update).toHaveBeenCalledOnce());
+    const [id, sent] = update.mock.calls[0];
+    const payload = sent as registeredApplicationsApi.RegisterContainerApplicationPayload;
+    expect(id).toBe("app-1");
+    expect(payload).toMatchObject({
+      application_type: "containerized",
+      name: "chat-service",
+      container: { tag: "2.0.0", registry_username: "amberd", port: 8080, scaling: "1" },
+      parameters: [{ key: "LOG_LEVEL", value: "info" }],
+      llm: { endpoint: "http://amberd-llm-gateway:8010", model_name: "qwen3-6" },
+    });
+    // Blank secrets are left out, which keeps the stored ones.
+    expect(payload.container).not.toHaveProperty("registry_password");
+    expect(payload.llm).not.toHaveProperty("api_token");
+    expect(await screen.findByText('"chat-service" saved as version 4.')).toBeTruthy();
+    expect(saved).toHaveBeenCalledOnce();
+  });
 });

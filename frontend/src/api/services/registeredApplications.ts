@@ -40,6 +40,8 @@ export type ApiCatalogItem = {
   /** e.g. [{ tier: "Tier 1", instances: 2 }] */
   tiers_deployed_to: Array<{ tier: string; instances: number }>;
   can_delete: boolean;
+  /** False while any instance is live on a tier, and always for ADA. */
+  can_edit: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -84,6 +86,7 @@ export type ApiContainerConfiguration = {
   port: number | null;
   pull_policy: "Always" | "IfNotPresent" | "Never";
   expose_public_service: boolean;
+  gpu_request: string | null;
   cpu_request: string | null;
   memory_request: string | null;
   scaling: string | null;
@@ -136,7 +139,8 @@ export const deleteRegisteredApplication = async (applicationId: string): Promis
 
 export type LlmConfigPayload = {
   endpoint: string;
-  api_token: string;
+  /** Required to register. Left out of an edit, the stored token is kept. */
+  api_token?: string;
   model_name: string;
 };
 
@@ -165,7 +169,8 @@ export type RegisterContainerApplicationPayload = {
     registry: string;
     image_registry: string;
     registry_username: string;
-    registry_password: string;
+    /** Required to register. Left out of an edit, the stored password is kept. */
+    registry_password?: string;
     tag: string;
     port: number;
     pull_policy: "Always" | "IfNotPresent" | "Never";
@@ -196,6 +201,17 @@ export const registerContainerApplication = async (
     method: "POST",
     body: JSON.stringify(payload),
   });
+
+/** PUT /{id} — an edit, saved as the template's next version. Refused
+ *  (409) while any instance of it is live on a tier. */
+export const updateRegisteredApplication = async (
+  applicationId: string,
+  payload: RegisterGithubApplicationPayload | RegisterContainerApplicationPayload,
+): Promise<ApiRegisteredApplicationDetail> =>
+  await apiFetch<ApiRegisteredApplicationDetail>(
+    `/api/registered-applications/${encodeURIComponent(applicationId)}`,
+    { method: "PUT", body: JSON.stringify(payload) },
+  );
 
 /* ---------------- Version pickers ---------------- */
 
