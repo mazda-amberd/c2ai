@@ -28,8 +28,8 @@ def queue():
 @pytest.fixture
 def email(monkeypatch):
     monkeypatch.setenv("POSTMARK_SERVER_TOKEN", "pm-token")
-    monkeypatch.setenv("C2AI_EMAIL_FROM", "c2ai@amberd.ai")
-    monkeypatch.setenv("C2AI_EMAIL_REPLY_TO", "support@amberd.ai")
+    monkeypatch.setenv("AMBERD_REPORT_FROM_EMAIL", "c2ai@amberd.ai")
+    monkeypatch.setenv("AMBERD_REPORT_REPLY_TO", "support@amberd.ai")
 
 
 async def test_the_endpoint_queues_the_reset_and_answers_before_looking(test_client, queue):
@@ -69,6 +69,27 @@ async def test_postmark_gets_one_message_per_send(http_mock, email):
         "MessageStream": "outbound",
         "ReplyTo": "support@amberd.ai",
     }
+
+
+async def test_amberd_agents_settings_work_unchanged(http_mock, monkeypatch):
+    """An Amberd Agents (or dealership BOOKMARK_*) .env configures C2AI as is."""
+
+    monkeypatch.setenv("POSTMARK_SERVER_TOKEN", "pm-token")
+    monkeypatch.setenv("BOOKMARK_REPORT_FROM_EMAIL", "noreply@amberd.ai")
+    monkeypatch.setenv("BOOKMARK_REPORT_MESSAGE_STREAM", "transactional")
+    monkeypatch.setenv("POSTMARK_EMAIL_ENDPOINT", "https://postmark.test/email")
+    monkeypatch.setenv("POSTMARK_CONNECT_TIMEOUT_SECONDS", "3")
+    monkeypatch.setenv("POSTMARK_READ_TIMEOUT_SECONDS", "9")
+    sent = http_mock(lambda request: httpx.Response(200, json={"MessageID": "m"}))
+
+    await send_email(to="a@example.com", subject="Hi", text_body="t")
+
+    [request] = sent
+    assert str(request.url) == "https://postmark.test/email"
+    message = json.loads(request.content)
+    assert (message["From"], message["MessageStream"]) == ("noreply@amberd.ai", "transactional")
+    assert "ReplyTo" not in message
+    assert request.extensions["timeout"] == {"connect": 3.0, "read": 9.0, "write": 9.0, "pool": 9.0}
 
 
 @pytest.mark.parametrize(

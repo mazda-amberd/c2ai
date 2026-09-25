@@ -74,7 +74,7 @@ class Outbox(list):
 @pytest.fixture
 def postmark(http_mock, monkeypatch):
     monkeypatch.setenv("POSTMARK_SERVER_TOKEN", "pm-token")
-    monkeypatch.setenv("C2AI_EMAIL_FROM", "c2ai@amberd.ai")
+    monkeypatch.setenv("AMBERD_REPORT_FROM_EMAIL", "c2ai@amberd.ai")
     monkeypatch.setenv("C2AI_PUBLIC_URL", "https://c2ai.example.com")
     outbox = Outbox()
 

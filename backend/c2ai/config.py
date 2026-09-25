@@ -88,20 +88,29 @@ class Settings(BaseSettings):
     public_url: str = Field("", validation_alias="C2AI_PUBLIC_URL")
 
     # --- Email (Postmark) -------------------------------------------------
-    # Forgot password sends nothing, and changes nothing, until both are set.
-    # The Amberd Agents names are accepted so one secret serves both.
+    # The same variables as Amberd Agents (and the dealership project's
+    # BOOKMARK_REPORT_* names), so one Postmark server and sender serve both.
+    # Forgot password sends nothing, and changes nothing, until the token and
+    # the sender are both set.
     postmark_server_token: str = Field("", validation_alias="POSTMARK_SERVER_TOKEN")
     email_from: str = Field(
-        "", validation_alias=_env("C2AI_EMAIL_FROM", "AMBERD_REPORT_FROM_EMAIL")
+        "", validation_alias=_env("AMBERD_REPORT_FROM_EMAIL", "BOOKMARK_REPORT_FROM_EMAIL")
     )
     email_reply_to: str = Field(
-        "", validation_alias=_env("C2AI_EMAIL_REPLY_TO", "AMBERD_REPORT_REPLY_TO")
+        "", validation_alias=_env("AMBERD_REPORT_REPLY_TO", "BOOKMARK_REPORT_REPLY_TO")
     )
     postmark_message_stream: str = Field(
-        "outbound", validation_alias=_env("POSTMARK_MESSAGE_STREAM", "AMBERD_REPORT_MESSAGE_STREAM")
+        "outbound",
+        validation_alias=_env("AMBERD_REPORT_MESSAGE_STREAM", "BOOKMARK_REPORT_MESSAGE_STREAM"),
     )
     postmark_endpoint: str = Field(
         "https://api.postmarkapp.com/email", validation_alias="POSTMARK_EMAIL_ENDPOINT"
+    )
+    postmark_connect_timeout_seconds: float = Field(
+        5.0, gt=0, validation_alias="POSTMARK_CONNECT_TIMEOUT_SECONDS"
+    )
+    postmark_read_timeout_seconds: float = Field(
+        20.0, gt=0, validation_alias="POSTMARK_READ_TIMEOUT_SECONDS"
     )
 
     # --- Passwords and identifiers ----------------------------------------

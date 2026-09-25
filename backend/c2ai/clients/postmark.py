@@ -1,9 +1,12 @@
-"""Email through Postmark's HTTP API (the same integration Amberd Agents uses).
+"""Email through Postmark's HTTP API, configured exactly as in Amberd Agents.
 
 The server token goes in an ``X-Postmark-Server-Token`` header; one message is
-one recipient. Configured by ``POSTMARK_SERVER_TOKEN`` and ``C2AI_EMAIL_FROM``
-(``Settings.email_enabled``); the sender must be a Sender Signature or on a
-verified domain in Postmark, or Postmark refuses the send.
+one recipient. Configured by ``POSTMARK_SERVER_TOKEN`` and
+``AMBERD_REPORT_FROM_EMAIL`` (``Settings.email_enabled``); the sender must be
+a Sender Signature or on a verified domain in Postmark, or Postmark refuses
+the send. Optional: ``AMBERD_REPORT_REPLY_TO``, ``AMBERD_REPORT_MESSAGE_STREAM``,
+``POSTMARK_EMAIL_ENDPOINT``, ``POSTMARK_CONNECT_TIMEOUT_SECONDS``,
+``POSTMARK_READ_TIMEOUT_SECONDS``.
 """
 
 from __future__ import annotations
@@ -16,8 +19,6 @@ from c2ai.clients.http import get_http_client
 from c2ai.config import get_settings
 
 logger = logging.getLogger(__name__)
-
-_TIMEOUT = 20.0
 
 
 class EmailDeliveryFailed(RuntimeError):
@@ -32,7 +33,7 @@ async def send_email(
     settings = get_settings()
     if not settings.email_enabled:
         raise EmailDeliveryFailed(
-            "Email is not configured (POSTMARK_SERVER_TOKEN and C2AI_EMAIL_FROM)."
+            "Email is not configured (POSTMARK_SERVER_TOKEN and AMBERD_REPORT_FROM_EMAIL)."
         )
     payload = {
         "From": settings.email_from.strip(),
@@ -50,8 +51,14 @@ async def send_email(
         "X-Postmark-Server-Token": settings.postmark_server_token.strip(),
     }
     try:
-        response = await get_http_client(_TIMEOUT).post(
-            settings.postmark_endpoint, headers=headers, json=payload
+        response = await get_http_client().post(
+            settings.postmark_endpoint,
+            headers=headers,
+            json=payload,
+            timeout=httpx.Timeout(
+                settings.postmark_read_timeout_seconds,
+                connect=settings.postmark_connect_timeout_seconds,
+            ),
         )
     except httpx.HTTPError as error:
         raise EmailDeliveryFailed(f"Postmark could not be reached: {error}") from error

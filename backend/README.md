@@ -137,7 +137,7 @@ The ones that must be set in any real environment:
 | `GRAFANA_LOKI_DATASOURCE_UID` | Loki datasource for logs and troubleshooting |
 | `DEPLOYMENT_CALLBACK_TOKEN` | Secret behind the per-operation pipeline callback tokens |
 | `VLLM_ENDPOINT` | OpenAI-compatible endpoint for AI troubleshooting |
-| `POSTMARK_SERVER_TOKEN`, `C2AI_EMAIL_FROM` | Postmark, for forgot-password emails (Amberd Agents' `AMBERD_REPORT_FROM_EMAIL` also accepted) |
+| `POSTMARK_SERVER_TOKEN` (secret), `AMBERD_REPORT_FROM_EMAIL` | Postmark, for forgot-password emails - the same variables and values as Amberd Agents |
 | `C2AI_PUBLIC_URL` | The address password emails tell people to sign in at |
 
 ## Authentication and roles
@@ -187,7 +187,7 @@ way whatever happens** - the reset runs afterwards in the `auth.password_reset`
 job, so neither the reply nor its timing says whether the address is known.
 What happened is logged. Nothing is sent, and nothing changes, when the
 address is unknown or not an email address, within five minutes of the last
-reset for it, when email (`POSTMARK_SERVER_TOKEN`, `C2AI_EMAIL_FROM`) is not
+reset for it, when email (`POSTMARK_SERVER_TOKEN`, `AMBERD_REPORT_FROM_EMAIL`) is not
 configured, or when Postmark refuses the message - a reset that cannot be
 delivered would lock somebody out. `C2AI_PUBLIC_URL` is the address the email
 says to sign in at.
