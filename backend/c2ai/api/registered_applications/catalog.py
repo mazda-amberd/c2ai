@@ -1,4 +1,5 @@
-"""Registering, listing, reading, editing and deleting application templates."""
+"""Registering, checking, listing, reading, editing, duplicating and deleting
+application templates."""
 
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ from c2ai.clients.container_registry import (
     build_image_reference,
 )
 from c2ai.clients.github_actions import GitHubActionsClient
+from c2ai.config import get_settings
 from c2ai.constants.registered_application import (
     ApplicationStatus,
     ApplicationType,
@@ -36,17 +38,23 @@ from c2ai.core.exceptions import (
 )
 from c2ai.db.session import get_db_session as db_session
 from c2ai.models.registered_application import RegisteredApplicationVersion
+from c2ai.registration import checks
 from c2ai.registration.repository import RegisteredApplicationCatalogRecord
 from c2ai.schemas.registered_application import (
     ContainerConfigurationOut,
+    ContainerImageCheck,
+    ContainerImageCheckRequest,
     ContainerImageTagList,
     ContainerImageTagOut,
     ContainerRegisteredApplicationCreate,
     ContainerRegisteredApplicationDetail,
+    ContainerSecretStorage,
     GitHubRegisteredApplicationCreate,
     GitHubRegisteredApplicationDetail,
     GitHubRepositoryTagList,
     GitHubWorkflowConfiguration,
+    GitHubWorkflowInspection,
+    GitHubWorkflowInspectRequest,
     LLMConfigurationOut,
     LLMModelList,
     LLMModelOut,
@@ -102,6 +110,12 @@ def _github_registration_detail(
             RegisteredParameterDefinition(
                 key=parameter.key,
                 type=parameter.parameter_type,
+                label=parameter.label if parameter.label != parameter.key else None,
+                description=parameter.description,
+                required=parameter.required,
+                default=parameter.default_value,
+                options=parameter.options or [],
+                tier_defaults=parameter.tier_defaults or {},
             )
             for parameter in version.parameters
         ],
@@ -158,6 +172,7 @@ def _container_registration_detail(
                     if isinstance(parameter.default_value, str)
                     else ""
                 ),
+                tier_values=parameter.tier_defaults or {},
             )
             for parameter in version.parameters
         ],
@@ -301,6 +316,98 @@ async def register_container_application(
     return _container_registration_detail(version)
 
 
+def _detail(version: RegisteredApplicationVersion) -> RegisteredApplicationDetail:
+    if version.application.application_type == ApplicationType.GITHUB_WORKFLOW.value:
+        return _github_registration_detail(version)
+    return _container_registration_detail(version)
+
+
+@router.post(
+    "/github/inspect",
+    response_model=GitHubWorkflowInspection,
+    status_code=status.HTTP_200_OK,
+    summary="Read a GitHub workflow before registering it",
+)
+async def inspect_github_workflow(
+    payload: GitHubWorkflowInspectRequest,
+    _current_user: AthenaTokenUser = Depends(require_admin),
+    db: AsyncSession = Depends(db_session),
+    connections: ModuleType = Depends(github_connections_repository),
+) -> GitHubWorkflowInspection:
+    """Its triggers and inputs, and whether C2AI will be able to start it."""
+
+    return await checks.inspect_workflow(db, payload, connections=connections)
+
+
+@router.post(
+    "/container/check",
+    response_model=ContainerImageCheck,
+    status_code=status.HTTP_200_OK,
+    summary="Look a container image up in its registry before registering it",
+)
+async def check_container_image(
+    payload: ContainerImageCheckRequest,
+    _current_user: AthenaTokenUser = Depends(require_admin),
+    db: AsyncSession = Depends(db_session),
+    registry_client: ContainerRegistryClient = Depends(clients.container_registry_client),
+    applications: ModuleType = Depends(applications_repository),
+    credentials: ModuleType = Depends(credentials_repository),
+) -> ContainerImageCheck:
+    """Whether the tag exists, with the credentials entered."""
+
+    return await checks.check_container_image(
+        db,
+        payload,
+        registry_client=registry_client,
+        applications=applications,
+        credentials=credentials,
+    )
+
+
+@router.get(
+    "/container/secrets-status",
+    response_model=ContainerSecretStorage,
+    status_code=status.HTTP_200_OK,
+    summary="Whether secret environment variables can be stored",
+)
+async def container_secret_storage(
+    _current_user: AthenaTokenUser = Depends(require_admin),
+) -> ContainerSecretStorage:
+    """Secret values are kept by the secret provider; without one there is nowhere to put them."""
+
+    settings = get_settings()
+    return ContainerSecretStorage(
+        configured=bool(
+            settings.container_secret_provider_url and settings.container_secret_provider_token
+        )
+    )
+
+
+@router.post(
+    "/{application_id}/duplicate",
+    response_model=RegisteredApplicationDetail,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register a copy of an application",
+)
+async def duplicate_registered_application(
+    application_id: UUID,
+    payload: RegisteredApplicationUpdate,
+    current_user: AthenaTokenUser = Depends(require_admin),
+    db: AsyncSession = Depends(db_session),
+    applications: ModuleType = Depends(applications_repository),
+) -> RegisteredApplicationDetail:
+    """A new template at version 1 from the payload; secrets left out come from the original."""
+
+    version = await applications.duplicate_registered_application(
+        db,
+        application_id,
+        payload,
+        created_by=current_user.identifier,
+    )
+    await db.commit()
+    return _detail(version)
+
+
 @router.put(
     "/{application_id}",
     response_model=RegisteredApplicationDetail,
@@ -327,9 +434,7 @@ async def update_registered_application(
         updated_by=current_user.identifier,
     )
     await db.commit()
-    if version.application.application_type == ApplicationType.GITHUB_WORKFLOW.value:
-        return _github_registration_detail(version)
-    return _container_registration_detail(version)
+    return _detail(version)
 
 
 def _llm_model_out(model_name: str, *, pricing_available: bool) -> LLMModelOut:

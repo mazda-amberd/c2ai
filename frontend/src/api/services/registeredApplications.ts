@@ -10,9 +10,25 @@ export type ApiApplicationType = "github_workflow" | "containerized";
 export type ApiApplicationStatus = "active" | "draft" | "deprecated";
 export type ApiParameterType = "text" | "number" | "boolean" | "select" | "key_value";
 
-/** GitHub templates declare `{key, type}`; containerized ones `{key, value}`. */
-export type ApiGithubParameter = { key: string; type: ApiParameterType };
-export type ApiContainerParameter = { key: string; value: string };
+/** A GitHub template's deploy-form field. `default` pre-fills it and
+ *  `tier_defaults` (keyed "1".."4") replaces the default on a tier. */
+export type ApiGithubParameter = {
+  key: string;
+  type: ApiParameterType;
+  label?: string | null;
+  description?: string | null;
+  required?: boolean;
+  default?: unknown;
+  /** Choice ("select") parameters only. */
+  options?: string[];
+  tier_defaults?: Record<string, unknown>;
+};
+/** A container template's environment variable, with a value per tier where it differs. */
+export type ApiContainerParameter = {
+  key: string;
+  value: string;
+  tier_values?: Record<string, string>;
+};
 
 function toQuery(query: object): string {
   const params = new URLSearchParams();
@@ -168,8 +184,10 @@ export type RegisterContainerApplicationPayload = {
   container: {
     registry: string;
     image_registry: string;
-    registry_username: string;
-    /** Required to register. Left out of an edit, the stored password is kept. */
+    /** Left out, with the password, for a public image. */
+    registry_username?: string;
+    /** Required with a username to register. Left out of an edit or a copy,
+     *  the stored password (for the same username) is kept. */
     registry_password?: string;
     tag: string;
     port: number;
@@ -212,6 +230,110 @@ export const updateRegisteredApplication = async (
     `/api/registered-applications/${encodeURIComponent(applicationId)}`,
     { method: "PUT", body: JSON.stringify(payload) },
   );
+
+/** POST /{id}/duplicate — a new template at version 1 from the payload; a
+ *  password or token left out is copied from the original on the server. */
+export const duplicateRegisteredApplication = async (
+  applicationId: string,
+  payload: RegisterGithubApplicationPayload | RegisterContainerApplicationPayload,
+): Promise<ApiRegisteredApplicationDetail> =>
+  await apiFetch<ApiRegisteredApplicationDetail>(
+    `/api/registered-applications/${encodeURIComponent(applicationId)}/duplicate`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+
+/* ---------------- Checks while registering ---------------- */
+
+/** One thing checked; `ok` is null when it could not be told. */
+export type ApiRegistrationCheck = { name: string; ok: boolean | null; detail: string };
+
+export type ApiWorkflowInspection = {
+  checks: ApiRegistrationCheck[];
+  triggers: Array<"workflow_dispatch" | "repository_dispatch">;
+  inputs: ApiGithubParameter[];
+};
+
+/** POST /github/inspect — the workflow's triggers and inputs, and whether
+ *  C2AI will be able to start it. */
+export const inspectGithubWorkflow = async (body: {
+  github_connection: string;
+  repository: string;
+  workflow_file_path: string;
+  ref: string;
+  trigger_method?: "workflow_dispatch" | "repository_dispatch";
+}): Promise<ApiWorkflowInspection> =>
+  await apiFetch<ApiWorkflowInspection>("/api/registered-applications/github/inspect", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export type ApiImageCheck = {
+  ok: boolean;
+  detail: string;
+  image_reference: string | null;
+  digest: string | null;
+};
+
+/** POST /container/check — whether the tag exists, with the credentials
+ *  entered (or, with `application_id`, that template's stored password). */
+export const checkContainerImage = async (body: {
+  registry: string;
+  image_registry: string;
+  tag: string;
+  registry_username?: string;
+  registry_password?: string;
+  application_id?: string;
+}): Promise<ApiImageCheck> =>
+  await apiFetch<ApiImageCheck>("/api/registered-applications/container/check", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+/* ---------------- Secret environment variables (containers) ---------------- */
+
+export const getContainerSecretStorage = async (): Promise<{ configured: boolean }> =>
+  await apiFetch<{ configured: boolean }>(
+    "/api/registered-applications/container/secrets-status",
+  );
+
+export type ApiContainerSecret = {
+  id: string;
+  name: string;
+  environment_variable: string;
+};
+
+const secretsUrl = (applicationId: string) =>
+  `/api/registered-applications/${encodeURIComponent(applicationId)}/secrets`;
+
+export const listContainerSecrets = async (applicationId: string): Promise<ApiContainerSecret[]> => {
+  const res = await apiFetch<{ items: ApiContainerSecret[] }>(`${secretsUrl(applicationId)}?limit=200`);
+  return res.items ?? [];
+};
+
+export const createContainerSecret = async (
+  applicationId: string,
+  body: { name: string; environment_variable: string; secret_value: string },
+): Promise<ApiContainerSecret> =>
+  await apiFetch<ApiContainerSecret>(secretsUrl(applicationId), {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+export const updateContainerSecret = async (
+  applicationId: string,
+  secretId: string,
+  body: { name?: string; environment_variable?: string; secret_value?: string },
+): Promise<ApiContainerSecret> =>
+  await apiFetch<ApiContainerSecret>(`${secretsUrl(applicationId)}/${encodeURIComponent(secretId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+
+export const deleteContainerSecret = async (applicationId: string, secretId: string): Promise<void> => {
+  await apiFetch<unknown>(`${secretsUrl(applicationId)}/${encodeURIComponent(secretId)}`, {
+    method: "DELETE",
+  });
+};
 
 /* ---------------- Version pickers ---------------- */
 

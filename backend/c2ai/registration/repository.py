@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID
 
 from pydantic import SecretStr
@@ -118,6 +119,12 @@ async def _persist_new_application(
         raise
 
 
+def _by_tier(values: dict[int, Any]) -> dict[str, Any]:
+    """Per-tier values as stored: JSON object keys are text."""
+
+    return {str(tier): value for tier, value in sorted(values.items())}
+
+
 def _sealed(secret: SecretStr | None, *, column: str, kept: bytes | None) -> bytes | None:
     """Encrypt a newly supplied secret; without one, the stored one carries over."""
 
@@ -176,12 +183,14 @@ def _github_version(
     application_version.parameters = [
         ApplicationParameterDefinition(
             position=position,
-            label=parameter.key,
+            label=parameter.label or parameter.key,
             key=parameter.key,
             parameter_type=parameter.parameter_type.value,
-            required=True,
-            default_value=None,
-            options=[],
+            required=parameter.required,
+            default_value=parameter.default,
+            options=parameter.options,
+            description=parameter.description,
+            tier_defaults=_by_tier(parameter.tier_defaults),
         )
         for position, parameter in enumerate(payload.parameters)
     ]
@@ -198,6 +207,28 @@ def _container_version(
     """A Containerized version graph; ``previous`` supplies secrets left out of an edit."""
 
     kept = previous.container_configuration if previous else None
+    username = payload.container.registry_username
+    # No username: a public image, so no password either. The stored password
+    # carries over only for the username it belongs to.
+    password = (
+        _sealed(
+            payload.container.registry_password,
+            column=crypto.REGISTRY_PASSWORD,
+            kept=(
+                kept.registry_password_encrypted
+                if kept and kept.registry_username == username
+                else None
+            ),
+        )
+        if username
+        else None
+    )
+    if username and password is None:
+        raise UnprocessableEntityError(
+            f"Enter the registry password or token for '{username}', or leave the "
+            "username blank for a public image.",
+            code="RegistryPasswordRequired",
+        )
     application_version = RegisteredApplicationVersion(
         version=number,
         description=payload.description,
@@ -206,12 +237,8 @@ def _container_version(
     application_version.container_configuration = ContainerApplicationConfiguration(
         registry=payload.container.registry,
         registry_credential_id=kept.registry_credential_id if kept else None,
-        registry_username=payload.container.registry_username,
-        registry_password_encrypted=_sealed(
-            payload.container.registry_password,
-            column=crypto.REGISTRY_PASSWORD,
-            kept=kept.registry_password_encrypted if kept else None,
-        ),
+        registry_username=username,
+        registry_password_encrypted=password,
         image_repository=payload.container.image_registry,
         default_image_tag=payload.container.tag,
         image_pull_policy=payload.container.pull_policy.value,
@@ -238,6 +265,7 @@ def _container_version(
             required=True,
             default_value=parameter.value,
             options=[],
+            tier_defaults=_by_tier(parameter.tier_values),
         )
         for position, parameter in enumerate(payload.parameters)
     ]
@@ -308,6 +336,87 @@ async def create_container_registered_application(
     return application_version
 
 
+def _copied_secret_references(
+    previous: RegisteredApplicationVersion,
+) -> list[ApplicationSecretReference]:
+    return [
+        ApplicationSecretReference(
+            position=reference.position,
+            label=reference.label,
+            key=reference.key,
+            required=reference.required,
+            secret_reference=reference.secret_reference,
+        )
+        for reference in previous.secret_references
+    ]
+
+
+def _version_from(
+    payload: GitHubRegisteredApplicationUpdate | ContainerRegisteredApplicationUpdate,
+    *,
+    number: int,
+    created_by: str,
+    previous: RegisteredApplicationVersion,
+) -> RegisteredApplicationVersion:
+    """A version built from an edit-shaped payload, secrets left out taken from ``previous``."""
+
+    if payload.application_type.value != previous.application.application_type:
+        raise UnprocessableEntityError(
+            "An application's type cannot be changed. Register a new application instead.",
+            code="RegisteredApplicationTypeChange",
+        )
+    if isinstance(payload, GitHubRegisteredApplicationUpdate):
+        version = _github_version(payload, number=number, created_by=created_by, previous=previous)
+    else:
+        version = _container_version(
+            payload, number=number, created_by=created_by, previous=previous
+        )
+    version.secret_references = _copied_secret_references(previous)
+    return version
+
+
+async def duplicate_registered_application(
+    db: AsyncSession,
+    source_id: UUID,
+    payload: GitHubRegisteredApplicationUpdate | ContainerRegisteredApplicationUpdate,
+    *,
+    created_by: str,
+) -> RegisteredApplicationVersion:
+    """Register a copy of a template, as edited in the payload, at version 1.
+
+    The copy has the source's type. A registry password or LLM token left
+    out is copied from the source's current version, server side, since the
+    browser never sees them. Managed container secrets are not copied: their
+    values live only in the secret provider.
+    """
+
+    source = await get_current_registered_application_version(db, source_id)
+    if source is None:
+        raise RegisteredApplicationNotFound(source_id)
+    if await get_registered_application_by_name(db, payload.name):
+        raise DuplicateRegisteredApplication(payload.name)
+
+    version = _version_from(payload, number=1, created_by=created_by, previous=source)
+    application = RegisteredApplication(
+        name=payload.name,
+        application_type=source.application.application_type,
+        status=ApplicationStatus.ACTIVE.value,
+        current_version=1,
+        created_by=created_by,
+    )
+    application.versions.append(version)
+    await _persist_new_application(db, application)
+
+    logger.info(
+        "Duplicated registered application source=%s id=%s name=%s by=%s",
+        source_id,
+        application.id,
+        application.name,
+        created_by,
+    )
+    return version
+
+
 async def _active_instances(db: AsyncSession, application_id: UUID) -> list[tuple[str, int]]:
     """(name, tier) of every instance of the template that is not finished."""
 
@@ -371,20 +480,7 @@ async def update_registered_application(
     if previous is None:
         raise RegisteredApplicationNotFound(application_id)
     number = application.current_version + 1
-    if isinstance(payload, GitHubRegisteredApplicationUpdate):
-        version = _github_version(payload, number=number, created_by=updated_by, previous=previous)
-    else:
-        version = _container_version(payload, number=number, created_by=updated_by, previous=previous)
-    version.secret_references = [
-        ApplicationSecretReference(
-            position=reference.position,
-            label=reference.label,
-            key=reference.key,
-            required=reference.required,
-            secret_reference=reference.secret_reference,
-        )
-        for reference in previous.secret_references
-    ]
+    version = _version_from(payload, number=number, created_by=updated_by, previous=previous)
     # Set from this side: application.versions is not loaded, and loading it
     # just to append would read every version.
     version.application = application

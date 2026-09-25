@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Loader2, Rocket } from "lucide-react";
+import { History, Loader2, Rocket } from "lucide-react";
 import { useForm } from "react-hook-form";
 
 import { Dialog, DialogContent } from "@ui/dialog";
@@ -7,6 +7,7 @@ import { useToast } from "@components/Toast";
 import {
   deployContainerApplication,
   deployGithubApplication,
+  listDeployments,
   type ApiDeployment,
 } from "@api/services/registeredApplications";
 import {
@@ -17,7 +18,13 @@ import {
   type RegisteredApp,
   type RegisteredAppDetail,
 } from "@/utils/registeredAppsApi";
-import type { ParameterDef, ParamType } from "@/utils/registrationApi";
+import {
+  C2AI_FILLED,
+  choices,
+  prefilledFor,
+  type ParameterDef,
+  type ParamType,
+} from "@/utils/registrationApi";
 import {
   ACCENT,
   ContextNote,
@@ -55,17 +62,9 @@ const slugify = (value: string) =>
     .replace(/^-+|-+$/g, "")
     .slice(0, 40) || "app";
 
-/** Parameters this form never renders: Customer Name and Instance Name fill
- *  the first two, and Athena derives the rest (it rejects supplied values). */
-const FORM_MANAGED_PARAMETERS = new Set([
-  "customer_name",
-  "env_instance",
-  "slack_user",
-  "tier",
-  "target_tier",
-  "namespace",
-  "instance_name",
-]);
+/** Parameters this form never renders: Customer Name, Instance Name and
+ *  Version fill three, and C2AI derives the rest (it rejects supplied values). */
+const FORM_MANAGED_PARAMETERS = new Set(Object.keys(C2AI_FILLED));
 
 const EMPTY_FORM: DeployFormValues = {
   appId: "",
@@ -79,30 +78,67 @@ const PARAM_TYPE_LABEL: Record<ParamType, string> = {
   text: "Text",
   number: "Number",
   boolean: "Boolean",
+  select: "Choice",
   "key-value": "Key-Value",
 };
 
-/** Map the wizard's typed parameter values onto the API's
- *  `parameters: { key: value }` body. */
+const labelOf = (p: ParameterDef) => p.label || p.name;
+const isBlank = (p: ParameterDef) =>
+  p.type === "key-value" ? !p.kvKey.trim() : p.value.trim() === "";
+
+/** Why these values cannot be deployed, or null. */
+function parameterProblem(params: ParameterDef[]): string | null {
+  for (const p of params) {
+    if (p.required && isBlank(p)) return `${labelOf(p)} is required.`;
+    if (p.type === "number" && !isBlank(p) && !Number.isFinite(Number(p.value))) {
+      return `${labelOf(p)} must be a number.`;
+    }
+  }
+  return null;
+}
+
+/** Map the form's typed parameter values onto the API's
+ *  `parameters: { key: value }` body. A blank optional parameter is left
+ *  out, so the template's default (or nothing) applies. */
 function toParameterValues(params: ParameterDef[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const p of params) {
-    if (!p.name) continue;
+    if (!p.name || isBlank(p)) continue;
     switch (p.type) {
       case "boolean":
-        out[p.name] = String(p.boolValue) === "true";
+        out[p.name] = p.value === "true";
         break;
       case "number":
-        out[p.name] = p.value === "" ? null : Number(p.value);
+        out[p.name] = Number(p.value);
         break;
       case "key-value":
-        out[p.name] = p.kvKey ? { [p.kvKey]: p.kvValue } : {};
+        out[p.name] = { [p.kvKey]: p.kvValue };
         break;
       default:
         out[p.name] = p.value;
     }
   }
   return out;
+}
+
+/** A parameter holding a value from an earlier deployment. */
+function withValue(p: ParameterDef, value: unknown): ParameterDef {
+  if (value === null || value === undefined) return p;
+  if (p.type === "key-value" && typeof value === "object") {
+    const [pair] = Object.entries(value as Record<string, string>);
+    return pair ? { ...p, kvKey: pair[0], kvValue: String(pair[1]) } : p;
+  }
+  return { ...p, value: String(value) };
+}
+
+/** The version an earlier deployment ran. */
+function deployedVersion(deployment: ApiDeployment): string | null {
+  const configuration = deployment.configuration as {
+    parameters?: Record<string, unknown>;
+    container?: { image_tag?: string };
+  };
+  const version = configuration.container?.image_tag ?? configuration.parameters?.branch;
+  return typeof version === "string" ? version : null;
 }
 
 export default function DeployApplicationModal({
@@ -121,6 +157,8 @@ export default function DeployApplicationModal({
   const [versions, setVersions] = useState<string[]>([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // The template's most recent deployment, to fill the form in from.
+  const [lastDeploy, setLastDeploy] = useState<ApiDeployment | null>(null);
 
   const { register, watch, setValue, getValues, reset } =
     useForm<DeployFormValues>({ defaultValues: EMPTY_FORM });
@@ -162,6 +200,7 @@ export default function DeployApplicationModal({
     if (!app) return;
     let cancelled = false;
     setDetail(null);
+    setLastDeploy(null);
     setVersions([]);
     setValue("version", "");
     setValue("parameters", []);
@@ -172,14 +211,22 @@ export default function DeployApplicationModal({
       .then(async (d) => {
         if (cancelled) return;
         setDetail(d);
+        // Each field starts at the template's value for this tier.
         setValue(
           "parameters",
           d.type === "github"
             ? d.parameters
                 .filter((p) => !FORM_MANAGED_PARAMETERS.has(p.name))
-                .map((p) => ({ ...p }))
+                .map((p) => prefilledFor(p, tierNumber))
             : [],
         );
+        listDeployments({ application_id: d.id, limit: 1 })
+          .then(([latest]) => {
+            if (!cancelled) setLastDeploy(latest ?? null);
+          })
+          .catch(() => {
+            /* nothing to fill in from */
+          });
         setVersions(d.defaultVersion ? [d.defaultVersion] : []);
         setValue("version", d.defaultVersion);
 
@@ -212,10 +259,30 @@ export default function DeployApplicationModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [app?.id]);
 
+  /** The last deployment's customer, version and parameter values. */
+  const fillFromLastDeploy = () => {
+    if (!lastDeploy) return;
+    const configuration = lastDeploy.configuration as {
+      customer_name?: string;
+      parameters?: Record<string, unknown>;
+    };
+    const values = configuration.parameters ?? {};
+    setValue(
+      "parameters",
+      getValues("parameters").map((p) => (p.name in values ? withValue(p, values[p.name]) : p)),
+    );
+    const customer = configuration.customer_name ?? values.customer_name;
+    if (typeof customer === "string") setValue("customerName", customer);
+    const lastVersion = deployedVersion(lastDeploy);
+    if (lastVersion && versions.includes(lastVersion)) setValue("version", lastVersion);
+    showToast(`Filled in from ${lastDeploy.instance_name}.`);
+  };
+
   const resetAll = () => {
     setSubmitting(false);
     setVersions([]);
     setDetail(null);
+    setLastDeploy(null);
     setDetailLoading(false);
     reset(EMPTY_FORM);
   };
@@ -254,6 +321,12 @@ export default function DeployApplicationModal({
       showToast(
         "Instance Name must use lowercase letters, digits and hyphens only (no leading or trailing hyphen), up to 63 characters.",
       );
+      return;
+    }
+
+    const problem = detail.type === "github" ? parameterProblem(getValues("parameters")) : null;
+    if (problem) {
+      showToast(problem);
       return;
     }
 
@@ -380,6 +453,22 @@ export default function DeployApplicationModal({
             <input className={FIELD_CLASS} {...register("instanceName")} />
           </Field>
 
+          {lastDeploy && !detailLoading && (
+            <div className="flex items-center justify-between gap-3 rounded-[8px] border border-[#1c2836] px-3 py-2">
+              <span className="min-w-0 truncate text-[11.5px] text-[#8b97a5]">
+                Last deployed as <strong className="text-[#eef2f6]">{lastDeploy.instance_name}</strong>{" "}
+                on Tier {lastDeploy.tier}
+              </span>
+              <button
+                type="button"
+                onClick={fillFromLastDeploy}
+                className="flex shrink-0 items-center gap-1 text-[12px] font-semibold text-[#20abc7] hover:text-[#4dc6dd]"
+              >
+                <History className="h-3.5 w-3.5" /> Fill in from it
+              </button>
+            </div>
+          )}
+
           {detailLoading && (
             <p className="flex items-center gap-1.5 text-[11.5px] text-[#57606c]">
               <Loader2 className="h-3 w-3 animate-spin" /> Loading application
@@ -401,24 +490,42 @@ export default function DeployApplicationModal({
                   </p>
                 )}
                 {parameters.map((param, i) => (
-                  <Field key={param.name || i} label={param.name}>
+                  <Field
+                    key={param.name || i}
+                    label={labelOf(param)}
+                    required={param.required}
+                    helper={param.description || undefined}
+                  >
                     {param.type === "text" && (
                       <input
+                        aria-label={labelOf(param)}
                         className={FIELD_CLASS}
                         {...register(`parameters.${i}.value`)}
                       />
                     )}
                     {param.type === "number" && (
                       <input
+                        aria-label={labelOf(param)}
                         type="number"
                         className={FIELD_CLASS}
                         {...register(`parameters.${i}.value`)}
                       />
                     )}
                     {param.type === "boolean" && (
-                      <Select {...register(`parameters.${i}.boolValue`)}>
+                      <Select aria-label={labelOf(param)} {...register(`parameters.${i}.value`)}>
+                        {!param.required && <option value="">—</option>}
                         <option value="true">True</option>
                         <option value="false">False</option>
+                      </Select>
+                    )}
+                    {param.type === "select" && (
+                      <Select aria-label={labelOf(param)} {...register(`parameters.${i}.value`)}>
+                        <option value="">{param.required ? "Choose…" : "—"}</option>
+                        {choices(param.options).map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
                       </Select>
                     )}
                     {param.type === "key-value" && (
@@ -437,6 +544,7 @@ export default function DeployApplicationModal({
                     )}
                     <p className="text-[11px] text-[#57606c]">
                       {PARAM_TYPE_LABEL[param.type]}
+                      {param.label ? ` · ${param.name}` : ""}
                     </p>
                   </Field>
                 ))}

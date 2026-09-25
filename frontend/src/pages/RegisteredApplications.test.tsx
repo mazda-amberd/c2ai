@@ -88,4 +88,17 @@ describe("editing a registered application", () => {
     ).toBeTruthy();
     await waitFor(() => expect(detail).not.toHaveBeenCalled());
   });
+
+  it("duplicates any template, deployed or not", async () => {
+    const detail = vi
+      .spyOn(registeredApplicationsApi, "getRegisteredApplication")
+      .mockReturnValue(new Promise(() => {}));
+    await visit("Admin");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Duplicate billing" }));
+    });
+    expect(await screen.findByText("Duplicate billing")).toBeTruthy();
+    expect(detail).toHaveBeenCalledWith("app-2");
+  });
 });

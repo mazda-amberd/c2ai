@@ -11,7 +11,7 @@ import {
   type ApiCatalogItem,
   type ApiRegisteredApplicationDetail,
 } from "@api/services/registeredApplications";
-import { fromApiParamType, type ParameterDef } from "./registrationApi";
+import { fromApiParameter, type ParameterDef } from "./registrationApi";
 
 export type RegisteredAppType = "github" | "container";
 export type RegisteredAppStatus = "active" | "draft" | "deprecated";
@@ -44,8 +44,9 @@ export type RegisteredAppDetail = {
   workflowFile?: string;
   /** Registered ref (GitHub) or image tag (container) — the default version. */
   defaultVersion: string;
-  /** GitHub Workflow apps only — registered deployment parameters. The
-   *  Deploy Application form is generated from these (Story 5.1). */
+  /** GitHub Workflow apps only — registered deployment parameters, with
+   *  their defaults. The Deploy Application form is generated from these
+   *  (Story 5.1). */
   parameters: ParameterDef[];
 };
 
@@ -76,14 +77,7 @@ export function normalizeDetail(detail: ApiRegisteredApplicationDetail): Registe
       type: "github",
       workflowFile: detail.github.workflow_file_path,
       defaultVersion: detail.github.ref,
-      parameters: detail.parameters.map<ParameterDef>((p) => ({
-        name: p.key,
-        type: fromApiParamType(p.type),
-        value: "",
-        boolValue: false,
-        kvKey: "",
-        kvValue: "",
-      })),
+      parameters: detail.parameters.map<ParameterDef>(fromApiParameter),
     };
   }
   return {

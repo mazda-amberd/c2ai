@@ -5,6 +5,7 @@ import { Box, Github, Loader2 } from "lucide-react";
 import { Dialog, DialogContent } from "@ui/dialog";
 import {
   getRegisteredApplication,
+  type ApiGithubParameter,
   type ApiParameterType,
   type ApiRegisteredApplicationDetail,
 } from "@api/services/registeredApplications";
@@ -18,7 +19,7 @@ const PARAMETER_TYPE_LABEL: Record<ApiParameterType, string> = {
   text: "Text",
   number: "Number",
   boolean: "Boolean",
-  select: "Select",
+  select: "Choice",
   key_value: "Key-Value",
 };
 
@@ -28,6 +29,26 @@ const REGISTRY_LABEL: Record<string, string> = {
   "ghcr.io": "GitHub Container Registry",
   private: "Private Registry",
 };
+
+/** "debug on Tier 1, error on Tier 4" — the tiers with their own value. */
+function onTiers(values: Record<string, unknown> | undefined): string {
+  return Object.entries(values ?? {})
+    .map(([tier, value]) => `${String(value)} on Tier ${tier}`)
+    .join(", ");
+}
+
+/** A GitHub parameter in a line: its type, and what the deploy form starts with. */
+function describeParameter(p: ApiGithubParameter): string {
+  const parts = [PARAMETER_TYPE_LABEL[p.type] ?? p.type];
+  if (p.required === false) parts.push("optional");
+  if (p.options?.length) parts.push(`one of ${p.options.join(", ")}`);
+  if (p.default !== null && p.default !== undefined) {
+    parts.push(`default ${typeof p.default === "object" ? JSON.stringify(p.default) : String(p.default)}`);
+  }
+  const tiers = onTiers(p.tier_defaults);
+  if (tiers) parts.push(tiers);
+  return parts.join(" · ");
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -170,7 +191,7 @@ export default function ApplicationSummaryModal({
                     <Row label="Parameters" value="" />
                   ) : (
                     shown.parameters.map((p) => (
-                      <Row key={p.key} label={p.key} value={PARAMETER_TYPE_LABEL[p.type] ?? p.type} />
+                      <Row key={p.key} label={p.label || p.key} value={describeParameter(p)} />
                     ))
                   )}
                 </Section>
@@ -208,7 +229,16 @@ export default function ApplicationSummaryModal({
                   {shown.parameters.length === 0 ? (
                     <Row label="Environment Variables" value="" />
                   ) : (
-                    shown.parameters.map((p) => <Row key={p.key} label={p.key} value={p.value} />)
+                    shown.parameters.map((p) => {
+                      const tiers = onTiers(p.tier_values);
+                      return (
+                        <Row
+                          key={p.key}
+                          label={p.key}
+                          value={tiers ? `${p.value} (${tiers})` : p.value}
+                        />
+                      );
+                    })
                   )}
                 </Section>
               </>

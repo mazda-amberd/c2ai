@@ -1,15 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  AlertTriangle,
-  Box,
-  Check,
-  Github,
-  Loader2,
-  Pencil,
-  Plus,
-  Trash2,
-  X,
-} from "lucide-react";
+import { AlertTriangle, Box, Check, Github, ListChecks, Loader2, Plus, X } from "lucide-react";
 import { useFieldArray, useForm } from "react-hook-form";
 
 import { Dialog, DialogContent } from "@ui/dialog";
@@ -22,23 +12,42 @@ import {
   PANEL_BACKGROUND,
   Select,
 } from "./wizardStyles";
-import { getRegisteredApplication } from "@api/services/registeredApplications";
+import CheckList from "./CheckList";
+import EnvironmentEditor from "./EnvironmentEditor";
+import ParameterEditor from "./ParameterEditor";
+import {
+  checkContainerImage,
+  getContainerSecretStorage,
+  getRegisteredApplication,
+  inspectGithubWorkflow,
+  listContainerSecrets,
+  type ApiContainerSecret,
+  type ApiImageCheck,
+  type ApiWorkflowInspection,
+} from "@api/services/registeredApplications";
+import { parseImageReference } from "@/utils/imageReference";
 import { isApplicationNameTaken, type RegisteredApp } from "@/utils/registeredAppsApi";
 import {
+  ALWAYS_SENT,
+  choices,
   emptyParameterDef,
+  emptyVariable,
   fetchContainerRegistries,
   fetchGithubConnections,
+  fromApiParameter,
   registerApplication,
   registrationFromDetail,
+  repositoryFromUrl,
+  saveApplicationCopy,
   saveApplicationEdit,
   saveGithubConnection,
+  syncContainerSecrets,
   validateGithubConnection,
   type AppRegistration,
   type ContainerRegistryOption,
   type GithubConnection,
   type KeyValue,
   type ParameterDef,
-  type ParamType,
   type PullPolicy,
   type TriggerMethod,
 } from "@/utils/registrationApi";
@@ -48,10 +57,12 @@ type Kind = "github" | "container";
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** After a registration, or a saved edit. */
+  /** After a registration, a saved edit, or a copy. */
   onRegistered?: () => void;
-  /** The template to edit; absent to register a new one. */
+  /** The template to edit. */
   editing?: RegisteredApp | null;
+  /** The template to copy into a new one. */
+  duplicating?: RegisteredApp | null;
 };
 
 type StepDef = {
@@ -201,238 +212,6 @@ function ChoiceList<T extends string>({
   );
 }
 
-/* ---------------- Editable parameters table (Container) ---------------- */
-
-function ParamsTable({
-  title,
-  addLabel,
-  rows,
-  onAdd,
-  onRemove,
-  onChangeKey,
-  onChangeValue,
-  info,
-}: {
-  title: string;
-  addLabel: string;
-  rows: KeyValue[];
-  onAdd: () => void;
-  onRemove: (index: number) => void;
-  onChangeKey: (index: number, value: string) => void;
-  onChangeValue: (index: number, value: string) => void;
-  info: string;
-}) {
-  // Key/Value cells are always-editable inputs styled to look like plain
-  // text (no visible border/box) until focused — clicking anywhere in a
-  // cell edits it directly. The pencil icon is just a shortcut that focuses
-  // the row's Key input.
-  const keyRefs = useRef<Array<HTMLInputElement | null>>([]);
-
-  return (
-    <div>
-      <div className="mb-2 flex items-center justify-between">
-        <h4 className="text-[15px] font-bold text-[#eef2f6]">{title}</h4>
-        <button
-          type="button"
-          onClick={onAdd}
-          className="flex items-center gap-1 text-[12.5px] font-semibold text-[#20abc7] hover:text-[#4dc6dd]"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          {addLabel}
-        </button>
-      </div>
-      <div className="overflow-hidden rounded-[8px] border border-[#1c2836]">
-        <table className="w-full border-collapse text-[13px]">
-          <thead>
-            <tr>
-              <th className="border-b border-[#1c2836] px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-[#8b97a5]">
-                Key
-              </th>
-              <th className="border-b border-[#1c2836] px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-[#8b97a5]">
-                Value
-              </th>
-              <th className="w-16 border-b border-[#1c2836]" />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, i) => (
-              <tr key={i} className="border-b border-[#1c2836] last:border-b-0">
-                <td className="p-1.5">
-                  <input
-                    ref={(el) => {
-                      keyRefs.current[i] = el;
-                    }}
-                    value={row.key}
-                    onChange={(e) => onChangeKey(i, e.target.value)}
-                    className="h-8 w-full rounded border border-transparent bg-transparent px-2 text-[#eaf0f7] outline-none focus:border-[#20abc7]"
-                  />
-                </td>
-                <td className="p-1.5">
-                  <input
-                    value={row.value}
-                    onChange={(e) => onChangeValue(i, e.target.value)}
-                    className="h-8 w-full rounded border border-transparent bg-transparent px-2 text-[#eaf0f7] outline-none focus:border-[#20abc7]"
-                  />
-                </td>
-                <td className="px-4 py-2.5">
-                  <div className="flex items-center justify-end gap-2.5">
-                    <button
-                      type="button"
-                      onClick={() => keyRefs.current[i]?.focus()}
-                      className="text-[#8b97a5] hover:text-[#20abc7]"
-                      aria-label="Edit"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onRemove(i)}
-                      className="text-[#8b97a5] hover:text-[#f0655f]"
-                      aria-label="Remove"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td
-                  colSpan={3}
-                  className="px-4 py-5 text-center text-[12px] text-[#57606c]"
-                >
-                  No environment variables yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      <div className="mt-3 flex items-start gap-2 rounded-[8px] border border-[rgba(59,130,246,0.35)] bg-[rgba(59,130,246,0.08)] p-3 text-[12.5px] text-[#93c5fd]">
-        <span className="mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[#3b82f6] text-[10px] font-bold text-white">
-          i
-        </span>
-        <span>{info}</span>
-      </div>
-    </div>
-  );
-}
-
-/* ---------------- Typed parameters (GitHub Workflow only) ----------------
- * Each parameter has a Type — Text, Number, Boolean, or Key-Value — chosen
- * from a dropdown. No Value column here: the value is only assigned per
- * deployment on the dynamically generated deploy form (Story 5.1). */
-
-const PARAM_TYPE_LABEL: Record<ParamType, string> = {
-  text: "Text",
-  number: "Number",
-  boolean: "Boolean",
-  "key-value": "Key-Value",
-};
-
-function TypedParamsTable({
-  rows,
-  onAdd,
-  onRemove,
-  onChangeName,
-  onChangeType,
-  info,
-}: {
-  rows: ParameterDef[];
-  onAdd: () => void;
-  onRemove: (index: number) => void;
-  onChangeName: (index: number, value: string) => void;
-  onChangeType: (index: number, value: ParamType) => void;
-  info: string;
-}) {
-  return (
-    <div>
-      <div className="mb-2 flex items-center justify-between">
-        <h4 className="text-[15px] font-bold text-[#eef2f6]">Parameters</h4>
-        <button
-          type="button"
-          onClick={onAdd}
-          className="flex items-center gap-1 text-[12.5px] font-semibold text-[#20abc7] hover:text-[#4dc6dd]"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add Parameter
-        </button>
-      </div>
-      <div className="overflow-hidden rounded-[8px] border border-[#1c2836]">
-        <table className="w-full border-collapse text-[13px]">
-          <thead>
-            <tr>
-              <th className="border-b border-[#1c2836] px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-[#8b97a5]">
-                Parameter Name
-              </th>
-              <th className="w-[180px] border-b border-[#1c2836] px-4 py-2 text-left text-[10px] font-semibold uppercase tracking-wide text-[#8b97a5]">
-                Type
-              </th>
-              <th className="w-10 border-b border-[#1c2836]" />
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, i) => (
-              <tr key={i} className="border-b border-[#1c2836] last:border-b-0">
-                <td className="p-1.5">
-                  <input
-                    value={row.name}
-                    onChange={(e) => onChangeName(i, e.target.value)}
-                    placeholder="param_name"
-                    className="h-8 w-full rounded border border-transparent bg-transparent px-2 text-[#eaf0f7] outline-none focus:border-[#20abc7]"
-                  />
-                </td>
-                <td className="p-1.5">
-                  <Select
-                    className="h-8 text-[12px]"
-                    value={row.type}
-                    onChange={(e) =>
-                      onChangeType(i, e.target.value as ParamType)
-                    }
-                  >
-                    {(Object.keys(PARAM_TYPE_LABEL) as ParamType[]).map((t) => (
-                      <option key={t} value={t}>
-                        {PARAM_TYPE_LABEL[t]}
-                      </option>
-                    ))}
-                  </Select>
-                </td>
-                <td className="px-2 py-2 text-center">
-                  <button
-                    type="button"
-                    onClick={() => onRemove(i)}
-                    className="text-[#8b97a5] hover:text-[#f0655f]"
-                    aria-label="Remove"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {rows.length === 0 && (
-              <tr>
-                <td
-                  colSpan={3}
-                  className="px-4 py-5 text-center text-[12px] text-[#57606c]"
-                >
-                  No parameters yet.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      <div className="mt-3 flex items-start gap-2 rounded-[8px] border border-[rgba(59,130,246,0.35)] bg-[rgba(59,130,246,0.08)] p-3 text-[12.5px] text-[#93c5fd]">
-        <span className="mt-px flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-[#3b82f6] text-[10px] font-bold text-white">
-          i
-        </span>
-        <span>{info}</span>
-      </div>
-    </div>
-  );
-}
-
 /* ---------------- Toggle switch ---------------- */
 
 function Switch({
@@ -557,24 +336,86 @@ const emptyContainerValues = (): ContainerFormValues => ({
   ...DEFAULT_LLM,
 });
 
-/** Shown in an edit's secret fields: blank keeps the stored secret. */
-const KEEP_SECRET = "Unchanged — type a new one to replace it";
+const STORAGE_SIZES = ["10Gi", "20Gi", "50Gi", "100Gi"];
+/** A Kubernetes quantity: 25Gi, 512Mi, 1.5Ti… */
+const QUANTITY = /^\d+(\.\d+)?(Ki|Mi|Gi|Ti|Pi|Ei|k|M|G|T|P|E)?$/;
+/** What the secret provider accepts as a variable name. */
+const SECRET_VARIABLE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+/** Checks without which nothing was read from the workflow. */
+const READ_CHECKS = new Set(["Connection", "Repository", "Branch / Ref", "Workflow file"]);
+
+/** "chat copy", or "chat copy 2"… whichever name is free. */
+function copyName(name: string): string {
+  for (let n = 1; ; n += 1) {
+    const candidate = n === 1 ? `${name} copy` : `${name} copy ${n}`;
+    if (!isApplicationNameTaken(candidate)) return candidate;
+  }
+}
+
+/** Why these GitHub parameters cannot be saved, or null. */
+function parameterProblem(rows: ParameterDef[]): string | null {
+  if (rows.some((p) => !p.name.trim() && (p.label || p.value || p.description))) {
+    return "Every parameter needs a name.";
+  }
+  const names = rows.map((p) => p.name.trim()).filter(Boolean);
+  const twice = names.find((n, i) => names.indexOf(n) !== i);
+  if (twice) return `There are two parameters named '${twice}'.`;
+  for (const p of rows.filter((row) => row.name.trim())) {
+    const name = p.name.trim();
+    const options = choices(p.options);
+    if (p.type === "select" && options.length === 0) {
+      return `Give the choice parameter '${name}' its choices.`;
+    }
+    const values = [p.value, ...Object.values(p.tierValues)].filter((v) => v.trim() !== "");
+    if (p.type === "number" && values.some((v) => !Number.isFinite(Number(v)))) {
+      return `The values of '${name}' must be numbers.`;
+    }
+    if (p.type === "select" && values.some((v) => !options.includes(v))) {
+      return `The values of '${name}' must be among its choices.`;
+    }
+  }
+  return null;
+}
+
+/** Why these environment variables cannot be saved, or null. */
+function variableProblem(rows: KeyValue[], secretsAvailable: boolean | null): string | null {
+  const used = rows.filter((r) => r.key.trim() || r.value);
+  if (used.some((r) => !r.key.trim())) return "Every environment variable needs a key.";
+  const keys = used.map((r) => r.key.trim());
+  const twice = keys.find((k, i) => keys.indexOf(k) !== i);
+  if (twice) return `There are two variables named '${twice}'.`;
+  for (const r of used.filter((row) => row.secret)) {
+    const key = r.key.trim();
+    if (!SECRET_VARIABLE.test(key)) {
+      return `The secret '${key}' needs a name made of letters, digits and underscores.`;
+    }
+    if (!r.value && !r.secretId) return `Enter the value of the secret '${key}', or remove it.`;
+    if (!secretsAvailable && (!r.secretId || r.value)) {
+      return "Secret storage isn't configured on this server, so secret values can't be stored.";
+    }
+  }
+  return null;
+}
 
 export default function RegisterApplicationModal({
   open,
   onOpenChange,
   onRegistered,
   editing = null,
+  duplicating = null,
 }: Props) {
+  // The template the wizard starts from: edited in place, or copied.
+  const source = editing ?? duplicating;
+  const copying = !editing && !!duplicating;
   const [kind, setKind] = useState<Kind>("github");
   const [stepIndex, setStepIndex] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   // The template toast system surfaces validation, as the template does.
   const { showToast } = useToast();
 
-  /* Editing: the saved template fills the wizard. "loading" until it has,
-   * an error if it could not be read. */
-  const [edit, setEdit] = useState<{ status: "loading" | "ready" | "error"; message: string }>({
+  /* Editing or copying: the saved template fills the wizard. "loading"
+   * until it has, an error if it could not be read. */
+  const [load, setLoad] = useState<{ status: "loading" | "ready" | "error"; message: string }>({
     status: "ready",
     message: "",
   });
@@ -584,7 +425,25 @@ export default function RegisterApplicationModal({
    * "athena-environment"): its deploys use the server's own GitHub token.
    * It stays an option, so an edit need not change it. */
   const [unsavedConnection, setUnsavedConnection] = useState<string | null>(null);
-  const editingId = editing?.id;
+  // The source's registry username: its stored password carries over for it.
+  const [storedUsername, setStoredUsername] = useState("");
+  // Secret variables stored for the template being edited (not for a copy).
+  const [storedSecrets, setStoredSecrets] = useState<ApiContainerSecret[]>([]);
+  // Whether this server can keep secret values (null while asking).
+  const [secretsAvailable, setSecretsAvailable] = useState<boolean | null>(null);
+  const sourceId = source?.id;
+
+  // The last workflow and image checks, each for the settings it was made with.
+  const [inspection, setInspection] = useState<(ApiWorkflowInspection & { key: string }) | null>(
+    null,
+  );
+  const [inspecting, setInspecting] = useState(false);
+  const [imageCheck, setImageCheck] = useState<(ApiImageCheck & { key: string }) | null>(null);
+  const [checkingImage, setCheckingImage] = useState(false);
+  const [imageReference, setImageReference] = useState("");
+  const [referenceError, setReferenceError] = useState("");
+  // The Workflow Repository last filled in from a connection's URL.
+  const derivedRepository = useRef("");
 
   const githubFormApi = useForm<GithubFormValues>({
     mode: "onChange",
@@ -619,9 +478,9 @@ export default function RegisterApplicationModal({
 
   const [registries, setRegistries] = useState<ContainerRegistryOption[]>([]);
 
-  // An edit keeps the application's type, so it has no type step.
+  // An edit or a copy keeps the application's type, so it has no type step.
   const steps = (kind === "container" ? CONTAINER_STEPS : GITHUB_STEPS).filter(
-    (s) => !editing || s.id !== "type",
+    (s) => !source || s.id !== "type",
   );
   const stepIndexClamped = Math.min(stepIndex, steps.length - 1);
   const step = steps[stepIndexClamped];
@@ -641,40 +500,65 @@ export default function RegisterApplicationModal({
       .then(setConnections)
       .catch(() => setConnections([]));
     fetchContainerRegistries().then(setRegistries);
+    getContainerSecretStorage()
+      .then((storage) => setSecretsAvailable(storage.configured))
+      .catch(() => setSecretsAvailable(false));
   }, [open]);
 
   useEffect(() => {
-    if (!open || !editingId) return;
+    if (!open || !sourceId) return;
     let cancelled = false;
-    setEdit({ status: "loading", message: "" });
-    // The connections too, so the saved one is an option when the form fills.
+    setLoad({ status: "loading", message: "" });
+    // The connections too, so the saved one is an option when the form
+    // fills; and a container's secret variables, which live apart from it.
     Promise.all([
-      getRegisteredApplication(editingId),
+      getRegisteredApplication(sourceId),
       fetchGithubConnections().catch(() => [] as GithubConnection[]),
     ])
-      .then(([detail, saved]) => {
+      .then(async ([detail, saved]) => {
+        const secrets =
+          detail.application_type === "containerized"
+            ? await listContainerSecrets(sourceId).catch(() => [] as ApiContainerSecret[])
+            : [];
+        return { detail, saved, secrets };
+      })
+      .then(({ detail, saved, secrets }) => {
         if (cancelled) return;
         setConnections(saved);
         const { kind: savedKind, ...values } = registrationFromDetail(detail);
         // A template saved without LLM settings starts from the house ones,
         // as a new registration does.
         if (detail.llm === null) Object.assign(values, DEFAULT_LLM);
+        if (copying) values.name = copyName(detail.name);
         if (savedKind === "github") {
           const github = values as GithubFormValues;
           githubFormApi.reset(github);
           const known = saved.some((c) => c.id === github.connectionId);
           setUnsavedConnection(github.connectionId && !known ? github.connectionId : null);
         } else {
-          containerFormApi.reset(values as ContainerFormValues);
+          const container = values as ContainerFormValues;
+          // A copy has none of the secrets yet: their values must be entered again.
+          container.parameters = [
+            ...container.parameters,
+            ...secrets.map((stored) => ({
+              ...emptyVariable(),
+              key: stored.environment_variable,
+              secret: true,
+              secretId: copying ? undefined : stored.id,
+            })),
+          ];
+          containerFormApi.reset(container);
+          setStoredUsername(container.registryUsername);
+          setStoredSecrets(copying ? [] : secrets);
         }
         setKind(savedKind);
         setStepIndex(0);
         setStoredLlmToken(detail.llm !== null);
-        setEdit({ status: "ready", message: "" });
+        setLoad({ status: "ready", message: "" });
       })
       .catch((err) => {
         if (cancelled) return;
-        setEdit({
+        setLoad({
           status: "error",
           message: err instanceof Error ? err.message : "Could not load the application.",
         });
@@ -682,7 +566,20 @@ export default function RegisterApplicationModal({
     return () => {
       cancelled = true;
     };
-  }, [open, editingId, githubFormApi, containerFormApi]);
+  }, [open, sourceId, copying, githubFormApi, containerFormApi]);
+
+  // Picking a connection fills in the Workflow Repository from its URL,
+  // unless one was typed.
+  useEffect(() => {
+    const connection = connections.find((c) => c.id === githubForm.connectionId);
+    const repository = connection ? repositoryFromUrl(connection.repoUrl) : null;
+    if (!repository) return;
+    const current = githubFormApi.getValues("workflowRepository").trim();
+    if (!current || current === derivedRepository.current) {
+      githubFormApi.setValue("workflowRepository", repository);
+    }
+    derivedRepository.current = repository;
+  }, [githubForm.connectionId, connections, githubFormApi]);
 
   /** The Basic step's fields are entered before the type is chosen, into
    *  whichever form is active at the time. Switching type must carry them
@@ -714,9 +611,16 @@ export default function RegisterApplicationModal({
     setShowConnForm(false);
     setNewConn({ name: "", repoUrl: "", token: "" });
     setValidation({ status: "idle", message: "" });
-    setEdit({ status: "ready", message: "" });
+    setLoad({ status: "ready", message: "" });
     setStoredLlmToken(false);
     setUnsavedConnection(null);
+    setStoredUsername("");
+    setStoredSecrets([]);
+    setInspection(null);
+    setImageCheck(null);
+    setImageReference("");
+    setReferenceError("");
+    derivedRepository.current = "";
   };
 
   const handleClose = (next: boolean) => {
@@ -726,10 +630,11 @@ export default function RegisterApplicationModal({
 
   const nameError = useMemo(() => {
     if (!name.trim()) return null;
-    return isApplicationNameTaken(name, editingId)
+    // An edit may keep its own name; a copy needs a new one.
+    return isApplicationNameTaken(name, editing?.id)
       ? "An application with this name already exists."
       : null;
-  }, [name, editingId]);
+  }, [name, editing?.id]);
 
   /* ---------------- Validation gating Next ---------------- */
   // The template surfaces these as showToast(...) calls, not inline
@@ -752,7 +657,6 @@ export default function RegisterApplicationModal({
           );
         }
         if (!githubForm.connectionId) return fail("GitHub Connection is required.");
-        if (!githubForm.codeRepository.trim()) return fail("Code Repository is required.");
         if (!githubForm.workflowRepository.trim())
           return fail("Workflow Repository is required.");
         if (!githubForm.branch.trim()) return fail("Branch / Ref is required.");
@@ -764,29 +668,41 @@ export default function RegisterApplicationModal({
           return fail("Container Registry is required.");
         if (!containerForm.imageRegistry.trim())
           return fail("Image Registry is required.");
-        // An edit may leave the password blank: the stored one is kept.
-        if (
-          !containerForm.registryUsername.trim() ||
-          (!editing && !containerForm.registryPassword.trim())
-        ) {
-          return fail(
-            editing
-              ? "Registry Username is required."
-              : "Registry Username and Password / Token are required.",
-          );
-        }
         if (!containerForm.tag.trim()) return fail("Default Image Tag is required.");
         if (!containerForm.port.trim()) return fail("Container Port is required.");
         if (!/^\d+$/.test(containerForm.port.trim()))
           return fail("Container Port must be a number.");
+        {
+          // No login: a public image. An edit or a copy keeps the stored
+          // password for the same username.
+          const username = containerForm.registryUsername.trim();
+          const password = containerForm.registryPassword;
+          if (password && !username) {
+            return fail("Enter the Registry Username that goes with the password.");
+          }
+          const kept = !!source && !!username && username === storedUsername;
+          if (username && !password && !kept) {
+            return fail(
+              "Enter the Registry Password / Token, or leave the username blank for a public image.",
+            );
+          }
+        }
         return true;
       case "resources":
+        if (containerForm.storage.trim() && !QUANTITY.test(containerForm.storage.trim())) {
+          return fail("Storage must be a size such as 25Gi.");
+        }
         return true;
-      case "params":
-        return true;
+      case "params": {
+        const problem =
+          kind === "github"
+            ? parameterProblem(githubForm.parameters)
+            : variableProblem(containerForm.parameters, secretsAvailable);
+        return problem ? fail(problem) : true;
+      }
       case "llm": {
         const f = kind === "container" ? containerForm : githubForm;
-        const tokenKept = !!editing && storedLlmToken;
+        const tokenKept = !!source && storedLlmToken;
         if (
           !f.llmEndpoint.trim() ||
           (!tokenKept && !f.llmApiToken.trim()) ||
@@ -876,6 +792,120 @@ export default function RegisterApplicationModal({
     showToast(`Connection "${saved.name}" saved.`);
   };
 
+  /* ---------------- Checks ---------------- */
+
+  const workflowKey = [
+    githubForm.connectionId,
+    githubForm.workflowRepository.trim(),
+    githubForm.workflowFile.trim(),
+    githubForm.branch.trim(),
+  ].join("|");
+  const shownInspection = inspection?.key === workflowKey ? inspection : null;
+
+  /** Read the workflow as set now (or reuse the last reading of it). */
+  const inspectWorkflow = async (reuse: boolean): Promise<ApiWorkflowInspection | null> => {
+    if (reuse && shownInspection) return shownInspection;
+    const f = githubFormApi.getValues();
+    if (!f.connectionId || !f.workflowRepository.trim() || !f.workflowFile.trim() || !f.branch.trim()) {
+      showToast(
+        "Choose the GitHub Connection and enter the Workflow Repository, Branch / Ref and Workflow File first.",
+      );
+      return null;
+    }
+    setInspecting(true);
+    try {
+      const result = await inspectGithubWorkflow({
+        github_connection: f.connectionId,
+        repository: f.workflowRepository.trim(),
+        workflow_file_path: f.workflowFile.trim(),
+        ref: f.branch.trim(),
+      });
+      setInspection({ ...result, key: workflowKey });
+      // The workflow decides how it is started.
+      if (result.triggers.length > 0 && !result.triggers.includes(f.triggerMethod)) {
+        githubFormApi.setValue("triggerMethod", result.triggers[0]);
+        showToast(`Trigger Method set to ${result.triggers[0]}, which the workflow listens for.`);
+      }
+      return result;
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Could not read the workflow.");
+      return null;
+    } finally {
+      setInspecting(false);
+    }
+  };
+
+  /** Add the workflow's inputs as parameters, but not those already here or always sent. */
+  const importParameters = async () => {
+    const result = await inspectWorkflow(true);
+    if (!result) return;
+    const unread = result.checks.find((c) => c.ok === false && READ_CHECKS.has(c.name));
+    if (unread) {
+      showToast(`Could not read the workflow: ${unread.detail}`);
+      return;
+    }
+    const file = githubFormApi.getValues("workflowFile").split("/").pop();
+    const here = new Set(githubFormApi.getValues("parameters").map((p) => p.name.trim()));
+    const fresh = result.inputs.filter((i) => !ALWAYS_SENT.has(i.key) && !here.has(i.key));
+    if (fresh.length > 0) githubParams.append(fresh.map(fromApiParameter));
+    const left = result.inputs.length - fresh.length;
+    showToast(
+      fresh.length === 0
+        ? `Nothing new to import from ${file}.`
+        : `Imported ${fresh.length} parameter${fresh.length === 1 ? "" : "s"} from ${file}` +
+            (left ? ` (${left} already here or sent by C2AI).` : "."),
+    );
+  };
+
+  const imageKey = [
+    containerForm.containerRegistry,
+    containerForm.imageRegistry.trim(),
+    containerForm.tag.trim(),
+    containerForm.registryUsername.trim(),
+    containerForm.registryPassword,
+  ].join("|");
+  const shownImageCheck = imageCheck?.key === imageKey ? imageCheck : null;
+
+  const runImageCheck = async () => {
+    const f = containerFormApi.getValues();
+    if (!f.containerRegistry || !f.imageRegistry.trim() || !f.tag.trim()) {
+      showToast("Enter the Container Registry, Image Registry and Default Image Tag first.");
+      return;
+    }
+    const username = f.registryUsername.trim();
+    setCheckingImage(true);
+    try {
+      const result = await checkContainerImage({
+        registry: f.containerRegistry,
+        image_registry: f.imageRegistry.trim(),
+        tag: f.tag.trim(),
+        ...(username ? { registry_username: username } : {}),
+        ...(username && f.registryPassword ? { registry_password: f.registryPassword } : {}),
+        // An edit or a copy may use the stored password.
+        ...(sourceId ? { application_id: sourceId } : {}),
+      });
+      setImageCheck({ ...result, key: imageKey });
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Could not look the image up.");
+    } finally {
+      setCheckingImage(false);
+    }
+  };
+
+  /** Split a pasted image reference into the registry fields. */
+  const fillFromReference = () => {
+    const parts = parseImageReference(imageReference);
+    if (!parts) {
+      setReferenceError("That is not an image reference, such as ghcr.io/owner/app:1.2.3.");
+      return;
+    }
+    containerFormApi.setValue("containerRegistry", parts.registry);
+    containerFormApi.setValue("imageRegistry", parts.imageRegistry);
+    if (parts.tag) containerFormApi.setValue("tag", parts.tag);
+    setReferenceError("");
+    setImageReference("");
+  };
+
   /* ---------------- Submit ---------------- */
 
   const handleSubmit = async () => {
@@ -885,29 +915,52 @@ export default function RegisterApplicationModal({
         kind === "github"
           ? { kind: "github", ...githubFormApi.getValues() }
           : { kind: "container", ...containerFormApi.getValues() };
+      let id: string;
+      let message: string;
       if (editing) {
         const { version } = await saveApplicationEdit(editing.id, registration);
-        showToast(`"${registration.name.trim()}" saved as version ${version}.`);
+        id = editing.id;
+        message = `"${registration.name.trim()}" saved as version ${version}.`;
+      } else if (duplicating) {
+        ({ id } = await saveApplicationCopy(duplicating.id, registration));
+        message = `"${registration.name.trim()}" created from "${duplicating.name}".`;
       } else {
-        await registerApplication(registration);
-        showToast(`"${registration.name}" registered successfully.`);
+        ({ id } = await registerApplication(registration));
+        message = `"${registration.name}" registered successfully.`;
       }
+      // Secret values are kept by the secret provider, once the template exists.
+      if (
+        registration.kind === "container" &&
+        (registration.parameters.some((p) => p.secret) || storedSecrets.length > 0)
+      ) {
+        const failures = await syncContainerSecrets(id, registration.parameters, storedSecrets);
+        if (failures.length > 0) message += ` These secrets were not stored: ${failures.join("; ")}.`;
+      }
+      showToast(message);
       onRegistered?.();
       handleClose(false);
     } catch (err) {
       // 409 / 422 from the API (duplicate name, contract violation, an
       // instance deployed meanwhile) — surface the backend's detail message
       // in the template's toast.
-      const fallback = editing ? "Could not save the application." : "Registration failed.";
+      const fallback = source ? "Could not save the application." : "Registration failed.";
       showToast(err instanceof Error ? err.message : fallback);
     } finally {
       setSubmitting(false);
     }
   };
 
+  /** Shown in a secret field of an edit or a copy: blank keeps the stored one. */
+  const keepSecret = copying
+    ? `Copied from ${source?.name} — type a new one to replace it`
+    : "Unchanged — type a new one to replace it";
+
   const selectedConnection = connections.find(
     (c) => c.id === githubForm.connectionId,
   );
+  const imageHint =
+    registries.find((r) => r.value === containerForm.containerRegistry)?.imageHint ??
+    "company/application";
 
   const StepIcon = step.icon === "github" ? Github : Box;
 
@@ -950,7 +1003,11 @@ export default function RegisterApplicationModal({
               Step {stepIndexClamped + 1} of {steps.length} · {step.kicker}
             </p>
             <h3 className="text-lg font-bold text-[#eef2f6]">
-              {editing ? `Edit ${editing.name}` : "Register Application"}
+              {editing
+                ? `Edit ${editing.name}`
+                : duplicating
+                  ? `Duplicate ${duplicating.name}`
+                  : "Register Application"}
             </h3>
           </div>
         </div>
@@ -960,23 +1017,30 @@ export default function RegisterApplicationModal({
 
         {/* Body */}
         <div className="space-y-2">
-          {edit.status === "loading" && (
+          {load.status === "loading" && (
             <p className="flex items-center gap-2 py-6 text-[12.5px] text-[#8b97a5]">
               <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading the application…
             </p>
           )}
-          {edit.status === "error" && (
+          {load.status === "error" && (
             <p role="alert" className="py-6 text-[12.5px] text-[#f0655f]">
-              Could not load the application: {edit.message}
+              Could not load the application: {load.message}
             </p>
           )}
-          {edit.status === "ready" && editing && step.id === "basic" && (
+          {load.status === "ready" && editing && step.id === "basic" && (
             <p className="rounded-[8px] border border-[#1c2836] px-3 py-2 text-[12px] text-[#8b97a5]">
               Saving makes this version {editing.version + 1}. Anything deployed from now on
               uses it; past deployments keep the version they ran.
             </p>
           )}
-          {edit.status === "ready" && step.id === "basic" && (
+          {load.status === "ready" && duplicating && step.id === "basic" && (
+            <p className="rounded-[8px] border border-[#1c2836] px-3 py-2 text-[12px] text-[#8b97a5]">
+              The copy is a new application, starting at version 1; {duplicating.name} stays as
+              it is. Its passwords and tokens are copied unless you enter new ones, but secret
+              environment variables need their values entered again.
+            </p>
+          )}
+          {load.status === "ready" && step.id === "basic" && (
             <>
               <Field label="Application Name" required>
                 <input
@@ -1003,7 +1067,7 @@ export default function RegisterApplicationModal({
             </>
           )}
 
-          {edit.status === "ready" && step.id === "type" && (
+          {load.status === "ready" && step.id === "type" && (
             <ChoiceList
               value={kind}
               onChange={handleKindChange}
@@ -1024,7 +1088,7 @@ export default function RegisterApplicationModal({
             />
           )}
 
-          {edit.status === "ready" && step.id === "workflow" && (
+          {load.status === "ready" && step.id === "workflow" && (
             <>
               <Field label="GitHub Connection" required>
                 <Select {...githubFormApi.register("connectionId")}>
@@ -1139,8 +1203,8 @@ export default function RegisterApplicationModal({
 
               <Field
                 label="Code Repository"
-                required
-                helper="owner/repo — where the application source lives"
+                optional
+                helper="owner/repo — where the application source lives, if not in the workflow repository. Its branches and tags are the versions offered when deploying."
               >
                 <input
                   className={FIELD_CLASS}
@@ -1195,14 +1259,66 @@ export default function RegisterApplicationModal({
                   ]}
                 />
               </Field>
+
+              <button
+                type="button"
+                onClick={() => void inspectWorkflow(false)}
+                disabled={inspecting}
+                className="flex items-center gap-1.5 rounded-[6px] border px-3.5 py-2 text-[12.5px] font-semibold transition-colors hover:bg-[rgba(32,171,199,0.12)] disabled:cursor-wait disabled:opacity-60"
+                style={{ borderColor: ACCENT, color: ACCENT }}
+              >
+                {inspecting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListChecks className="h-3.5 w-3.5" />}
+                Check workflow
+              </button>
+              {shownInspection && <CheckList checks={shownInspection.checks} />}
             </>
           )}
 
-          {edit.status === "ready" && step.id === "container" && (
+          {load.status === "ready" && step.id === "container" && (
             <>
+              <Field
+                label="Paste an image reference"
+                optional
+                helper="Fills in the registry, image and tag below, e.g. ghcr.io/owner/app:1.2.3."
+              >
+                <div className="flex gap-2">
+                  <input
+                    aria-label="Image reference"
+                    className={FIELD_CLASS}
+                    placeholder="docker.io/company/application:1.0.0"
+                    value={imageReference}
+                    onChange={(e) => {
+                      setImageReference(e.target.value);
+                      setReferenceError("");
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        fillFromReference();
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={fillFromReference}
+                    disabled={!imageReference.trim()}
+                    className="shrink-0 rounded-[6px] border px-3 text-[12.5px] font-semibold disabled:opacity-40"
+                    style={{ borderColor: ACCENT, color: ACCENT }}
+                  >
+                    Fill in
+                  </button>
+                </div>
+                {referenceError && <p className="text-xs text-[#f0655f]">{referenceError}</p>}
+              </Field>
               <Field label="Container Registry" required>
                 <Select {...containerFormApi.register("containerRegistry")}>
                   <option value="">Select a registry…</option>
+                  {containerForm.containerRegistry &&
+                    !registries.some((r) => r.value === containerForm.containerRegistry) && (
+                      <option value={containerForm.containerRegistry}>
+                        {containerForm.containerRegistry}
+                      </option>
+                    )}
                   {registries.map((r) => (
                     <option key={r.value} value={r.value}>
                       {r.label}
@@ -1210,30 +1326,34 @@ export default function RegisterApplicationModal({
                   ))}
                 </Select>
               </Field>
-              <Field
-                label="Image Registry"
-                required
-                helper="company/application"
-              >
+              <Field label="Image Registry" required helper={imageHint}>
                 <input
                   className={FIELD_CLASS}
-                  placeholder="company/application"
+                  placeholder={imageHint}
                   {...containerFormApi.register("imageRegistry")}
                 />
               </Field>
               <div className="grid grid-cols-2 gap-3">
-                <Field label="Registry Username" required>
+                <Field
+                  label="Registry Username"
+                  optional
+                  helper="Leave both blank for a public image."
+                >
                   <input
                     className={FIELD_CLASS}
                     {...containerFormApi.register("registryUsername")}
                   />
                 </Field>
-                <Field label="Registry Password / Token" required={!editing}>
+                <Field label="Registry Password / Token" optional>
                   <input
                     type="password"
                     autoComplete="new-password"
                     className={FIELD_CLASS}
-                    placeholder={editing ? KEEP_SECRET : undefined}
+                    placeholder={
+                      source && containerForm.registryUsername.trim() === storedUsername && storedUsername
+                        ? keepSecret
+                        : undefined
+                    }
                     {...containerFormApi.register("registryPassword")}
                   />
                 </Field>
@@ -1268,10 +1388,26 @@ export default function RegisterApplicationModal({
                 title="Expose as a public service (Ingress)"
                 helper="An ingress can be configured during deployment."
               />
+
+              <button
+                type="button"
+                onClick={() => void runImageCheck()}
+                disabled={checkingImage}
+                className="flex items-center gap-1.5 rounded-[6px] border px-3.5 py-2 text-[12.5px] font-semibold transition-colors hover:bg-[rgba(32,171,199,0.12)] disabled:cursor-wait disabled:opacity-60"
+                style={{ borderColor: ACCENT, color: ACCENT }}
+              >
+                {checkingImage ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ListChecks className="h-3.5 w-3.5" />}
+                Check image
+              </button>
+              {shownImageCheck && (
+                <CheckList
+                  checks={[{ name: "Image", ok: shownImageCheck.ok, detail: shownImageCheck.detail }]}
+                />
+              )}
             </>
           )}
 
-          {edit.status === "ready" && step.id === "resources" && (
+          {load.status === "ready" && step.id === "resources" && (
             <>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="CPU Request" optional>
@@ -1288,53 +1424,62 @@ export default function RegisterApplicationModal({
                   {...containerFormApi.register("replicas")}
                 />
               </Field>
-              <Field label="Storage — Persistent Volume" optional>
-                <Select {...containerFormApi.register("storage")}>
-                  <option value="">No persistent volume</option>
-                  <option value="10Gi">10Gi</option>
-                  <option value="20Gi">20Gi</option>
-                  <option value="50Gi">50Gi</option>
-                  <option value="100Gi">100Gi</option>
-                </Select>
+              <Field
+                label="Storage — Persistent Volume"
+                optional
+                helper="A size such as 25Gi; blank for no persistent volume."
+              >
+                <input
+                  className={FIELD_CLASS}
+                  list="storage-sizes"
+                  placeholder="No persistent volume"
+                  autoComplete="off"
+                  {...containerFormApi.register("storage")}
+                />
+                <datalist id="storage-sizes">
+                  {STORAGE_SIZES.map((size) => (
+                    <option key={size} value={size} />
+                  ))}
+                </datalist>
               </Field>
             </>
           )}
 
-          {edit.status === "ready" && step.id === "params" && kind === "github" && (
-            <TypedParamsTable
+          {load.status === "ready" && step.id === "params" && kind === "github" && (
+            <ParameterEditor
               rows={githubForm.parameters}
+              ids={githubParams.fields.map((f) => f.id)}
               onAdd={() => githubParams.append(emptyParameterDef())}
               onRemove={(i) => githubParams.remove(i)}
-              onChangeName={(i, value) =>
-                githubFormApi.setValue(`parameters.${i}.name`, value)
+              onChange={(i, patch) =>
+                githubFormApi.setValue(`parameters.${i}`, {
+                  ...githubFormApi.getValues(`parameters.${i}`),
+                  ...patch,
+                })
               }
-              onChangeType={(i, value) =>
-                githubFormApi.setValue(`parameters.${i}.type`, value)
-              }
-              info="These key/value pairs will be sent to the workflow as inputs, and pre-filled on the deployment form.
-
-"
+              onImport={() => void importParameters()}
+              importing={inspecting}
             />
           )}
 
-          {edit.status === "ready" && step.id === "params" && kind === "container" && (
-            <ParamsTable
-              title="Environment Variables"
-              addLabel="Add Variable"
+          {load.status === "ready" && step.id === "params" && kind === "container" && (
+            <EnvironmentEditor
               rows={containerForm.parameters}
-              onAdd={() => containerParams.append({ key: "", value: "" })}
+              ids={containerParams.fields.map((f) => f.id)}
+              onAdd={() => containerParams.append(emptyVariable())}
               onRemove={(i) => containerParams.remove(i)}
-              onChangeKey={(i, value) =>
-                containerFormApi.setValue(`parameters.${i}.key`, value)
+              onChange={(i, patch) =>
+                containerFormApi.setValue(`parameters.${i}`, {
+                  ...containerFormApi.getValues(`parameters.${i}`),
+                  ...patch,
+                })
               }
-              onChangeValue={(i, value) =>
-                containerFormApi.setValue(`parameters.${i}.value`, value)
-              }
-              info="Environment variables set on the container for every deployment of this application. Resources, scaling, and storage are configured on the Resources & Scaling step."
+              secretsAvailable={secretsAvailable}
+              copying={copying}
             />
           )}
 
-          {edit.status === "ready" && step.id === "llm" && (
+          {load.status === "ready" && step.id === "llm" && (
             <>
               <Field label="LLM Endpoint" required>
                 <input
@@ -1344,12 +1489,12 @@ export default function RegisterApplicationModal({
                     : githubFormApi.register("llmEndpoint"))}
                 />
               </Field>
-              <Field label="LLM API Token" required={!(editing && storedLlmToken)}>
+              <Field label="LLM API Token" required={!(source && storedLlmToken)}>
                 <input
                   type="password"
                   autoComplete="new-password"
                   className={FIELD_CLASS}
-                  placeholder={editing && storedLlmToken ? KEEP_SECRET : "sk-••••••••••••"}
+                  placeholder={source && storedLlmToken ? keepSecret : "sk-••••••••••••"}
                   {...(kind === "container"
                     ? containerFormApi.register("llmApiToken")
                     : githubFormApi.register("llmApiToken"))}
@@ -1428,14 +1573,15 @@ export default function RegisterApplicationModal({
             <button
               type="button"
               onClick={goNext}
-              disabled={submitting || edit.status !== "ready"}
+              disabled={submitting || load.status !== "ready"}
               className="flex items-center gap-1.5 rounded-[6px] px-3.5 py-2 text-[12.5px] font-semibold text-[#04121a] transition-colors disabled:opacity-60"
               style={{ background: "#5eead4" }}
             >
               {submitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               {step.final ? (
                 <>
-                  <Check className="h-3.5 w-3.5" /> {editing ? "Save Changes" : "Create Application"}
+                  <Check className="h-3.5 w-3.5" />{" "}
+                  {editing ? "Save Changes" : duplicating ? "Create Copy" : "Create Application"}
                 </>
               ) : (
                 <>Next →</>

@@ -309,6 +309,9 @@ class ApplicationParameterDefinition(Base):
     required = Column(Boolean, nullable=False, default=False)
     default_value = Column(JSONB, nullable=True)
     options = Column(JSONB, nullable=False, default=list)
+    description = Column(Text, nullable=True)
+    # Tier number ("1".."4") -> the value used on that tier instead of the default.
+    tier_defaults = Column(JSONB, nullable=False, default=dict)
 
     application_version = relationship(
         "RegisteredApplicationVersion", back_populates="parameters"

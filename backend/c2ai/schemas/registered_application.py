@@ -87,11 +87,85 @@ class ContainerParameterDefinition(ParameterDefinition):
     default_value: Any | None = None
 
 
+_TIERS = range(1, 5)
+_VALUE_KIND = {
+    ParameterType.TEXT: "text",
+    ParameterType.NUMBER: "a number",
+    ParameterType.BOOLEAN: "true or false",
+    ParameterType.SELECT: "one of its choices",
+    ParameterType.KEY_VALUE: "text key/value pairs",
+}
+
+
+def _is_parameter_value(parameter_type: ParameterType, value: Any, options: list[str]) -> bool:
+    """Whether ``value`` is what a deploy may send for this type."""
+
+    if parameter_type == ParameterType.TEXT:
+        return isinstance(value, str)
+    if parameter_type == ParameterType.NUMBER:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if parameter_type == ParameterType.BOOLEAN:
+        return isinstance(value, bool)
+    if parameter_type == ParameterType.SELECT:
+        return isinstance(value, str) and value in options
+    return isinstance(value, dict) and all(
+        isinstance(key, str) and isinstance(item, str) for key, item in value.items()
+    )
+
+
 class RegisteredParameterDefinition(_ContractModel):
-    """User-supplied field definition rendered by the deployment wizard."""
+    """One deploy-form field of a GitHub Workflow template.
+
+    ``default`` pre-fills the deploy form and ``tier_defaults`` replaces it on
+    a tier. A deploy that leaves the value out gets them; an optional
+    parameter with neither is left out of the workflow inputs.
+    """
 
     key: str = Field(..., min_length=1, max_length=128, pattern=_CONFIG_KEY_RE.pattern)
     parameter_type: ParameterType = Field(..., alias="type")
+    label: str | None = Field(default=None, max_length=200)
+    description: str | None = Field(default=None, max_length=1000)
+    required: bool = True
+    default: Any | None = None
+    options: list[str] = Field(default_factory=list, max_length=100)
+    tier_defaults: dict[int, Any] = Field(default_factory=dict)
+
+    @field_validator("options")
+    @classmethod
+    def validate_options(cls, options: list[str]) -> list[str]:
+        cleaned = [option.strip() for option in options]
+        if any(not option for option in cleaned):
+            raise ValueError("choices cannot be empty")
+        if len(set(cleaned)) != len(cleaned):
+            raise ValueError("choices must be unique")
+        return cleaned
+
+    @model_validator(mode="after")
+    def validate_values(self) -> RegisteredParameterDefinition:
+        if self.parameter_type == ParameterType.SELECT and not self.options:
+            raise ValueError(f"the choice parameter '{self.key}' needs at least one choice")
+        if self.options and self.parameter_type != ParameterType.SELECT:
+            raise ValueError("choices are only supported for choice parameters")
+        kind = _VALUE_KIND[self.parameter_type]
+        if self.default == "":
+            self.default = None
+        if self.default is not None and not _is_parameter_value(
+            self.parameter_type, self.default, self.options
+        ):
+            raise ValueError(f"the default of '{self.key}' must be {kind}")
+        tier_defaults: dict[int, Any] = {}
+        for tier, value in self.tier_defaults.items():
+            if tier not in _TIERS:
+                raise ValueError("tier values are for tiers 1 to 4")
+            if value is None or value == "":
+                continue
+            if not _is_parameter_value(self.parameter_type, value, self.options):
+                raise ValueError(f"the Tier {tier} value of '{self.key}' must be {kind}")
+            tier_defaults[tier] = value
+        self.tier_defaults = tier_defaults
+        self.label = self.label or None
+        self.description = self.description or None
+        return self
 
 
 class RegisteredContainerParameterValue(_ContractModel):
@@ -99,11 +173,22 @@ class RegisteredContainerParameterValue(_ContractModel):
     Container environment value fixed at registration.
 
     A container template carries its own environment, so the value is supplied
-    once here instead of being asked for on every deployment.
+    once here instead of being asked for on every deployment. ``tier_values``
+    replaces it on the tiers that need something else.
     """
 
     key: str = Field(..., min_length=1, max_length=128, pattern=_CONFIG_KEY_RE.pattern)
     value: str = Field(default="", max_length=4096)
+    tier_values: dict[int, Annotated[str, Field(max_length=4096)]] = Field(
+        default_factory=dict
+    )
+
+    @field_validator("tier_values")
+    @classmethod
+    def validate_tier_values(cls, tier_values: dict[int, str]) -> dict[int, str]:
+        if any(tier not in _TIERS for tier in tier_values):
+            raise ValueError("tier values are for tiers 1 to 4")
+        return {tier: value for tier, value in tier_values.items() if value != ""}
 
 
 class LLMConfigurationCreate(_ContractModel):
@@ -326,18 +411,24 @@ class _ContainerConfigurationBase(_ContractModel):
         return tag
 
 class ContainerConfigurationCreate(_ContainerConfigurationBase):
-    """Container registration fields, including a write-only registry password."""
+    """Container registration fields, including a write-only registry password.
 
-    registry_username: str = Field(..., min_length=1, max_length=255)
-    registry_password: SecretStr = Field(..., min_length=1, max_length=65536)
+    A public image needs no registry login, so both are left out.
+    """
+
+    registry_password: SecretStr | None = Field(default=None, min_length=1, max_length=65536)
     tag: str = Field(..., min_length=1, max_length=128)
     port: int = Field(..., ge=1, le=65535)
+
+    @model_validator(mode="after")
+    def password_needs_username(self) -> ContainerConfigurationCreate:
+        if self.registry_password is not None and not self.registry_username:
+            raise ValueError("a registry password needs a registry username")
+        return self
 
 
 class ContainerConfigurationUpdate(ContainerConfigurationCreate):
     """Container fields on an edit; leaving the password out keeps the stored one."""
-
-    registry_password: SecretStr | None = Field(default=None, min_length=1, max_length=65536)
 
 
 class ContainerConfigurationOut(_ContainerConfigurationBase):
@@ -378,18 +469,6 @@ def _ensure_unique_definition_keys(
         raise ValueError("parameter keys must be unique within an application version")
 
 
-def _ensure_supported_registration_types(
-    parameters: list[RegisteredParameterDefinition],
-) -> None:
-    supported = {
-        ParameterType.TEXT,
-        ParameterType.NUMBER,
-        ParameterType.KEY_VALUE,
-    }
-    if any(parameter.parameter_type not in supported for parameter in parameters):
-        raise ValueError("registration parameters support text, number, or key_value")
-
-
 class _RegisteredApplicationCreateBase(_ContractModel):
     """Fields shared by both registration payload variants."""
 
@@ -418,7 +497,6 @@ class GitHubRegisteredApplicationCreate(_RegisteredApplicationCreateBase):
     @model_validator(mode="after")
     def validate_parameter_keys(self) -> GitHubRegisteredApplicationCreate:
         _ensure_unique_definition_keys(self.parameters)
-        _ensure_supported_registration_types(self.parameters)
         return self
 
 
@@ -462,6 +540,58 @@ RegisteredApplicationUpdate = Annotated[
     GitHubRegisteredApplicationUpdate | ContainerRegisteredApplicationUpdate,
     Field(discriminator="application_type"),
 ]
+
+
+class GitHubWorkflowInspectRequest(GitHubWorkflowConfiguration):
+    """Where a workflow is, to read it before registering; the trigger is optional."""
+
+    trigger_method: GitHubTriggerMethod | None = None
+
+
+class RegistrationCheck(_ContractModel):
+    """One thing checked before registering. ``ok`` is None when it could not be told."""
+
+    name: str
+    ok: bool | None
+    detail: str
+
+
+class GitHubWorkflowInspection(_ContractModel):
+    """What a workflow file declares, and whether C2AI can start it."""
+
+    checks: list[RegistrationCheck]
+    triggers: list[GitHubTriggerMethod] = Field(default_factory=list)
+    inputs: list[RegisteredParameterDefinition] = Field(default_factory=list)
+
+
+class ContainerImageCheckRequest(_ContractModel):
+    """An image to look up in its registry before registering it.
+
+    On an edit or a copy, ``application_id`` lends that template's stored
+    registry password when none is typed (for the same username).
+    """
+
+    registry: str = Field(..., min_length=1, max_length=200)
+    image_registry: str = Field(..., min_length=1, max_length=512)
+    tag: str = Field(..., min_length=1, max_length=128)
+    registry_username: str | None = Field(default=None, min_length=1, max_length=255)
+    registry_password: SecretStr | None = Field(default=None, min_length=1, max_length=65536)
+    application_id: UUID | None = None
+
+
+class ContainerImageCheck(_ContractModel):
+    """Whether the image and tag were found, with the registry's own words if not."""
+
+    ok: bool
+    detail: str
+    image_reference: str | None = None
+    digest: str | None = None
+
+
+class ContainerSecretStorage(_ContractModel):
+    """Whether secret environment variables can be stored on this server."""
+
+    configured: bool
 
 
 class TierDeploymentSummary(_ContractModel):

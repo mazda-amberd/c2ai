@@ -22,6 +22,10 @@ describe("RegisterApplicationModal", () => {
     ]);
     vi.spyOn(registrationApi, "fetchContainerRegistries").mockResolvedValue([]);
     vi.spyOn(registeredApplicationsApi, "listPricedLlmModels").mockResolvedValue([]);
+    vi.spyOn(registeredApplicationsApi, "getContainerSecretStorage").mockResolvedValue({
+      configured: true,
+    });
+    vi.spyOn(registeredApplicationsApi, "listContainerSecrets").mockResolvedValue([]);
     vi.spyOn(registeredApplicationsApi, "checkLlmModelPricing").mockResolvedValue({
       model_name: "qwen3-coder-next",
       pricing_available: true,
@@ -47,13 +51,14 @@ describe("RegisterApplicationModal", () => {
     expect(field("Branch / Ref").value).toBe("main");
     await screen.findByRole("option", { name: "Devops" });
     fireEvent.change(field("GitHub Connection"), { target: { value: "c-1" } });
-    fireEvent.change(field("Workflow Repository"), { target: { value: "amberd-ai/devops" } });
+    // The connection's repository fills in the Workflow Repository.
+    await waitFor(() => expect(field("Workflow Repository").value).toBe("amberd-ai/devops"));
+    next();
+    expect(await screen.findByText("Workflow File is required.")).toBeTruthy();
     fireEvent.change(field("Workflow File"), {
       target: { value: ".github/workflows/ada-deploy.yaml" },
     });
-    next();
-    expect(await screen.findByText("Code Repository is required.")).toBeTruthy();
-
+    // Optional: blank means the code lives in the workflow repository.
     fireEvent.change(field("Code Repository"), {
       target: { value: "amberd-ai/dealership_new" },
     });
@@ -78,7 +83,7 @@ describe("RegisterApplicationModal", () => {
 
   it("edits a saved container application, keeping the secrets left blank", async () => {
     vi.spyOn(registrationApi, "fetchContainerRegistries").mockResolvedValue([
-      { value: "Docker Hub", label: "Docker Hub" },
+      { value: "Docker Hub", label: "Docker Hub", imageHint: "company/application" },
     ]);
     vi.spyOn(registeredApplicationsApi, "getRegisteredApplication").mockResolvedValue({
       id: "app-1",
@@ -232,5 +237,256 @@ describe("RegisterApplicationModal", () => {
       api_token: "EMPTY",
       model_name: "qwen3-coder-next",
     });
+  });
+
+  it("checks a workflow and imports its inputs as parameters", async () => {
+    const inspect = vi.spyOn(registeredApplicationsApi, "inspectGithubWorkflow").mockResolvedValue({
+      checks: [
+        { name: "Repository", ok: true, detail: "amberd-ai/devops is reachable with this connection." },
+        { name: "GitHub Actions", ok: false, detail: "GitHub Actions does not list it." },
+      ],
+      triggers: ["repository_dispatch"],
+      inputs: [
+        { key: "customer_name", type: "text", description: "Who it is for", required: true, default: null },
+        { key: "dry_run", type: "boolean", required: false, default: false },
+        { key: "size", type: "select", required: true, default: "large", options: ["small", "large"] },
+        { key: "provider", type: "text", required: false },
+      ],
+    });
+    const register = vi
+      .spyOn(registeredApplicationsApi, "registerGithubApplication")
+      .mockResolvedValue({ id: "gh-1" } as Awaited<
+        ReturnType<typeof registeredApplicationsApi.registerGithubApplication>
+      >);
+    render(
+      <ToastProvider>
+        <RegisterApplicationModal open onOpenChange={() => {}} />
+      </ToastProvider>,
+    );
+
+    fireEvent.change(field("Application Name"), { target: { value: "chatbot" } });
+    next(); // -> type
+    next(); // -> workflow
+    await screen.findByRole("option", { name: "Devops" });
+    fireEvent.change(field("GitHub Connection"), { target: { value: "c-1" } });
+    fireEvent.change(field("Workflow File"), { target: { value: ".github/workflows/deploy.yml" } });
+    fireEvent.click(screen.getByRole("button", { name: /Check workflow/ }));
+    expect(await screen.findByText(/GitHub Actions does not list it/)).toBeTruthy();
+    expect(
+      await screen.findByText("Trigger Method set to repository_dispatch, which the workflow listens for."),
+    ).toBeTruthy();
+
+    next(); // -> params
+    fireEvent.click(screen.getByRole("button", { name: /Import from workflow/ }));
+    expect(
+      await screen.findByText("Imported 3 parameters from deploy.yml (1 already here or sent by C2AI)."),
+    ).toBeTruthy();
+    expect(inspect).toHaveBeenCalledOnce(); // the check's reading is reused
+    expect(screen.getByText(/C2AI fills this in: the Customer Name entered when deploying/)).toBeTruthy();
+    // Size gets another value on Tier 3.
+    fireEvent.click(screen.getAllByRole("button", { name: /Different value per tier/ })[1]);
+    fireEvent.change(screen.getByLabelText("Tier 3 value of size"), { target: { value: "small" } });
+    next(); // -> llm
+    fireEvent.click(screen.getByRole("button", { name: /Create Application/ }));
+
+    await waitFor(() => expect(register).toHaveBeenCalledOnce());
+    const payload = register.mock.calls[0][0];
+    expect(payload.github).toMatchObject({
+      repository: "amberd-ai/devops",
+      trigger_method: "repository_dispatch",
+    });
+    expect(payload.github).not.toHaveProperty("code_repository");
+    const base = { label: null, description: null, options: [], tier_defaults: {} };
+    expect(payload.parameters).toEqual([
+      { ...base, key: "customer_name", type: "text", description: "Who it is for", required: true, default: null },
+      { ...base, key: "dry_run", type: "boolean", required: false, default: false },
+      {
+        ...base,
+        key: "size",
+        type: "select",
+        required: true,
+        default: "large",
+        options: ["small", "large"],
+        tier_defaults: { "3": "small" },
+      },
+    ]);
+  });
+
+  it("registers a public image from a pasted reference, with a tier value and a secret", async () => {
+    vi.spyOn(registrationApi, "fetchContainerRegistries").mockResolvedValue(
+      registrationApi.CONTAINER_REGISTRIES,
+    );
+    const check = vi.spyOn(registeredApplicationsApi, "checkContainerImage").mockResolvedValue({
+      ok: true,
+      detail: "Found ghcr.io/amberd-ai/chat:2.1.0.",
+      image_reference: "ghcr.io/amberd-ai/chat:2.1.0",
+      digest: null,
+    });
+    const register = vi
+      .spyOn(registeredApplicationsApi, "registerContainerApplication")
+      .mockResolvedValue({ id: "new-app" } as Awaited<
+        ReturnType<typeof registeredApplicationsApi.registerContainerApplication>
+      >);
+    const createSecret = vi
+      .spyOn(registeredApplicationsApi, "createContainerSecret")
+      .mockResolvedValue({ id: "s-1", name: "api-key", environment_variable: "API_KEY" });
+    render(
+      <ToastProvider>
+        <RegisterApplicationModal open onOpenChange={() => {}} />
+      </ToastProvider>,
+    );
+
+    fireEvent.change(field("Application Name"), { target: { value: "chat" } });
+    next(); // -> type
+    fireEvent.click(screen.getByText("Containerized Application"));
+    next(); // -> container
+    await screen.findByRole("option", { name: "GitHub Container Registry" });
+    fireEvent.change(screen.getByLabelText("Image reference"), {
+      target: { value: "ghcr.io/amberd-ai/chat:2.1.0" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Fill in" }));
+    expect(field("Container Registry").value).toBe("GitHub Container Registry");
+    expect(field("Image Registry").value).toBe("amberd-ai/chat");
+    expect(field("Default Image Tag").value).toBe("2.1.0");
+    fireEvent.change(field("Container Port"), { target: { value: "8080" } });
+    fireEvent.click(screen.getByRole("button", { name: /Check image/ }));
+    expect(await screen.findByText(/Found ghcr.io\/amberd-ai\/chat:2.1.0/)).toBeTruthy();
+    expect(check).toHaveBeenCalledWith({
+      registry: "GitHub Container Registry",
+      image_registry: "amberd-ai/chat",
+      tag: "2.1.0",
+    });
+
+    next(); // -> resources: a public image needs no login
+    fireEvent.change(field("Storage — Persistent Volume"), { target: { value: "lots" } });
+    next();
+    expect(await screen.findByText("Storage must be a size such as 25Gi.")).toBeTruthy();
+    fireEvent.change(field("Storage — Persistent Volume"), { target: { value: "25Gi" } });
+    next(); // -> environment
+
+    fireEvent.click(screen.getByRole("button", { name: /Add Variable/ }));
+    fireEvent.change(screen.getAllByLabelText("Variable name")[0], { target: { value: "LOG_LEVEL" } });
+    fireEvent.change(screen.getByLabelText("Value of LOG_LEVEL"), { target: { value: "info" } });
+    fireEvent.click(screen.getByLabelText("Different value of LOG_LEVEL per tier"));
+    fireEvent.change(screen.getByLabelText("Tier 1 value of LOG_LEVEL"), { target: { value: "debug" } });
+    fireEvent.click(screen.getByRole("button", { name: /Add Variable/ }));
+    fireEvent.change(screen.getAllByLabelText("Variable name")[1], { target: { value: "API_KEY" } });
+    fireEvent.click(screen.getByLabelText("API_KEY is secret"));
+    fireEvent.change(screen.getByLabelText("Value of API_KEY"), { target: { value: "s3cret" } });
+    next(); // -> llm
+    fireEvent.click(screen.getByRole("button", { name: /Create Application/ }));
+
+    await waitFor(() => expect(createSecret).toHaveBeenCalledOnce());
+    const payload = register.mock.calls[0][0];
+    expect(payload.container).toMatchObject({
+      registry: "GitHub Container Registry",
+      image_registry: "amberd-ai/chat",
+      tag: "2.1.0",
+      port: 8080,
+      storage: "25Gi",
+    });
+    expect(payload.container).not.toHaveProperty("registry_username");
+    expect(payload.container).not.toHaveProperty("registry_password");
+    // The secret is not part of the template; it goes to the secret provider.
+    expect(payload.parameters).toEqual([
+      { key: "LOG_LEVEL", value: "info", tier_values: { "1": "debug" } },
+    ]);
+    expect(createSecret).toHaveBeenCalledWith("new-app", {
+      name: "api-key",
+      environment_variable: "API_KEY",
+      secret_value: "s3cret",
+    });
+  });
+
+  it("duplicates an application: a new name, secrets copied, secret variables asked for again", async () => {
+    vi.spyOn(registrationApi, "fetchContainerRegistries").mockResolvedValue(
+      registrationApi.CONTAINER_REGISTRIES,
+    );
+    vi.spyOn(registeredApplicationsApi, "getRegisteredApplication").mockResolvedValue({
+      id: "app-1",
+      name: "chat-service",
+      description: "Chat",
+      status: "active",
+      version: 3,
+      created_by: "admin@amberd.ai",
+      created_at: "2026-09-24T00:00:00Z",
+      application_type: "containerized",
+      container: {
+        registry: "Docker Hub",
+        image_registry: "amberd/chat-service",
+        registry_username: "amberd",
+        tag: "1.2.3",
+        port: 8080,
+        pull_policy: "IfNotPresent",
+        expose_public_service: true,
+        gpu_request: null,
+        cpu_request: "500m",
+        memory_request: "512Mi",
+        scaling: "1",
+        storage: null,
+      },
+      parameters: [{ key: "LOG_LEVEL", value: "info", tier_values: {} }],
+      llm: { endpoint: "http://amberd-llm-gateway:8010", model_name: "qwen3-6" },
+    });
+    vi.spyOn(registeredApplicationsApi, "listContainerSecrets").mockResolvedValue([
+      { id: "s-1", name: "api-key", environment_variable: "API_KEY" },
+    ]);
+    const duplicate = vi
+      .spyOn(registeredApplicationsApi, "duplicateRegisteredApplication")
+      .mockResolvedValue({ id: "copy-1" } as Awaited<
+        ReturnType<typeof registeredApplicationsApi.duplicateRegisteredApplication>
+      >);
+    const createSecret = vi
+      .spyOn(registeredApplicationsApi, "createContainerSecret")
+      .mockResolvedValue({ id: "s-2", name: "api-key", environment_variable: "API_KEY" });
+    const original = {
+      id: "app-1",
+      name: "chat-service",
+      desc: "Chat",
+      type: "container" as const,
+      status: "active" as const,
+      version: 3,
+      instances: 2,
+      tiers: { "Tier 1": 2 },
+      canDelete: false,
+      canEdit: false,
+      created: "2026-09-24",
+    };
+    render(
+      <ToastProvider>
+        <RegisterApplicationModal open onOpenChange={() => {}} duplicating={original} />
+      </ToastProvider>,
+    );
+
+    expect(await screen.findByDisplayValue("chat-service copy")).toBeTruthy();
+    expect(screen.getByText("Duplicate chat-service")).toBeTruthy();
+    next(); // -> container: the type is the original's
+    expect((field("Registry Password / Token") as HTMLInputElement).placeholder).toBe(
+      "Copied from chat-service — type a new one to replace it",
+    );
+    next(); // -> resources
+    next(); // -> environment
+    next();
+    expect(await screen.findByText("Enter the value of the secret 'API_KEY', or remove it.")).toBeTruthy();
+    fireEvent.change(screen.getByLabelText("Value of API_KEY"), { target: { value: "copy-secret" } });
+    next(); // -> llm
+    fireEvent.click(screen.getByRole("button", { name: /Create Copy/ }));
+
+    await waitFor(() => expect(duplicate).toHaveBeenCalledOnce());
+    const [sourceId, sent] = duplicate.mock.calls[0];
+    const payload = sent as registeredApplicationsApi.RegisterContainerApplicationPayload;
+    expect(sourceId).toBe("app-1");
+    expect(payload.name).toBe("chat-service copy");
+    expect(payload.container).toMatchObject({ registry_username: "amberd", tag: "1.2.3" });
+    expect(payload.container).not.toHaveProperty("registry_password");
+    expect(payload.llm).not.toHaveProperty("api_token");
+    await waitFor(() =>
+      expect(createSecret).toHaveBeenCalledWith("copy-1", {
+        name: "api-key",
+        environment_variable: "API_KEY",
+        secret_value: "copy-secret",
+      }),
+    );
+    expect(await screen.findByText('"chat-service copy" created from "chat-service".')).toBeTruthy();
   });
 });

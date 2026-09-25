@@ -332,8 +332,12 @@ def _resolve_deployment_parameters(
             )
             continue
 
+        # A value for this tier replaces the default.
+        tier_value = (definition.tier_defaults or {}).get(str(tier))
         if key in supplied_parameters:
             value = supplied_parameters[key]
+        elif tier_value is not None:
+            value = tier_value
         elif definition.default_value is not None:
             value = definition.default_value
         elif definition.required:

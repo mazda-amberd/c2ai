@@ -720,7 +720,18 @@ def test_register_github_application_returns_created_template(
     assert body["application_type"] == "github_workflow"
     assert body["version"] == 1
     assert body["github"]["github_connection"] == "github-app-1"
-    assert body["parameters"] == [{"key": "tier", "type": "select"}]
+    assert body["parameters"] == [
+        {
+            "key": "tier",
+            "type": "select",
+            "label": "Target Tier",
+            "description": None,
+            "required": True,
+            "default": None,
+            "options": ["Tier 1", "Tier 2"],
+            "tier_defaults": {},
+        }
+    ]
     assert body["llm"] == {
         "endpoint": "https://llm.example.com/v1",
         "model_name": "qwen3-coder-next",
@@ -1013,7 +1024,7 @@ def test_register_container_application_returns_created_template(
     assert body["container"]["port"] == 8080
     assert body["container"]["pull_policy"] == "IfNotPresent"
     assert "registry_password" not in body["container"]
-    assert body["parameters"] == [{"key": "LOG_LEVEL", "value": "info"}]
+    assert body["parameters"] == [{"key": "LOG_LEVEL", "value": "info", "tier_values": {}}]
     assert "secrets" not in body
     assert body["llm"] == {
         "endpoint": "https://amberd-llm-gateway:8010",

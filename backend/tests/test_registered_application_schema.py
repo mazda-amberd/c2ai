@@ -227,15 +227,23 @@ def test_container_registration_rejects_removed_definition_fields(removed_field:
     )
 
 
-@pytest.mark.parametrize(
-    "field",
-    ["registry_username", "registry_password", "tag", "port"],
-)
+@pytest.mark.parametrize("field", ["tag", "port"])
 def test_container_registration_requires_registry_and_image_fields(field: str):
     payload = _container_payload()
     del payload["container"][field]
 
     with pytest.raises(ValidationError):
+        _CREATE_ADAPTER.validate_python(payload)
+
+
+def test_a_public_image_needs_no_registry_login_but_a_password_needs_a_username():
+    payload = _container_payload()
+    del payload["container"]["registry_username"], payload["container"]["registry_password"]
+    public = _CREATE_ADAPTER.validate_python(payload)
+    assert (public.container.registry_username, public.container.registry_password) == (None, None)
+
+    payload["container"]["registry_password"] = "secret"
+    with pytest.raises(ValidationError, match="a registry password needs a registry username"):
         _CREATE_ADAPTER.validate_python(payload)
 
 
@@ -301,17 +309,37 @@ def test_github_registration_rejects_removed_secret_references():
     )
 
 
-def test_registration_parameters_accept_only_supported_types():
+def test_registration_parameters_take_every_type_with_typed_defaults():
     payload = _github_payload()
-    payload["parameters"][0]["type"] = "boolean"
+    payload["parameters"] = [
+        {"key": "dry_run", "type": "boolean", "default": False, "tier_defaults": {"4": True}},
+        {"key": "size", "type": "select", "options": ["small", "large"], "default": "small"},
+        {"key": "replicas", "type": "number", "default": 2, "required": False},
+    ]
+    parameters = _CREATE_ADAPTER.validate_python(payload).parameters
+    assert [(p.key, p.parameter_type.value, p.default) for p in parameters] == [
+        ("dry_run", "boolean", False), ("size", "select", "small"), ("replicas", "number", 2)
+    ]
+    assert parameters[0].tier_defaults == {4: True}
+    assert parameters[2].required is False
 
-    with pytest.raises(ValidationError) as exc_info:
+
+@pytest.mark.parametrize(
+    ("parameter", "message"),
+    [
+        ({"key": "size", "type": "select"}, "needs at least one choice"),
+        ({"key": "size", "type": "select", "options": ["s"], "default": "m"}, "one of its choices"),
+        ({"key": "n", "type": "number", "default": "2"}, "must be a number"),
+        ({"key": "flag", "type": "boolean", "tier_defaults": {"2": "yes"}}, "true or false"),
+        ({"key": "t", "type": "text", "tier_defaults": {"5": "x"}}, "tiers 1 to 4"),
+        ({"key": "t", "type": "text", "options": ["a"]}, "only supported for choice"),
+    ],
+)
+def test_registration_parameter_values_must_fit_their_type(parameter, message):
+    payload = _github_payload()
+    payload["parameters"] = [parameter]
+    with pytest.raises(ValidationError, match=message):
         _CREATE_ADAPTER.validate_python(payload)
-
-    assert any(
-        "support text, number, or key_value" in error["msg"]
-        for error in exc_info.value.errors()
-    )
 
 
 @pytest.mark.parametrize("field", ["endpoint", "api_token", "model_name"])

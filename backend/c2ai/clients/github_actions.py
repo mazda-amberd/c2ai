@@ -3,6 +3,7 @@ GitHub Actions API client for triggering workflows.
 """
 
 import asyncio
+import base64
 import logging
 from collections import OrderedDict
 from datetime import UTC, datetime, timedelta
@@ -114,6 +115,43 @@ class GitHubActionsClient:
             return True
         _ref_cache[key] = (exists, now)
         return exists
+
+    async def _get_or_none(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        """GET one resource of this repository; None when GitHub answers 404."""
+
+        url = f"{self.api_base_url}/repos/{self.repo_owner}/{self.repo_name}{path}"
+        async with http_client(20.0) as client:
+            response = await client.get(url, headers=self._headers(), params=params)
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        return response.json()
+
+    async def get_repository(self) -> dict[str, Any] | None:
+        """The repository as this token sees it (including ``permissions``)."""
+
+        return await self._get_or_none("")
+
+    async def get_file(self, path: str, ref: str) -> str | None:
+        """A text file's contents on ``ref``; None when there is no such file."""
+
+        body = await self._get_or_none(
+            f"/contents/{quote(path.strip('/'), safe='/')}", params={"ref": ref}
+        )
+        if not isinstance(body, dict) or body.get("type") != "file":
+            return None
+        if body.get("encoding") != "base64" or not isinstance(body.get("content"), str):
+            raise ValueError("GitHub returned the file in an unexpected encoding")
+        return base64.b64decode(body["content"]).decode("utf-8")
+
+    async def get_workflow(self, path: str) -> dict[str, Any] | None:
+        """GitHub Actions' record of a workflow (``state``); None when it lists none.
+
+        Actions lists the workflows on the default branch only.
+        """
+
+        name = PurePosixPath(path).name
+        return await self._get_or_none(f"/actions/workflows/{quote(name, safe='')}")
 
     async def cancel_workflow_run(self, run_id: int) -> None:
         """Ask GitHub to cancel a run; an already finished run (409) is fine."""

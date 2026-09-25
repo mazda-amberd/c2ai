@@ -633,7 +633,162 @@ async def test_an_edit_keeps_the_type_and_needs_a_free_name(env):
     recased = client.put(f"{BASE}/{application_id}", json=_github_edit(name="Example-Chatbot"))
     assert recased.status_code == 200, recased.text
     assert (recased.json()["name"], recased.json()["version"]) == ("Example-Chatbot", 2)
-    assert recased.json()["parameters"] == [{"key": "customer_name", "type": "text"}]
+    assert [(p["key"], p["type"]) for p in recased.json()["parameters"]] == [
+        ("customer_name", "text")
+    ]
+
+
+# --- What a template carries into each deploy ----------------------------------------
+
+
+def _register_github_with(client, parameters):
+    body = {
+        "application_type": "github_workflow",
+        "name": "typed-chatbot",
+        "github": {
+            "github_connection": "github-app-1",
+            "trigger_method": "workflow_dispatch",
+            "repository": "amberd-ai/example-chatbot",
+            "workflow_file_path": ".github/workflows/deploy.yml",
+            "ref": "main",
+        },
+        "parameters": parameters,
+        "llm": {"endpoint": "https://llm.example.com/v1", "api_token": "t", "model_name": "m"},
+    }
+    response = client.post(f"{BASE}/github", json=body)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+async def test_parameters_deploy_with_their_defaults_and_tier_values(env):
+    client, github, _registry, _sf = env
+    registered = _register_github_with(client, [
+        {"key": "customer_name", "type": "text"},
+        {"key": "dry_run", "type": "boolean", "label": "Dry run", "default": False,
+         "tier_defaults": {"2": True}},
+        {"key": "size", "type": "select", "options": ["small", "large"], "default": "small",
+         "description": "How big an instance to start"},
+        {"key": "replicas", "type": "number", "required": False},
+        {"key": "note", "type": "text", "required": False, "default": "hello"},
+    ])
+    size = next(p for p in registered["parameters"] if p["key"] == "size")
+    assert (size["options"], size["default"], size["description"]) == (
+        ["small", "large"], "small", "How big an instance to start"
+    )
+
+    def deploy(tier, **parameters):
+        response = client.post(
+            f"{BASE}/{registered['id']}/deployments",
+            json={"tier": tier, "version": "main",
+                  "parameters": {"customer_name": "acme", "env_instance": f"t{tier}", **parameters}},
+        )
+        assert response.status_code == 201, response.text
+        return github.dispatches[-1][1]
+
+    on_tier_2 = deploy(2)
+    assert (on_tier_2["dry_run"], on_tier_2["size"], on_tier_2["note"]) == ("true", "small", "hello")
+    assert "replicas" not in on_tier_2  # optional, no default: left out
+    on_tier_1 = deploy(1, size="large", replicas=3)
+    assert (on_tier_1["dry_run"], on_tier_1["size"], on_tier_1["replicas"]) == ("false", "large", "3")
+
+    refused = client.post(
+        f"{BASE}/{registered['id']}/deployments",
+        json={"tier": 3, "version": "main", "parameters": {"customer_name": "acme", "size": "huge"}},
+    )
+    assert refused.status_code == 422
+    assert "must match a configured option" in refused.json()["detail"]
+
+
+async def test_a_container_variable_takes_its_tier_value(env):
+    client, _github, _registry, _sf = env
+    body = _container_edit()
+    body["container"]["registry_password"] = "registry-secret"
+    body["llm"]["api_token"] = "llm-secret"
+    body["parameters"] = [{"key": "LOG_LEVEL", "value": "info", "tier_values": {"1": "debug"}}]
+    response = client.post(f"{BASE}/container", json=body)
+    assert response.status_code == 201, response.text
+    application_id = response.json()["id"]
+    assert response.json()["parameters"] == [
+        {"key": "LOG_LEVEL", "value": "info", "tier_values": {"1": "debug"}}
+    ]
+
+    on_tier_1 = _deploy_container(client, application_id, name="chat-t1", tier=1).json()
+    on_tier_2 = _deploy_container(client, application_id, name="chat-t2", tier=2).json()
+    assert on_tier_1["configuration"]["parameters"]["LOG_LEVEL"] == "debug"
+    assert on_tier_2["configuration"]["parameters"]["LOG_LEVEL"] == "info"
+
+
+async def test_a_public_image_needs_no_registry_login(env):
+    client, github, registry, _sf = env
+    body = _container_edit()
+    del body["container"]["registry_username"]
+    body["llm"]["api_token"] = "llm-secret"
+    response = client.post(f"{BASE}/container", json=body)
+    assert response.status_code == 201, response.text
+    application_id = response.json()["id"]
+    assert response.json()["container"]["registry_username"] is None
+
+    assert _deploy_container(client, application_id).status_code == 201
+    assert registry.calls[-1]["password"] is None
+    sent = github.events[-1][1]["deployment"]
+    assert (sent["registry_username"], sent["registry_token"]) == ("", "")
+
+    # Making it private needs the password that goes with the username.
+    private = _container_edit()
+    private["name"] = "chat-private"
+    private["llm"]["api_token"] = "llm-secret"
+    refused = client.post(f"{BASE}/container", json=private)
+    assert (refused.status_code, refused.json()["code"]) == (422, "RegistryPasswordRequired")
+
+
+async def test_an_edit_keeps_a_stored_password_only_for_its_username(env):
+    client, _github, registry, _sf = env
+    application_id = _register_container(client)
+    renamed = _container_edit()
+    renamed["container"]["registry_username"] = "someone-else"
+    refused = client.put(f"{BASE}/{application_id}", json=renamed)
+    assert (refused.status_code, refused.json()["code"]) == (422, "RegistryPasswordRequired")
+
+    public = _container_edit()
+    del public["container"]["registry_username"]
+    assert client.put(f"{BASE}/{application_id}", json=public).status_code == 200
+    assert _deploy_container(client, application_id).status_code == 201
+    assert registry.calls[-1]["password"] is None
+
+
+async def test_a_copy_is_a_new_template_with_the_originals_secrets(env):
+    client, github, registry, _sf = env
+    original_id = _register_container(client)
+    live = _deploy_container(client, original_id).json()
+    _complete_container_deploy(client, github, live)
+
+    copy = _container_edit()
+    copy["name"] = "chat-service copy"
+    copy["container"]["tag"] = "2.0.0"
+    # The original is deployed: a copy is still fine, since it changes nothing there.
+    response = client.post(f"{BASE}/{original_id}/duplicate", json=copy)
+    assert response.status_code == 201, response.text
+    duplicated = response.json()
+    assert duplicated["id"] != original_id
+    assert (duplicated["name"], duplicated["version"], duplicated["container"]["tag"]) == (
+        "chat-service copy", 1, "2.0.0"
+    )
+
+    deployed = _deploy_container(client, duplicated["id"], name="chat-copy", version="2.0.0")
+    assert deployed.status_code == 201, deployed.text
+    assert registry.calls[-1]["password"] == "registry-secret"
+    sent = github.events[-1][1]["deployment"]
+    assert (sent["registry_token"], sent["llm_api_token"]) == ("registry-secret", "llm-secret")
+
+    original = _catalog_entry(client, original_id)
+    assert (original["current_version"], original["total_deployed_instances"]) == (1, 1)
+    taken = client.post(f"{BASE}/{original_id}/duplicate", json=copy)
+    assert (taken.status_code, taken.json()["code"]) == (409, "DuplicateRegisteredApplication")
+    other_type = client.post(f"{BASE}/{original_id}/duplicate", json=_github_edit("x"))
+    assert (other_type.status_code, other_type.json()["code"]) == (
+        422, "RegisteredApplicationTypeChange"
+    )
+    assert client.post(f"{BASE}/{uuid4()}/duplicate", json=copy).status_code == 404
 
 
 # --- The outbox -------------------------------------------------------------------

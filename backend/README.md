@@ -232,14 +232,20 @@ Values written with pgcrypto by earlier versions stay readable until then.
 ## Registered applications (PRD: Registration & Deployment, EPICs 3-8)
 
 Registration is global; deployment is always tier-scoped. All routes below
-require an admin.
+require an admin, except reading the catalog and a template, which any
+signed-in user may.
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/api/registered-applications` | Catalog: search, type/status filters, optional `tier` facet, sort, paging |
 | `POST` | `/api/registered-applications/github` | Register a GitHub Workflow application (version 1) |
 | `POST` | `/api/registered-applications/container` | Register a Containerized application (version 1) |
+| `POST` | `/api/registered-applications/github/inspect` | Read a workflow before registering: its triggers, its inputs (to import as parameters), and whether C2AI can start it |
+| `POST` | `/api/registered-applications/container/check` | Look an image and tag up in its registry with the credentials entered |
+| `GET` | `/api/registered-applications/container/secrets-status` | Whether a secret provider is configured for secret environment variables |
 | `GET` | `/api/registered-applications/{id}` | Current version (credentials never returned) |
+| `PUT` | `/api/registered-applications/{id}` | Edit: saved as the next version; refused while any instance is live; a secret left out is kept |
+| `POST` | `/api/registered-applications/{id}/duplicate` | Register a copy at version 1; a password or token left out is copied from the original |
 | `DELETE` | `/api/registered-applications/{id}` | Blocked while instances or managed secrets exist; the error names each remaining instance and tier |
 | `GET` | `/api/registered-applications/{id}/github-tags` | Branches and tags for the version picker |
 | `GET` | `/api/registered-applications/{id}/image-tags` | Registry tags (Docker Hub, GHCR, ECR, private v2) |
@@ -254,6 +260,13 @@ require an admin.
 | `GET/POST/PATCH/DELETE` | `/api/registered-applications/{id}/secrets[/{secret_id}]` | Managed container secrets (write-only values) |
 | `GET/POST` | `/api/github-connections`, `/api/github-connections/validate` | Reusable GitHub connections (tokens encrypted, never returned) |
 | `GET` | `/api/registered-applications/llm-models[/pricing]` | Model suggestions and pricing availability |
+
+**Registering.** Each GitHub Workflow parameter has a type (text, number,
+boolean, choice or key-value), an optional label and help text, whether it
+is required, a default, and optionally a value per tier (`tier_defaults`);
+the deploy form starts at the tier's value or the default, and a deploy that
+leaves a value out gets them. A container environment variable may likewise
+have `tier_values`. A public image needs no registry username or password.
 
 **Deploying.** GitHub Workflow apps dispatch the registered workflow
 (`workflow_dispatch` inputs or `repository_dispatch` `client_payload`) using

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Box, Eye, Github, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { ArrowLeft, Box, Copy, Eye, Github, Loader2, Pencil, Plus, Search, Trash2 } from "lucide-react";
 
 import { useAuth } from "@auth/AuthContext";
 import { Button } from "@ui/button";
@@ -77,6 +77,7 @@ export default function RegisteredApplications() {
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const [registerOpen, setRegisterOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<RegisteredApp | null>(null);
+  const [copyTarget, setCopyTarget] = useState<RegisteredApp | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<RegisteredApp | null>(null);
   const [summaryApp, setSummaryApp] = useState<RegisteredApp | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -209,7 +210,7 @@ export default function RegisteredApplications() {
             </Button>
           ) : (
             <span
-              title="Ask an Admin to register, edit or delete applications"
+              title="Ask an Admin to register, edit, duplicate or delete applications"
               className="inline-flex items-center gap-1.5 rounded-full border border-[#1c2836] px-2.5 py-1 text-[11.5px] text-[#8b97a5]"
             >
               <Eye className="h-3.5 w-3.5" />
@@ -393,6 +394,20 @@ export default function RegisteredApplications() {
                             >
                               <Pencil className="h-3.5 w-3.5" />
                             </button>
+                            {/* A copy changes nothing of the original, so it is
+                                always offered, deployed or not. */}
+                            <button
+                              type="button"
+                              aria-label={`Duplicate ${app.name}`}
+                              title="Duplicate application"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCopyTarget(app);
+                              }}
+                              className="grid h-7 w-7 place-items-center rounded-[6px] text-[#20abc7]/80 transition-colors hover:bg-[rgba(32,171,199,0.12)] hover:text-[#20abc7]"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
                             <button
                               type="button"
                               aria-disabled={app.instances > 0}
@@ -429,12 +444,14 @@ export default function RegisteredApplications() {
 
       {isAdmin && (
         <RegisterApplicationModal
-          open={registerOpen || editTarget !== null}
+          open={registerOpen || editTarget !== null || copyTarget !== null}
           editing={editTarget}
+          duplicating={copyTarget}
           onOpenChange={(next) => {
             if (next) return;
             setRegisterOpen(false);
             setEditTarget(null);
+            setCopyTarget(null);
           }}
           onRegistered={loadApps}
         />
