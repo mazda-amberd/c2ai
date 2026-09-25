@@ -381,6 +381,29 @@ class DuplicateGitHubConnection(ConflictError):
         )
 
 
+class GitHubConnectionNotFound(NotFoundError):
+    """Raised when a saved GitHub connection does not exist (or was deleted)."""
+
+    def __init__(self, connection_id: object):
+        super().__init__(
+            detail=f"GitHub connection '{connection_id}' was not found.",
+            code="GitHubConnectionNotFound",
+        )
+
+
+class GitHubConnectionInUse(ConflictError):
+    """Raised when deleting a connection that templates still deploy with."""
+
+    def __init__(self, name: str, applications: list[str]):
+        super().__init__(
+            detail=(
+                f"'{name}' is used by {', '.join(applications)}. Choose another "
+                "connection for them first."
+            ),
+            code="GitHubConnectionInUse",
+        )
+
+
 class GitHubConnectionValidationFailed(UnprocessableEntityError):
     """Raised when GitHub rejects a repository connection's credentials."""
 

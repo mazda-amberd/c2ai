@@ -1,7 +1,8 @@
 """Who may call what: Admins change things, Users look.
 
 Admins create, edit and delete application templates, deploy, update, move,
-terminate and cancel, and manage GitHub connections and people. A User
+terminate and cancel, and manage (create, edit, delete) GitHub connections
+and people. A User
 sees what runs on the tiers, browses the catalog of templates, reads
 metrics and logs, and troubleshoots.
 
@@ -64,6 +65,8 @@ ADMIN = {
     ("GET", "/api/registered-applications/llm-models"),
     ("GET", "/api/registered-applications/llm-models/pricing"),
     ("POST", "/api/github-connections"),
+    ("PUT", "/api/github-connections/{connection_id}"),
+    ("DELETE", "/api/github-connections/{connection_id}"),
     ("POST", "/api/github-connections/validate"),
     # People.
     ("GET", "/api/users"),
@@ -203,6 +206,7 @@ DEPLOY_BODY = {
         ("post", "/api/pipeline/cancel", {"pipeline_run_id": "run-1"}),
         ("get", "/api/github/branches?repo=devops", None),
         ("put", f"/api/registered-applications/{uuid4()}", {}),
+        ("delete", f"/api/github-connections/{uuid4()}", None),
         ("post", f"/api/registered-applications/{uuid4()}/duplicate", {}),
         ("post", "/api/registered-applications/github/inspect", {}),
         ("get", "/api/registered-applications/github/repositories?connection=x", None),

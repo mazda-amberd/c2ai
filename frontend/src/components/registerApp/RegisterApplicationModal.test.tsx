@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as registeredApplicationsApi from "@api/services/registeredApplications";
@@ -564,5 +564,37 @@ describe("RegisterApplicationModal", () => {
     expect(
       await screen.findByText("Trigger Method set to repository_dispatch, which the workflow listens for."),
     ).toBeTruthy();
+  });
+
+  it("manages connections in their own dialog, choosing one just added", async () => {
+    const created = { id: "c-9", name: "New app", repoUrl: "https://github.com/amberd-ai/new-app" };
+    vi.spyOn(registrationApi, "saveGithubConnection").mockResolvedValue(created);
+    render(
+      <ToastProvider>
+        <RegisterApplicationModal open onOpenChange={() => {}} />
+      </ToastProvider>,
+    );
+    fireEvent.change(field("Application Name"), { target: { value: "chatbot" } });
+    next(); // -> type
+    next(); // -> workflow
+    expect(screen.queryByRole("button", { name: /Add new connection/ })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Manage Connections/ }));
+    expect(await screen.findByText("GitHub Connections")).toBeTruthy();
+
+    fireEvent.click(await screen.findByRole("button", { name: /Add connection/ }));
+    fireEvent.change(screen.getByLabelText("Connection Name"), { target: { value: "New app" } });
+    fireEvent.change(screen.getByLabelText("Repository URL"), { target: { value: created.repoUrl } });
+    fireEvent.change(screen.getByLabelText("Personal Access Token"), { target: { value: "ghp_new" } });
+    vi.spyOn(registrationApi, "fetchGithubConnections").mockResolvedValue([
+      { id: "c-1", name: "Devops", repoUrl: "https://github.com/amberd-ai/devops" },
+      { ...created, usedBy: [] },
+    ]);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Save connection/ }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Done" }));
+    await waitFor(() => expect(field("GitHub Connection").value).toBe("c-9"));
+    // Its repository fills in the Workflow Repository.
+    await waitFor(() => expect(field("Workflow Repository").value).toBe("amberd-ai/new-app"));
   });
 });

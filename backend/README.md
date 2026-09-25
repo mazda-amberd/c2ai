@@ -261,7 +261,8 @@ signed-in user may.
 | `POST` | `.../deployments/{id}/terminate` | `{"confirmation": "<instance name>"}` |
 | `POST` | `.../deployments/{id}/progress` | Pipeline callback (`X-Athena-Deployment-Token`) |
 | `GET/POST/PATCH/DELETE` | `/api/registered-applications/{id}/secrets[/{secret_id}]` | Managed container secrets (write-only values) |
-| `GET/POST` | `/api/github-connections`, `/api/github-connections/validate` | Reusable GitHub connections (tokens encrypted, never returned) |
+| `GET/POST` | `/api/github-connections`, `/api/github-connections/validate` | Reusable GitHub connections (tokens encrypted, never returned); the list names the templates using each |
+| `PUT/DELETE` | `/api/github-connections/{id}` | Edit (a token left out is kept; a new URL or token is checked with GitHub) or delete; deleting one a template uses is refused |
 | `GET` | `/api/registered-applications/llm-models[/pricing]` | Model suggestions and pricing availability |
 
 **Registering.** Each GitHub Workflow parameter has a type (text, number,

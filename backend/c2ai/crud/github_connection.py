@@ -2,15 +2,22 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from sqlalchemy import distinct, func, select
+from sqlalchemy import and_, distinct, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from c2ai.core.exceptions import DuplicateGitHubConnection, ServiceUnavailableError
+from c2ai.core.exceptions import (
+    DuplicateGitHubConnection,
+    GitHubConnectionInUse,
+    GitHubConnectionNotFound,
+    ServiceUnavailableError,
+)
 from c2ai.db.errors import violated_constraint
 from c2ai.models.registered_application import (
     GitHubApplicationConfiguration,
@@ -70,10 +77,98 @@ async def create_github_connection(
     return connection
 
 
+def _current_versions():
+    """Join from GitHub configurations to the non-deleted templates whose current version they are."""
+
+    return (
+        select(GitHubApplicationConfiguration.github_connection_id, RegisteredApplication.name)
+        .join(
+            RegisteredApplicationVersion,
+            RegisteredApplicationVersion.id
+            == GitHubApplicationConfiguration.application_version_id,
+        )
+        .join(
+            RegisteredApplication,
+            and_(
+                RegisteredApplication.id == RegisteredApplicationVersion.application_id,
+                RegisteredApplication.current_version == RegisteredApplicationVersion.version,
+            ),
+        )
+        .where(RegisteredApplication.deleted_at.is_(None))
+    )
+
+
+async def connection_usage(db: AsyncSession) -> dict[str, list[str]]:
+    """Connection id -> names of the templates that deploy with it now."""
+
+    result = await db.execute(_current_versions().order_by(func.lower(RegisteredApplication.name)))
+    usage: dict[str, list[str]] = defaultdict(list)
+    for connection_id, name in result.all():
+        usage[str(connection_id)].append(name)
+    return dict(usage)
+
+
+async def get_github_connection(
+    db: AsyncSession, connection_id: UUID, *, for_update: bool = False
+) -> GitHubConnection | None:
+    statement = select(GitHubConnection).where(
+        GitHubConnection.id == connection_id,
+        GitHubConnection.deleted_at.is_(None),
+    )
+    if for_update:
+        statement = statement.with_for_update()
+    return (await db.execute(statement)).scalar_one_or_none()
+
+
+async def update_github_connection(
+    db: AsyncSession,
+    connection: GitHubConnection,
+    *,
+    name: str,
+    connection_url: str,
+    access_token: str | None,
+    updated_by: str,
+) -> GitHubConnection:
+    """Rename or repoint a connection; a new token replaces the stored one."""
+
+    connection.display_name = name
+    connection.connection_url = connection_url
+    if access_token is not None:
+        connection.access_token_encrypted = crypto.encrypt(access_token, column=crypto.GITHUB_TOKEN)
+    connection.updated_by = updated_by
+    try:
+        await db.flush()
+    except IntegrityError as error:
+        if violated_constraint(error) == _URL_CONSTRAINT:
+            raise DuplicateGitHubConnection(connection_url) from error
+        raise
+    await db.refresh(connection)
+    return connection
+
+
+async def delete_github_connection(
+    db: AsyncSession, connection_id: UUID, *, deleted_by: str
+) -> None:
+    """Soft-delete a connection no template deploys with any more.
+
+    A template still using it would fall back to the server's own token.
+    """
+
+    connection = await get_github_connection(db, connection_id, for_update=True)
+    if connection is None:
+        raise GitHubConnectionNotFound(connection_id)
+    used_by = (await connection_usage(db)).get(str(connection_id))
+    if used_by:
+        raise GitHubConnectionInUse(connection.display_name, used_by)
+    connection.deleted_at = datetime.now(tz=UTC)
+    connection.updated_by = deleted_by
+    await db.flush()
+
+
 async def list_github_connections(
     db: AsyncSession,
 ) -> tuple[list[GitHubConnection], list[str]]:
-    """Return stored connections and legacy IDs referenced by old templates."""
+    """Return stored connections and the legacy IDs templates deploy with now."""
 
     stored_result = await db.execute(
         select(GitHubConnection)
@@ -82,19 +177,10 @@ async def list_github_connections(
     )
     stored = list(stored_result.scalars().all())
 
+    # Current versions only: an old version's connection is history.
+    current = _current_versions().subquery()
     legacy_result = await db.execute(
-        select(distinct(GitHubApplicationConfiguration.github_connection_id))
-        .join(
-            RegisteredApplicationVersion,
-            RegisteredApplicationVersion.id
-            == GitHubApplicationConfiguration.application_version_id,
-        )
-        .join(
-            RegisteredApplication,
-            RegisteredApplication.id == RegisteredApplicationVersion.application_id,
-        )
-        .where(RegisteredApplication.deleted_at.is_(None))
-        .order_by(GitHubApplicationConfiguration.github_connection_id)
+        select(distinct(current.c.github_connection_id)).order_by(current.c.github_connection_id)
     )
     stored_ids = {str(connection.id) for connection in stored}
     legacy = [

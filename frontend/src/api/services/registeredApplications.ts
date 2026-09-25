@@ -577,6 +577,8 @@ export type ApiGithubConnection = {
   legacy?: boolean;
   created_by?: string | null;
   created_at?: string | null;
+  /** Templates whose current version deploys with this connection. */
+  used_by?: string[];
 };
 
 export type GithubConnectionPayload = {
@@ -591,6 +593,23 @@ export type ValidateConnectionResponse = {
   valid: boolean;
   message: string;
   repository?: string | null;
+};
+
+/** PUT /api/github-connections/{id} — a token left out keeps the stored one. */
+export const updateGithubConnection = async (
+  connectionId: string,
+  payload: { connection_name: string; repository_url: string; access_token?: string },
+): Promise<ApiGithubConnection> =>
+  await apiFetch<ApiGithubConnection>(`/api/github-connections/${encodeURIComponent(connectionId)}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+
+/** DELETE /api/github-connections/{id} — refused (409) while a template uses it. */
+export const deleteGithubConnection = async (connectionId: string): Promise<void> => {
+  await apiFetch<unknown>(`/api/github-connections/${encodeURIComponent(connectionId)}`, {
+    method: "DELETE",
+  });
 };
 
 export const listGithubConnections = async (): Promise<ApiGithubConnection[]> => {

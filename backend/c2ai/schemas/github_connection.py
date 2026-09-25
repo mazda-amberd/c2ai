@@ -86,6 +86,29 @@ class GitHubConnectionCreate(GitHubConnectionCredentials):
         return self.repository_url
 
 
+class GitHubConnectionUpdate(_ContractModel):
+    """A connection's new name and URL; a token left out keeps the stored one."""
+
+    connection_name: str = Field(
+        ...,
+        validation_alias=AliasChoices("connection_name", "name"),
+        min_length=1,
+        max_length=200,
+    )
+    repository_url: str = Field(
+        ...,
+        validation_alias=AliasChoices("repository_url", "url", "connection_url"),
+        min_length=1,
+        max_length=2048,
+    )
+    access_token: SecretStr | None = Field(default=None, min_length=1, max_length=65536)
+
+    @field_validator("repository_url")
+    @classmethod
+    def validate_repository_url(cls, value: str) -> str:
+        return normalize_github_connection_url(value)
+
+
 class GitHubConnectionValidationOut(_ContractModel):
     """Safe result returned after GitHub validates the supplied credentials."""
 
@@ -103,6 +126,8 @@ class GitHubConnectionOut(_ContractModel):
     legacy: bool = False
     created_by: str | None = None
     created_at: datetime | None = None
+    # Templates whose current version deploys with this connection.
+    used_by: list[str] = Field(default_factory=list)
 
 
 class GitHubConnectionList(_ContractModel):

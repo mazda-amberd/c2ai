@@ -6,11 +6,13 @@ import {
   createContainerSecret,
   createGithubConnection,
   deleteContainerSecret,
+  deleteGithubConnection,
   duplicateRegisteredApplication,
   listGithubConnections,
   registerContainerApplication,
   registerGithubApplication,
   updateContainerSecret,
+  updateGithubConnection,
   updateRegisteredApplication,
   validateGithubConnectionRequest,
   type ApiGithubParameter,
@@ -24,6 +26,10 @@ export type GithubConnection = {
   id: string;
   name: string;
   repoUrl: string;
+  /** Not a saved connection: an id templates refer to (the server's own token). */
+  legacy?: boolean;
+  /** Templates that deploy with it now. */
+  usedBy?: string[];
 };
 
 export type TriggerMethod = "repository_dispatch" | "workflow_dispatch";
@@ -160,6 +166,8 @@ export async function fetchGithubConnections(): Promise<GithubConnection[]> {
     id: String(c.id),
     name: c.display_name,
     repoUrl: c.connection_url ?? "",
+    legacy: !!c.legacy,
+    usedBy: c.used_by ?? [],
   }));
 }
 
@@ -190,6 +198,30 @@ export async function validateGithubConnection(
       message: err instanceof Error ? err.message : "Could not validate this connection.",
     };
   }
+}
+
+/** Rename or repoint a saved connection; a blank token keeps the stored one. */
+export async function editGithubConnection(
+  id: string,
+  name: string,
+  repoUrl: string,
+  token: string,
+): Promise<GithubConnection> {
+  const saved = await updateGithubConnection(id, {
+    connection_name: name.trim(),
+    repository_url: repoUrl.trim(),
+    ...(token ? { access_token: token } : {}),
+  });
+  return {
+    id: String(saved.id),
+    name: saved.display_name,
+    repoUrl: saved.connection_url ?? repoUrl,
+    usedBy: saved.used_by ?? [],
+  };
+}
+
+export async function removeGithubConnection(id: string): Promise<void> {
+  await deleteGithubConnection(id);
 }
 
 export async function saveGithubConnection(

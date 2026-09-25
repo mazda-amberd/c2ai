@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Box, Check, Github, ListChecks, Loader2, Plus, X } from "lucide-react";
+import { AlertTriangle, Box, Check, Github, ListChecks, Loader2, Settings2 } from "lucide-react";
 import { useFieldArray, useForm } from "react-hook-form";
 
 import { Dialog, DialogContent } from "@ui/dialog";
@@ -14,6 +14,7 @@ import {
   Select,
 } from "./wizardStyles";
 import CheckList from "./CheckList";
+import ManageConnectionsDialog from "./ManageConnectionsDialog";
 import EnvironmentEditor from "./EnvironmentEditor";
 import ParameterEditor from "./ParameterEditor";
 import {
@@ -42,9 +43,7 @@ import {
   repositoryFromUrl,
   saveApplicationCopy,
   saveApplicationEdit,
-  saveGithubConnection,
   syncContainerSecrets,
-  validateGithubConnection,
   type AppRegistration,
   type ContainerRegistryOption,
   type GithubConnection,
@@ -477,15 +476,9 @@ export default function RegisterApplicationModal({
   const githubForm = githubFormApi.watch();
   const containerForm = containerFormApi.watch();
 
-  // GitHub connection sub-state ("+ Add new connection" inline form)
+  // Saved GitHub connections, managed in their own dialog.
   const [connections, setConnections] = useState<GithubConnection[]>([]);
-  const [showConnForm, setShowConnForm] = useState(false);
-  const [savingConnection, setSavingConnection] = useState(false);
-  const [newConn, setNewConn] = useState({ name: "", repoUrl: "", token: "" });
-  const [validation, setValidation] = useState<{
-    status: "idle" | "validating" | "success" | "failed";
-    message: string;
-  }>({ status: "idle", message: "" });
+  const [managingConnections, setManagingConnections] = useState(false);
 
   const [registries, setRegistries] = useState<ContainerRegistryOption[]>([]);
 
@@ -640,9 +633,7 @@ export default function RegisterApplicationModal({
     setStepIndex(0);
     githubFormApi.reset(emptyGithubValues());
     containerFormApi.reset(emptyContainerValues());
-    setShowConnForm(false);
-    setNewConn({ name: "", repoUrl: "", token: "" });
-    setValidation({ status: "idle", message: "" });
+    setManagingConnections(false);
     setLoad({ status: "ready", message: "" });
     setStoredLlmToken(false);
     setUnsavedConnection(null);
@@ -682,13 +673,6 @@ export default function RegisterApplicationModal({
       case "type":
         return true;
       case "workflow":
-        // The inline form closes itself once a connection is saved, so an
-        // open form means the new connection isn't usable yet.
-        if (showConnForm) {
-          return fail(
-            "Validate and save the new GitHub connection before continuing, or close the form and pick an existing one.",
-          );
-        }
         if (!githubForm.connectionId) return fail("GitHub Connection is required.");
         if (!githubForm.workflowRepository.trim())
           return fail("Workflow Repository is required.");
@@ -769,60 +753,20 @@ export default function RegisterApplicationModal({
     setStepIndex((i) => Math.max(i - 1, 0));
   };
 
-  /* ---------------- GitHub connection actions ---------------- */
+  /* ---------------- GitHub connections ---------------- */
 
-  const handleValidateConnection = async () => {
-    // Check locally first so an empty form gets a plain sentence instead
-    // of the API's field-by-field validation response.
-    const missing = [
-      !newConn.name.trim() && "Connection Name",
-      !newConn.repoUrl.trim() && "Repository URL",
-      !newConn.token.trim() && "Personal Access Token",
-    ].filter((f): f is string => !!f);
-    if (missing.length > 0) {
-      setValidation({
-        status: "failed",
-        message: `${missing.join(", ")} ${missing.length === 1 ? "is" : "are"} required to validate the connection.`,
-      });
+  /** After the connections dialog changed them: a new one is chosen; a
+   *  deleted one that was chosen is not any more. */
+  const connectionsChanged = (list: GithubConnection[], created?: GithubConnection) => {
+    setConnections(list);
+    if (created) {
+      githubFormApi.setValue("connectionId", created.id);
       return;
     }
-    setValidation({ status: "validating", message: "" });
-    const result = await validateGithubConnection(
-      newConn.name,
-      newConn.repoUrl,
-      newConn.token,
-    );
-    // POST /api/github-connections/validate — a dry run. A success only
-    // unlocks "Save Connection"; nothing is persisted yet.
-    setValidation({
-      status: result.success ? "success" : "failed",
-      message: result.message,
-    });
-  };
-
-  /** POST /api/github-connections — only reachable after a successful
-   *  validation; persists the connection and selects it in the dropdown. */
-  const handleSaveConnection = async () => {
-    if (validation.status !== "success" || savingConnection) return;
-    setSavingConnection(true);
-    let saved: GithubConnection;
-    try {
-      saved = await saveGithubConnection(newConn.name, newConn.repoUrl, newConn.token);
-    } catch (err) {
-      setValidation({
-        status: "failed",
-        message: err instanceof Error ? err.message : "Could not save the connection.",
-      });
-      return;
-    } finally {
-      setSavingConnection(false);
+    const chosen = githubFormApi.getValues("connectionId");
+    if (chosen && chosen !== unsavedConnection && !list.some((c) => c.id === chosen)) {
+      githubFormApi.setValue("connectionId", "");
     }
-    setConnections((prev) => [...prev, saved]);
-    githubFormApi.setValue("connectionId", saved.id);
-    setShowConnForm(false);
-    setNewConn({ name: "", repoUrl: "", token: "" });
-    setValidation({ status: "idle", message: "" });
-    showToast(`Connection "${saved.name}" saved.`);
   };
 
   /* ---------------- Checks ---------------- */
@@ -1134,7 +1078,12 @@ export default function RegisterApplicationModal({
           {load.status === "ready" && step.id === "workflow" && (
             <>
               <Field label="GitHub Connection" required>
-                <Select {...githubFormApi.register("connectionId")}>
+                {/* Controlled: a connection just added is chosen before its option
+                    renders, which an uncontrolled select would drop. */}
+                <Select
+                  value={githubForm.connectionId}
+                  onChange={(e) => githubFormApi.setValue("connectionId", e.target.value)}
+                >
                   <option value="">Select a connection…</option>
                   {unsavedConnection && (
                     <option value={unsavedConnection}>
@@ -1143,7 +1092,7 @@ export default function RegisterApplicationModal({
                   )}
                   {connections.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name}
+                      {c.legacy ? `C2AI server's GitHub token (${c.id})` : c.name}
                     </option>
                   ))}
                 </Select>
@@ -1151,94 +1100,12 @@ export default function RegisterApplicationModal({
 
               <button
                 type="button"
-                onClick={() => setShowConnForm((v) => !v)}
+                onClick={() => setManagingConnections(true)}
                 className="flex items-center gap-1 text-[12px] font-medium text-[#20abc7] hover:text-[#4dc6dd]"
               >
-                <Plus className="h-3 w-3" /> Add new connection
+                <Settings2 className="h-3 w-3" /> Manage Connections
               </button>
-
-              {showConnForm && (
-                <div className="space-y-3 rounded-[8px] border border-[rgba(32,171,199,0.4)] p-4">
-                  <Field label="Connection Name" required>
-                    <input
-                      className={FIELD_CLASS}
-                      placeholder="e.g. my-application-prod"
-                      value={newConn.name}
-                      onChange={(e) => {
-                        setNewConn((c) => ({ ...c, name: e.target.value }));
-                        setValidation({ status: "idle", message: "" });
-                      }}
-                    />
-                  </Field>
-                  <Field label="Repository URL" required>
-                    <input
-                      className={FIELD_CLASS}
-                      placeholder="https://github.com/org/repo"
-                      value={newConn.repoUrl}
-                      onChange={(e) => {
-                        setNewConn((c) => ({ ...c, repoUrl: e.target.value }));
-                        setValidation({ status: "idle", message: "" });
-                      }}
-                    />
-                  </Field>
-                  <Field label="Personal Access Token" required>
-                    <input
-                      type="password"
-                      className={FIELD_CLASS}
-                      placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                      value={newConn.token}
-                      onChange={(e) => {
-                        setNewConn((c) => ({ ...c, token: e.target.value }));
-                        setValidation({ status: "idle", message: "" });
-                      }}
-                    />
-                  </Field>
-
-                  {validation.status === "success" && (
-                    <p className="flex items-center gap-1.5 text-[12.5px] text-[#4ade80]">
-                      <Check className="h-3.5 w-3.5" /> {validation.message}
-                    </p>
-                  )}
-                  {validation.status === "failed" && (
-                    <p className="flex items-center gap-1.5 text-[12.5px] text-[#f0655f]">
-                      <X className="h-3.5 w-3.5" /> {validation.message}
-                    </p>
-                  )}
-
-                  <div className="flex gap-2 pt-1">
-                    <button
-                      type="button"
-                      onClick={handleValidateConnection}
-                      disabled={validation.status === "validating"}
-                      className="flex cursor-pointer items-center gap-1.5 rounded-[6px] border px-3.5 py-2 text-[12.5px] font-semibold transition-colors hover:bg-[rgba(32,171,199,0.12)] hover:text-[#eef2f6] disabled:cursor-wait disabled:opacity-60"
-                      style={{ borderColor: ACCENT, color: ACCENT }}
-                    >
-                      {validation.status === "validating" && (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      )}
-                      Validate Connection
-                    </button>
-                    {/* Enabled only once the dry-run validation succeeded;
-                        editing any field re-disables it (validation resets). */}
-                    <button
-                      type="button"
-                      onClick={handleSaveConnection}
-                      disabled={validation.status !== "success" || savingConnection}
-                      title={
-                        validation.status === "success"
-                          ? "Save this connection"
-                          : "Validate the connection first"
-                      }
-                      className="flex items-center gap-1.5 rounded-[6px] px-3.5 py-2 text-[12.5px] font-semibold text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-                      style={{ background: ACCENT }}
-                    >
-                      {savingConnection && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-                      Save Connection
-                    </button>
-                  </div>
-                </div>
-              )}
-              {selectedConnection && !showConnForm && (
+              {selectedConnection && !selectedConnection.legacy && (
                 <p className="text-[11.5px] text-[#57606c]">
                   {selectedConnection.repoUrl}
                 </p>
@@ -1732,6 +1599,11 @@ export default function RegisterApplicationModal({
             </button>
           </div>
         </div>
+        <ManageConnectionsDialog
+          open={managingConnections}
+          onOpenChange={setManagingConnections}
+          onChanged={connectionsChanged}
+        />
       </DialogContent>
     </Dialog>
   );

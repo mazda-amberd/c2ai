@@ -791,6 +791,82 @@ async def test_a_copy_is_a_new_template_with_the_originals_secrets(env):
     assert client.post(f"{BASE}/{uuid4()}/duplicate", json=copy).status_code == 404
 
 
+# --- GitHub connections ------------------------------------------------------------
+
+
+def _save_connection(client, name, url, token):
+    response = client.post(
+        "/api/github-connections",
+        json={"connection_name": name, "repository_url": url, "access_token": token},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+def _connections(client):
+    app.dependency_overrides[get_current_user_token] = lambda: AthenaTokenUser(identifier="admin")
+    try:
+        listed = client.get("/api/github-connections")
+    finally:
+        app.dependency_overrides.pop(get_current_user_token, None)
+    assert listed.status_code == 200, listed.text
+    return {item["display_name"]: item for item in listed.json()["items"] if not item["legacy"]}
+
+
+async def test_a_connection_is_edited_and_is_deleted_once_nothing_uses_it(env):
+    client, github, _registry, _sf = env
+    url = "https://github.com/amberd-ai/example-chatbot"
+    first = _save_connection(client, "Chatbot repo", url, "ghp_first")
+    application_id = _register_github(client, connection=first)
+    assert _connections(client)["Chatbot repo"]["used_by"] == ["example-chatbot"]
+
+    refused = client.delete(f"/api/github-connections/{first}")
+    assert (refused.status_code, refused.json()["code"]) == (409, "GitHubConnectionInUse")
+    assert "used by example-chatbot" in refused.json()["detail"]
+
+    second = _save_connection(client, "Other", "https://github.com/amberd-ai/other", "ghp_second")
+    taken = client.put(
+        f"/api/github-connections/{second}",
+        json={"connection_name": "Other", "repository_url": url},
+    )
+    assert (taken.status_code, taken.json()["code"]) == (409, "DuplicateGitHubConnection")
+
+    # The template moves to the second connection; the first is then free to go.
+    moved = _github_edit()
+    moved["github"]["github_connection"] = second
+    moved["parameters"] = [{"key": k, "type": "text"} for k in ("customer_name", "env_instance")]
+    assert client.put(f"{BASE}/{application_id}", json=moved).status_code == 200
+    assert client.delete(f"/api/github-connections/{first}").status_code == 204
+    assert "Chatbot repo" not in _connections(client)
+    assert client.delete(f"/api/github-connections/{first}").status_code == 404
+
+    def deploy(instance):
+        response = client.post(
+            f"{BASE}/{application_id}/deployments",
+            json={"tier": 1, "version": "main",
+                  "parameters": {"customer_name": "acme", "env_instance": instance}},
+        )
+        assert response.status_code == 201, response.text
+        return github.dispatch_auth[-1]
+
+    # Renamed with the token left out: deploys keep using the stored one.
+    renamed = client.put(
+        f"/api/github-connections/{second}",
+        json={"connection_name": "Chatbot", "repository_url": "https://github.com/amberd-ai/other"},
+    )
+    assert (renamed.status_code, renamed.json()["display_name"]) == (200, "Chatbot")
+    assert renamed.json()["used_by"] == ["example-chatbot"]
+    assert deploy("one") == "Bearer ghp_second"
+    # A new token is what every template using the connection deploys with.
+    rotated = client.put(
+        f"/api/github-connections/{second}",
+        json={"connection_name": "Chatbot", "repository_url": "https://github.com/amberd-ai/other",
+              "access_token": "ghp_rotated"},
+    )
+    assert rotated.status_code == 200, rotated.text
+    assert deploy("two") == "Bearer ghp_rotated"
+
+
 # --- The outbox -------------------------------------------------------------------
 
 
