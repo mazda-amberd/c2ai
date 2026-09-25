@@ -3,7 +3,8 @@
 FastAPI service behind the C2AI UI: application registration and deployment,
 tier dashboards (Grafana/Prometheus), deployment logs (Loki), AI
 troubleshooting, and cost tracking. Python 3.11+, PostgreSQL 14+ (with
-`pgcrypto` and `uuid-ossp`).
+`pgcrypto` (read-only, for credentials written by earlier versions) and
+`uuid-ossp`).
 
 ## Layout
 
@@ -17,12 +18,14 @@ backend/
     api/                  # HTTP routes (thin: validate, call the domain, map)
       registered_applications/  # catalog.py, deployments.py, secrets.py routers
     auth/                 # JWT + cookie helpers, auth dependencies
-    clients/              # GitHub, Grafana, registry, secret broker; http.py pools
+    clients/              # GitHub, Grafana (transport), registry, secret broker; http.py pools
     deployments/          # the deployment domain (see "Deployment model" below)
     registration/         # application catalog, stored credentials, managed secrets
     jobs/                 # durable job queue: store, worker, handlers/
+    metrics/              # metric views over Grafana: tier dashboard, LLM gateway, PromQL
+    security/             # credential encryption (AES-256-GCM, key ids) and rotation
     constants/            # PromQL catalogues, tiers, lifecycle enums
-    core/                 # exceptions, handlers, logging, SPA serving
+    core/                 # exceptions, handlers, logging, observability, SPA serving
     crud/                 # users, GitHub connections, costs, instance inventory
     db/                   # engine/session, migration runner, dev bootstrap
     llm/                  # vLLM chat model + troubleshooting prompt
@@ -92,9 +95,12 @@ number of API replicas and workers can share one database.
 | Job | When | What |
 |---|---|---|
 | `troubleshooting.report` | `POST /jobs` | Builds one report; kept 15 minutes |
+| `deployments.dispatch` | each deployment operation | Sends a staged operation to its pipeline (the outbox; normally run inline by the request) |
+| `deployments.track` | every 10 seconds | The only GitHub poller: stores run snapshots, settles finished operations, undoes dispatches that never ran, abandons ones that never started (30 min) |
+| `inventory.refresh` | every `C2AI_INVENTORY_REFRESH_SECONDS` (60) | Rewrites the per-tier cluster inventory from Grafana |
 | `financial.ingest` | every `ATHENA_FINANCIAL_POLL_SECONDS` | LLM gateway cost poll |
-| `deployments.reconcile` | every minute | Applies GitHub run results; abandons dispatches that never started (30 min) |
-| `jobs.purge` | every 10 minutes | Deletes finished jobs past retention |
+| `credentials.reencrypt` | daily | Re-encrypts stored credentials under the current primary key |
+| `jobs.purge` | every 10 minutes | Deletes finished jobs, expired revocations and old login failures |
 
 ### Test and lint
 
@@ -124,11 +130,11 @@ The ones that must be set in any real environment:
 |---|---|
 | `DATABASE_URL` | `postgresql+asyncpg://user:pass@host:5432/db` (`LOCAL_DATABASE_URL` still accepted) |
 | `ATHENA_AUTH_SECRET` | JWT signing secret |
-| `ATHENA_CREDENTIAL_ENCRYPTION_KEY` | pgcrypto key for stored GitHub/registry/LLM credentials |
+| `C2AI_ENCRYPTION_KEYS` | `kid:base64key,...` for stored GitHub/registry/LLM credentials (first encrypts); without it a key is derived from `ATHENA_CREDENTIAL_ENCRYPTION_KEY` |
 | `GITHUB_PAT` | Token for Amberd's predefined workflows (Actions read + write) |
 | `GRAFANA_API_URL`, `GRAFANA_API_TOKEN` | Grafana `/api/ds/query` endpoint and token |
 | `GRAFANA_LOKI_DATASOURCE_UID` | Loki datasource for logs and troubleshooting |
-| `DEPLOYMENT_CALLBACK_TOKEN` | Shared secret for pipeline progress callbacks |
+| `DEPLOYMENT_CALLBACK_TOKEN` | Secret behind the per-operation pipeline callback tokens |
 | `VLLM_ENDPOINT` | OpenAI-compatible endpoint for AI troubleshooting |
 
 ## Authentication and roles
@@ -156,6 +162,22 @@ demoted or deleted.
 
 Superusers (`users.is_superuser`, the bootstrap `admin`) see every user;
 other admins see the users they created (`users.created_by_id`).
+
+**Sessions.** Logout revokes that token (`revoked_tokens`). Changing or
+resetting a password bumps `users.token_version`, which signs out every
+older session; the user's own change sets a fresh cookie so that browser
+stays signed in. After 5 failed sign-ins for an account (20 per client
+address) within 15 minutes, `/auth/login` answers **429** with
+`Retry-After`; the counters live in the database, and the client address
+comes from `X-Forwarded-For` only via `C2AI_FORWARDED_ALLOW_IPS`.
+
+**Stored credentials** are encrypted by the application (AES-256-GCM, bound
+to their column) before they reach PostgreSQL, so the key never appears in
+SQL. Each value names its key: to rotate, put a new key first in
+`C2AI_ENCRYPTION_KEYS`; the daily `credentials.reencrypt` job (or
+`python -m c2ai.security.rotate`) rewrites old values; remove the old key
+once `python -m c2ai.security.rotate --check` shows none left under it.
+Values written with pgcrypto by earlier versions stay readable until then.
 
 ## Registered applications (PRD: Registration & Deployment, EPICs 3-8)
 
@@ -209,6 +231,13 @@ original deployment.
 {"current_step": "waiting_for_rollout", "status": "deploying", "message": "Waiting for readiness."}
 ```
 
+Each dispatch carries a `callback_token` (an HMAC of
+`DEPLOYMENT_CALLBACK_TOKEN`, the deployment and the operation); send it as
+`X-Athena-Deployment-Token`. It is valid only while that operation is open.
+The shared secret itself is still accepted while
+`C2AI_CALLBACK_ACCEPT_SHARED_TOKEN=true` (turn it off once every pipeline
+sends its token).
+
 Steps: `validating_configuration`, `creating_namespace`, `applying_resources`,
 `waiting_for_rollout`, `verifying_deployment`, `configuring_dns` (container
 deployments/terminations only), `completed`, `failed`. Report failure with
@@ -229,11 +258,23 @@ deployed instance is a `deployment_instances` row. `c2ai/deployments/`:
   operation, linked to its instance, with its GitHub run and conclusion. A
   unique index allows one open operation per subdomain, so concurrent
   requests get **409** instead of two pipelines racing.
-* `pipelines.py` / `dispatch.py` — dispatch the right workflow with the right
-  credentials. GitHub returns the run id with the dispatch; when a server
-  does not, correlation skips runs already linked to another operation.
-* `tracking.py` / `status.py` — GitHub progress and the `/api/pipeline/*`
-  projection; `deployments.reconcile` settles operations nobody is polling.
+* `service.py` — the transaction boundary and dispatch outbox. An operation
+  is staged in one transaction (instance state, operation row with a restore
+  snapshot, `deployments.dispatch` job) and committed before GitHub is
+  called, so no lock or transaction is held during the HTTP call. The
+  request then dispatches inline and answers as before; if it dies, the job
+  finishes the work. A dispatch the pipeline never received puts the
+  instance back (a first deploy is cancelled, freeing its name).
+* `repository.py` — instance persistence. Repositories only flush; the
+  request, service or job commits once (enforced by `tests/test_architecture.py`).
+* `pipelines.py` / `configuration.py` — the workflow for each operation and
+  the validated configuration snapshot. GitHub returns the run id with the
+  dispatch; when a server does not, correlation skips runs already linked to
+  another operation.
+* `tracking.py` / `status.py` — the `deployments.track` job polls GitHub
+  (conditional requests: a 304 does not use rate limit) and stores each open
+  operation's run snapshot; `/api/pipeline/*` and the deployment detail only
+  read it, so browsers never cause GitHub calls.
 * `ada.py` — ADA is a seeded GitHub Workflow application (id
   `ada00000-0000-4000-8000-000000000001`, repository/ref from settings); the
   tier pages' `/api/deploy*` routes map onto it. An instance that runs in the
@@ -249,13 +290,27 @@ deployed instance is a `deployment_instances` row. `c2ai/deployments/`:
 | `GET` | `/api/github/branches`, `/api/github/tags` | Refs in `GITHUB_REPO_OWNER/<repo>` |
 
 One operation runs per subdomain at a time, whichever API started it. If
-GitHub rejects a dispatch nothing is recorded, so it does not block the
-subdomain. `/api/pipeline/*` and cancel cover registered deployments too.
+GitHub rejects a dispatch the operation is undone and shown as failed (for
+five minutes on the tier page), so it does not block the subdomain.
+`/api/pipeline/*` and cancel cover registered deployments too.
+
+## Operations
+
+| Path | Purpose |
+|---|---|
+| `GET /health` | Liveness (no dependencies) |
+| `GET /ready` | 200 when the database answers and its schema matches this build; 503 (naming pending migrations) otherwise. The API also refuses to start on a database that is behind (`C2AI_ALLOW_PENDING_MIGRATIONS` overrides). |
+| `GET /metrics` | Prometheus: requests by route, outbound calls by host, GitHub rate limit left, job runs/durations/lease expiries, queue depth and oldest ready job, open deployment operations. Requires `Authorization: Bearer $C2AI_METRICS_TOKEN` when set. |
+
+Every request gets an id (`X-Request-ID` in, echoed out) that is written on
+every log line for that request; job runs log as `job:<kind>:<id>`.
+`C2AI_LOG_FORMAT=json` switches to one JSON object per line.
 
 ## Metrics, logs, troubleshooting
 
-* `GET /api/metrics` — tier dashboard (per-instance CPU/memory/GPU; refreshes
-  the `application_instances` snapshot the legacy guards use).
+* `GET /api/metrics` — tier dashboard (per-instance CPU/memory/GPU;
+  `metrics/tiers.py`). Read-only; the `inventory.refresh` job keeps the
+  `application_instances` snapshot current for the deployment guards.
 * `GET /api/v2/metrics?level=cluster|tier|application`,
   `GET /api/v2/metrics/application?application=<ns>/<deployment>` — windowed
   metrics (`range=1m..2d` or `from`/`to`), degraded per metric instead of
