@@ -104,8 +104,9 @@ def _github_registration_detail(
         github=GitHubWorkflowConfiguration(
             github_connection_id=configuration.github_connection_id,
             trigger_method=configuration.trigger_method,
-            repository=configuration.repository,
             code_repository=configuration.code_repository,
+            code_ref=configuration.code_ref,
+            repository=configuration.repository,
             workflow_file_path=configuration.workflow_file_path,
             ref=configuration.ref,
         ),

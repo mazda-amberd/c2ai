@@ -34,6 +34,8 @@ def _github_payload() -> dict:
             "repository": "amberd-ai/example-chatbot",
             "workflow_file_path": ".github/workflows/deploy.yml",
             "ref": "main",
+            "code_repository": "amberd-ai/example-chatbot",
+            "code_ref": "main",
         },
         "parameters": [
             {
@@ -49,12 +51,26 @@ def _github_payload() -> dict:
     }
 
 
-@pytest.mark.parametrize("code_repository", [None, "amberd-ai/application"])
-def test_github_code_repository_is_optional(code_repository):
+@pytest.mark.parametrize("field", ["code_repository", "code_ref"])
+def test_the_code_repository_and_branch_are_required(field):
     payload = _github_payload()
-    payload["github"]["code_repository"] = code_repository
-    result = GitHubRegisteredApplicationCreate.model_validate(payload)
-    assert result.github.code_repository == code_repository
+    del payload["github"][field]
+    with pytest.raises(ValidationError):
+        GitHubRegisteredApplicationCreate.model_validate(payload)
+
+
+def test_the_workflow_repository_and_branch_default_to_the_code():
+    payload = _github_payload()
+    payload["github"].update(code_repository="amberd-ai/application", code_ref="develop")
+    del payload["github"]["repository"], payload["github"]["ref"]
+    github = GitHubRegisteredApplicationCreate.model_validate(payload).github
+    assert (github.repository, github.ref) == ("amberd-ai/application", "develop")
+
+    payload["github"]["repository"] = "amberd-ai/devops"
+    github = GitHubRegisteredApplicationCreate.model_validate(payload).github
+    assert (github.repository, github.ref) == ("amberd-ai/devops", "develop")
+    payload["github"]["ref"] = "main"
+    assert GitHubRegisteredApplicationCreate.model_validate(payload).github.ref == "main"
 
 
 @pytest.mark.parametrize("code_repository", ["amberd-ai", "https://github.com/amberd-ai/app", "a/b/c", ""])

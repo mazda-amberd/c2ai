@@ -52,33 +52,52 @@ function useListing<T>(key: string | null, load: () => Promise<T>): Listing<T> {
 }
 
 /** What a GitHub connection can see, for the register wizard to offer: its
- *  repositories, the workflow repository's branches and tags, and the
- *  workflow files on the chosen branch. Typing is debounced. */
+ *  repositories, the branches and tags of the code and workflow
+ *  repositories, and the workflow files on the workflow's branch. A blank
+ *  workflow repository or branch is the code's. Typing is debounced. */
 export function useGithubDiscovery({
   enabled,
   connection,
-  repository,
-  ref,
+  codeRepository,
+  codeRef,
+  workflowRepository,
+  workflowRef,
 }: {
   enabled: boolean;
   connection: string;
-  repository: string;
-  ref: string;
+  codeRepository: string;
+  codeRef: string;
+  workflowRepository: string;
+  workflowRef: string;
 }) {
-  const repo = useDebouncedValue(repository.trim(), 400);
-  const branch = useDebouncedValue(ref.trim(), 400);
+  const code = useDebouncedValue(codeRepository.trim(), 400);
+  const codeBranch = useDebouncedValue(codeRef.trim(), 400);
+  const workflowRepo = useDebouncedValue(workflowRepository.trim(), 400) || code;
+  const workflowBranch = useDebouncedValue(workflowRef.trim(), 400) || codeBranch;
   const on = enabled && !!connection;
-  const repoKnown = on && REPOSITORY.test(repo);
+  const known = (repository: string) => on && REPOSITORY.test(repository);
 
   const repositories = useListing<ApiGithubRepositoryOptions>(on ? connection : null, () =>
     listGithubRepositories(connection),
   );
-  const refs = useListing<ApiGithubRefOptions>(repoKnown ? `${connection}|${repo}` : null, () =>
-    listGithubRefs(connection, repo),
+  const codeRefs = useListing<ApiGithubRefOptions>(known(code) ? `${connection}|${code}` : null, () =>
+    listGithubRefs(connection, code),
+  );
+  // Only asked for when the workflow lives in another repository.
+  const otherRefs = useListing<ApiGithubRefOptions>(
+    known(workflowRepo) && workflowRepo !== code ? `${connection}|${workflowRepo}` : null,
+    () => listGithubRefs(connection, workflowRepo),
   );
   const workflows = useListing<ApiGithubWorkflowOptions>(
-    repoKnown && branch ? `${connection}|${repo}|${branch}` : null,
-    () => listGithubWorkflows(connection, repo, branch),
+    known(workflowRepo) && workflowBranch ? `${connection}|${workflowRepo}|${workflowBranch}` : null,
+    () => listGithubWorkflows(connection, workflowRepo, workflowBranch),
   );
-  return { repositories, refs, workflows, branch };
+  return {
+    repositories,
+    codeRefs,
+    workflowRefs: workflowRepo === code ? codeRefs : otherRefs,
+    workflows,
+    workflowRepository: workflowRepo,
+    workflowBranch,
+  };
 }

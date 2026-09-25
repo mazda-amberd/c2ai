@@ -401,13 +401,19 @@ def build_deployment_configuration(
             "Use the Tier-scoped deployment contract for containerized applications."
         )
 
+    github = version.github_configuration
+    if github is None:
+        raise RuntimeError("GitHub registered application has no workflow configuration")
+    # The code branch is what deploys unless another version is chosen.
+    chosen_version = payload.version if payload.version is not None else github.code_ref
+
     resolved_instance_name = instance_name or payload.instance_name or ""
     supplied_parameters = dict(payload.parameters)
     identity = _undeclared_identity_values(version, supplied_parameters)
     for key in identity:
         del supplied_parameters[key]
-    if payload.version is not None and any(p.key == "branch" for p in version.parameters):
-        supplied_parameters["branch"] = payload.version
+    if chosen_version is not None and any(p.key == "branch" for p in version.parameters):
+        supplied_parameters["branch"] = chosen_version
     resolved_parameters = _resolve_deployment_parameters(
         version,
         supplied_parameters,
@@ -415,12 +421,9 @@ def build_deployment_configuration(
         instance_name=resolved_instance_name,
         triggered_by=triggered_by,
     )
-    if payload.version is not None:
-        resolved_parameters["branch"] = payload.version
+    if chosen_version is not None:
+        resolved_parameters["branch"] = chosen_version
 
-    github = version.github_configuration
-    if github is None:
-        raise RuntimeError("GitHub registered application has no workflow configuration")
     llm = _runtime_llm_configuration(version, payload.tier)
     customer_name = resolved_parameters.get(CUSTOMER_NAME_PARAMETER)
     if not isinstance(customer_name, str) or not customer_name.strip():
@@ -432,6 +435,7 @@ def build_deployment_configuration(
         "github": {
             "connection": github.github_connection_id,
             "code_repository": github.code_repository,
+            "code_ref": github.code_ref,
             "trigger_method": github.trigger_method,
             "repository": github.repository,
             "workflow_file_path": github.workflow_file_path,

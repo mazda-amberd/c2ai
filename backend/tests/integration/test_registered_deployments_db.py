@@ -98,6 +98,8 @@ def _register_github(client, *, parameters=("customer_name", "env_instance", "br
                 "repository": "amberd-ai/example-chatbot",
                 "workflow_file_path": ".github/workflows/deploy.yml",
                 "ref": "main",
+                "code_repository": "amberd-ai/example-chatbot",
+                "code_ref": "main",
             },
             "parameters": [{"key": key, "type": "text"} for key in parameters],
             "llm": {
@@ -483,6 +485,8 @@ def _github_edit(name="example-chatbot"):
             "repository": "amberd-ai/example-chatbot",
             "workflow_file_path": ".github/workflows/deploy.yml",
             "ref": "main",
+            "code_repository": "amberd-ai/example-chatbot",
+            "code_ref": "main",
         },
         "parameters": [{"key": "customer_name", "type": "text"}],
         "llm": {"endpoint": "https://llm.example.com/v1", "model_name": "qwen3-coder-next"},
@@ -651,6 +655,8 @@ def _register_github_with(client, parameters):
             "repository": "amberd-ai/example-chatbot",
             "workflow_file_path": ".github/workflows/deploy.yml",
             "ref": "main",
+            "code_repository": "amberd-ai/example-chatbot",
+            "code_ref": "main",
         },
         "parameters": parameters,
         "llm": {"endpoint": "https://llm.example.com/v1", "api_token": "t", "model_name": "m"},
@@ -789,6 +795,46 @@ async def test_a_copy_is_a_new_template_with_the_originals_secrets(env):
         422, "RegisteredApplicationTypeChange"
     )
     assert client.post(f"{BASE}/{uuid4()}/duplicate", json=copy).status_code == 404
+
+
+async def test_the_code_branch_deploys_unless_another_version_is_chosen(env):
+    client, github, _registry, _sf = env
+    response = client.post(
+        f"{BASE}/github",
+        json={
+            "application_type": "github_workflow",
+            "name": "split-repos",
+            "github": {
+                "github_connection": "github-app-1",
+                "trigger_method": "workflow_dispatch",
+                "code_repository": "amberd-ai/example-chatbot",
+                "code_ref": "develop",
+                # The workflow lives elsewhere; its branch is left to the code's.
+                "repository": "amberd-ai/devops",
+                "workflow_file_path": ".github/workflows/deploy.yml",
+            },
+            "parameters": [{"key": k, "type": "text"} for k in ("customer_name", "branch")],
+            "llm": {"endpoint": "https://llm.example.com/v1", "api_token": "t", "model_name": "m"},
+        },
+    )
+    assert response.status_code == 201, response.text
+    github_settings = response.json()["github"]
+    assert (github_settings["code_ref"], github_settings["repository"], github_settings["ref"]) == (
+        "develop", "amberd-ai/devops", "develop"
+    )
+    application_id = response.json()["id"]
+
+    def deploy(**chosen):
+        deployed = client.post(
+            f"{BASE}/{application_id}/deployments",
+            json={"tier": 1, "parameters": {"customer_name": "acme"}, **chosen},
+        )
+        assert deployed.status_code == 201, deployed.text
+        return github.dispatches[-1][1]["branch"], github.dispatch_refs[-1]
+
+    # (code branch sent as `branch`, the ref the workflow runs on)
+    assert deploy() == ("develop", "develop")
+    assert deploy(version="main", instance_name="acme-main") == ("main", "develop")
 
 
 # --- GitHub connections ------------------------------------------------------------

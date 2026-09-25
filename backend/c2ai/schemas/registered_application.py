@@ -303,62 +303,82 @@ class ContainerApplicationSecretList(_ContractModel):
     limit: int = Field(..., ge=1, le=200)
 
 
+def _repository(value: str | None, what: str) -> str | None:
+    if value is not None and not _GITHUB_REPOSITORY_RE.fullmatch(value):
+        raise ValueError(f"{what} '{value}' must use the owner/repository format")
+    return value
+
+
+def _ref(value: str | None) -> str | None:
+    if value is not None and (
+        any(character.isspace() for character in value) or _CONTROL_CHAR_RE.search(value)
+    ):
+        raise ValueError("a branch or ref cannot contain whitespace or control characters")
+    return value
+
+
+def _workflow_file(path: str) -> str:
+    lowered = path.lower()
+    if (
+        not path.startswith(".github/workflows/")
+        or not lowered.endswith((".yml", ".yaml"))
+        or ".." in path.split("/")
+    ):
+        raise ValueError(f"Workflow file '{path}' must be a YAML file under .github/workflows/")
+    return path
+
+
+_CONNECTION_FIELD = Field(
+    ...,
+    alias="github_connection",
+    min_length=1,
+    max_length=200,
+    description="Opaque identifier of an existing GitHub connection.",
+)
+
+
 class GitHubWorkflowConfiguration(_ContractModel):
-    """Configuration needed to dispatch a GitHub Actions workflow."""
+    """Where the code comes from, and the workflow that deploys it.
 
-    github_connection_id: str = Field(
-        ...,
-        alias="github_connection",
-        min_length=1,
-        max_length=200,
-        description="Opaque identifier of an existing GitHub connection.",
-    )
+    The code repository and branch are required: the branch is the version
+    deployed unless another is chosen. The workflow may live elsewhere; a
+    workflow repository or branch left out is the code's, and is stored as
+    such.
+    """
+
+    github_connection_id: str = _CONNECTION_FIELD
     trigger_method: GitHubTriggerMethod
-    repository: str = Field(..., min_length=3, max_length=255)
-    code_repository: str | None = Field(default=None, min_length=3, max_length=255)
+    code_repository: str = Field(..., min_length=3, max_length=255)
+    code_ref: str = Field(..., min_length=1, max_length=255)
+    repository: str | None = Field(default=None, min_length=3, max_length=255)
+    ref: str | None = Field(default=None, min_length=1, max_length=255)
     workflow_file_path: str = Field(..., min_length=1, max_length=512)
-    ref: str = Field(default="main", min_length=1, max_length=255)
-
-    @field_validator("repository")
-    @classmethod
-    def validate_repository(cls, repository: str) -> str:
-        if not _GITHUB_REPOSITORY_RE.fullmatch(repository):
-            raise ValueError(
-                f"Workflow repository '{repository}' must use the owner/repository "
-                "format"
-            )
-        return repository
 
     @field_validator("code_repository")
     @classmethod
-    def validate_code_repository(cls, repository: str | None) -> str | None:
-        if repository is not None and not _GITHUB_REPOSITORY_RE.fullmatch(repository):
-            raise ValueError(
-                f"Code repository '{repository}' must use the owner/repository "
-                "format"
-            )
-        return repository
+    def validate_code_repository(cls, repository: str) -> str:
+        return _repository(repository, "Code repository")
+
+    @field_validator("repository")
+    @classmethod
+    def validate_repository(cls, repository: str | None) -> str | None:
+        return _repository(repository, "Workflow repository")
+
+    @field_validator("code_ref", "ref")
+    @classmethod
+    def validate_ref(cls, ref: str | None) -> str | None:
+        return _ref(ref)
 
     @field_validator("workflow_file_path")
     @classmethod
     def validate_workflow_file_path(cls, path: str) -> str:
-        lowered = path.lower()
-        if (
-            not path.startswith(".github/workflows/")
-            or not lowered.endswith((".yml", ".yaml"))
-            or ".." in path.split("/")
-        ):
-            raise ValueError(
-                f"Workflow file '{path}' must be a YAML file under .github/workflows/"
-            )
-        return path
+        return _workflow_file(path)
 
-    @field_validator("ref")
-    @classmethod
-    def validate_ref(cls, ref: str) -> str:
-        if any(character.isspace() for character in ref) or _CONTROL_CHAR_RE.search(ref):
-            raise ValueError("ref cannot contain whitespace or control characters")
-        return ref
+    @model_validator(mode="after")
+    def workflow_defaults_to_the_code(self) -> GitHubWorkflowConfiguration:
+        self.repository = self.repository or self.code_repository
+        self.ref = self.ref or self.code_ref
+        return self
 
 
 class ContainerEnvironmentVariable(_ContractModel):
@@ -542,10 +562,29 @@ RegisteredApplicationUpdate = Annotated[
 ]
 
 
-class GitHubWorkflowInspectRequest(GitHubWorkflowConfiguration):
+class GitHubWorkflowInspectRequest(_ContractModel):
     """Where a workflow is, to read it before registering; the trigger is optional."""
 
+    github_connection_id: str = _CONNECTION_FIELD
+    repository: str = Field(..., min_length=3, max_length=255)
+    workflow_file_path: str = Field(..., min_length=1, max_length=512)
+    ref: str = Field(..., min_length=1, max_length=255)
     trigger_method: GitHubTriggerMethod | None = None
+
+    @field_validator("repository")
+    @classmethod
+    def validate_repository(cls, repository: str) -> str:
+        return _repository(repository, "Workflow repository")
+
+    @field_validator("ref")
+    @classmethod
+    def validate_ref(cls, ref: str) -> str:
+        return _ref(ref)
+
+    @field_validator("workflow_file_path")
+    @classmethod
+    def validate_workflow_file_path(cls, path: str) -> str:
+        return _workflow_file(path)
 
 
 class RegistrationCheck(_ContractModel):

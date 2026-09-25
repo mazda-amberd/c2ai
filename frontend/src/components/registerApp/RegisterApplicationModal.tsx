@@ -24,6 +24,7 @@ import {
   inspectGithubWorkflow,
   listContainerSecrets,
   type ApiContainerSecret,
+  type ApiGithubRefOptions,
   type ApiGithubWorkflowOptions,
   type ApiImageCheck,
   type ApiWorkflowInspection,
@@ -261,6 +262,7 @@ type GithubFormValues = {
   description: string;
   connectionId: string;
   codeRepository: string;
+  codeBranch: string;
   workflowRepository: string;
   triggerMethod: TriggerMethod;
   workflowFile: string;
@@ -309,10 +311,12 @@ const emptyGithubValues = (): GithubFormValues => ({
   description: "",
   connectionId: "",
   codeRepository: "",
+  codeBranch: "main",
   workflowRepository: "",
   triggerMethod: "workflow_dispatch",
   workflowFile: "",
-  branch: "main",
+  // Blank: the code branch.
+  branch: "",
   parameters: [],
   ...DEFAULT_LLM,
 });
@@ -349,6 +353,24 @@ const READ_CHECKS = new Set(["Connection", "Repository", "Branch / Ref", "Workfl
 function DiscoveryNote({ children, error = false }: { children: React.ReactNode; error?: boolean }) {
   return (
     <p className={`text-[11.5px] ${error ? "text-[#f0655f]" : "text-[#57606c]"}`}>{children}</p>
+  );
+}
+
+/** A repository's branches and tags, as suggestions for a Branch / Ref field. */
+function RefSuggestions({ id, refs }: { id: string; refs: ApiGithubRefOptions | null }) {
+  return (
+    <datalist id={id}>
+      {refs?.branches.map((branch) => (
+        <option key={`branch:${branch}`} value={branch}>
+          {branch === refs.default_branch ? "default branch" : "branch"}
+        </option>
+      ))}
+      {refs?.tags.map((tag) => (
+        <option key={`tag:${tag}`} value={tag}>
+          tag
+        </option>
+      ))}
+    </datalist>
   );
 }
 
@@ -450,9 +472,9 @@ export default function RegisterApplicationModal({
   const [checkingImage, setCheckingImage] = useState(false);
   const [imageReference, setImageReference] = useState("");
   const [referenceError, setReferenceError] = useState("");
-  // The Workflow Repository last filled in from a connection's URL.
+  // The Code Repository last filled in from a connection's URL.
   const derivedRepository = useRef("");
-  // The Branch / Ref last filled in (the form's "main", then a repository's default).
+  // The Code Branch / Ref last filled in (the form's "main", then a repository's default).
   const derivedBranch = useRef("main");
 
   const githubFormApi = useForm<GithubFormValues>({
@@ -574,15 +596,15 @@ export default function RegisterApplicationModal({
     };
   }, [open, sourceId, copying, githubFormApi, containerFormApi]);
 
-  // Picking a connection fills in the Workflow Repository from its URL,
-  // unless one was typed.
+  // Picking a connection fills in the Code Repository from its URL, unless
+  // one was typed.
   useEffect(() => {
     const connection = connections.find((c) => c.id === githubForm.connectionId);
     const repository = connection ? repositoryFromUrl(connection.repoUrl) : null;
     if (!repository) return;
-    const current = githubFormApi.getValues("workflowRepository").trim();
+    const current = githubFormApi.getValues("codeRepository").trim();
     if (!current || current === derivedRepository.current) {
-      githubFormApi.setValue("workflowRepository", repository);
+      githubFormApi.setValue("codeRepository", repository);
     }
     derivedRepository.current = repository;
   }, [githubForm.connectionId, connections, githubFormApi]);
@@ -591,17 +613,19 @@ export default function RegisterApplicationModal({
   const discovery = useGithubDiscovery({
     enabled: open && kind === "github" && load.status === "ready",
     connection: githubForm.connectionId,
-    repository: githubForm.workflowRepository,
-    ref: githubForm.branch,
+    codeRepository: githubForm.codeRepository,
+    codeRef: githubForm.codeBranch,
+    workflowRepository: githubForm.workflowRepository,
+    workflowRef: githubForm.branch,
   });
 
-  // The workflow repository's default branch, unless a branch was typed.
-  const defaultBranch = discovery.refs.data?.default_branch;
+  // The code repository's default branch, unless a branch was typed.
+  const defaultBranch = discovery.codeRefs.data?.default_branch;
   useEffect(() => {
     if (!defaultBranch) return;
-    const current = githubFormApi.getValues("branch").trim();
+    const current = githubFormApi.getValues("codeBranch").trim();
     if (!current || current === derivedBranch.current) {
-      githubFormApi.setValue("branch", defaultBranch);
+      githubFormApi.setValue("codeBranch", defaultBranch);
     }
     derivedBranch.current = defaultBranch;
   }, [defaultBranch, githubFormApi]);
@@ -621,10 +645,10 @@ export default function RegisterApplicationModal({
     setKind(next);
   };
 
-  // Branch / Ref is required; put the default back if it was cleared.
+  // Code Branch / Ref is required; put the default back if it was cleared.
   useEffect(() => {
-    if (step.id === "workflow" && !githubFormApi.getValues("branch")) {
-      githubFormApi.setValue("branch", "main");
+    if (step.id === "workflow" && !githubFormApi.getValues("codeBranch")) {
+      githubFormApi.setValue("codeBranch", "main");
     }
   }, [step.id, githubFormApi]);
 
@@ -674,9 +698,8 @@ export default function RegisterApplicationModal({
         return true;
       case "workflow":
         if (!githubForm.connectionId) return fail("GitHub Connection is required.");
-        if (!githubForm.workflowRepository.trim())
-          return fail("Workflow Repository is required.");
-        if (!githubForm.branch.trim()) return fail("Branch / Ref is required.");
+        if (!githubForm.codeRepository.trim()) return fail("Code Repository is required.");
+        if (!githubForm.codeBranch.trim()) return fail("Code Branch / Ref is required.");
         if (!githubForm.workflowFile.trim())
           return fail("Workflow File is required.");
         return true;
@@ -771,11 +794,17 @@ export default function RegisterApplicationModal({
 
   /* ---------------- Checks ---------------- */
 
+  /** Where the workflow runs: its own repository and branch, or the code's. */
+  const workflowAt = (f: GithubFormValues) => ({
+    repository: f.workflowRepository.trim() || f.codeRepository.trim(),
+    ref: f.branch.trim() || f.codeBranch.trim(),
+  });
+  const effective = workflowAt(githubForm);
   const workflowKey = [
     githubForm.connectionId,
-    githubForm.workflowRepository.trim(),
+    effective.repository,
     githubForm.workflowFile.trim(),
-    githubForm.branch.trim(),
+    effective.ref,
   ].join("|");
   const shownInspection = inspection?.key === workflowKey ? inspection : null;
 
@@ -783,9 +812,10 @@ export default function RegisterApplicationModal({
   const inspectWorkflow = async (reuse: boolean): Promise<ApiWorkflowInspection | null> => {
     if (reuse && shownInspection) return shownInspection;
     const f = githubFormApi.getValues();
-    if (!f.connectionId || !f.workflowRepository.trim() || !f.workflowFile.trim() || !f.branch.trim()) {
+    const at = workflowAt(f);
+    if (!f.connectionId || !at.repository || !at.ref || !f.workflowFile.trim()) {
       showToast(
-        "Choose the GitHub Connection and enter the Workflow Repository, Branch / Ref and Workflow File first.",
+        "Choose the GitHub Connection and enter the Code Repository, Code Branch / Ref and Workflow File first.",
       );
       return null;
     }
@@ -793,9 +823,9 @@ export default function RegisterApplicationModal({
     try {
       const result = await inspectGithubWorkflow({
         github_connection: f.connectionId,
-        repository: f.workflowRepository.trim(),
+        repository: at.repository,
         workflow_file_path: f.workflowFile.trim(),
-        ref: f.branch.trim(),
+        ref: at.ref,
       });
       setInspection({ ...result, key: workflowKey });
       // The workflow decides how it is started.
@@ -1111,10 +1141,11 @@ export default function RegisterApplicationModal({
                 </p>
               )}
 
+              <h4 className="pt-2 text-[13px] font-bold text-[#eef2f6]">Code</h4>
               <Field
                 label="Code Repository"
-                optional
-                helper="owner/repo — where the application source lives, if not in the workflow repository. Its branches and tags are the versions offered when deploying."
+                required
+                helper="owner/repo — where the application source lives. Its branches and tags are the versions offered when deploying."
               >
                 <input
                   className={FIELD_CLASS}
@@ -1122,20 +1153,6 @@ export default function RegisterApplicationModal({
                   list="github-repositories"
                   autoComplete="off"
                   {...githubFormApi.register("codeRepository")}
-                />
-              </Field>
-
-              <Field
-                label="Workflow Repository"
-                required
-                helper="owner/repo — where the deploy workflow is defined"
-              >
-                <input
-                  className={FIELD_CLASS}
-                  placeholder="owner/repo"
-                  list="github-repositories"
-                  autoComplete="off"
-                  {...githubFormApi.register("workflowRepository")}
                 />
                 <datalist id="github-repositories">
                   {discovery.repositories.data?.items.map((r) => (
@@ -1156,36 +1173,66 @@ export default function RegisterApplicationModal({
                   <DiscoveryNote>
                     {discovery.repositories.data.items.length === 0
                       ? "The connection's token can't list any repositories; type owner/repo."
-                      : `${discovery.repositories.data.items.length}${discovery.repositories.data.truncated ? "+" : ""} repositories to pick from here and in Code Repository; type to search.`}
+                      : `${discovery.repositories.data.items.length}${discovery.repositories.data.truncated ? "+" : ""} repositories to pick from here and in Workflow Repository; type to search.`}
                   </DiscoveryNote>
                 )}
               </Field>
-
               <Field
-                label="Branch / Ref"
+                label="Code Branch / Ref"
                 required
-                helper="The branch or tag to run the workflow from."
+                helper="Deployed unless another version is picked when deploying."
               >
                 <input
                   className={FIELD_CLASS}
-                  list="github-refs"
+                  list="github-code-refs"
+                  autoComplete="off"
+                  {...githubFormApi.register("codeBranch")}
+                />
+                <RefSuggestions id="github-code-refs" refs={discovery.codeRefs.data} />
+                {discovery.codeRefs.status === "error" && (
+                  <DiscoveryNote error>Could not list branches: {discovery.codeRefs.error}</DiscoveryNote>
+                )}
+              </Field>
+
+              <h4 className="pt-2 text-[13px] font-bold text-[#eef2f6]">Workflow</h4>
+              <Field
+                label="Workflow Repository"
+                optional
+                helper="owner/repo — where the deploy workflow is defined, if not in the code repository."
+              >
+                <input
+                  className={FIELD_CLASS}
+                  placeholder={
+                    githubForm.codeRepository.trim()
+                      ? `Same as the code repository (${githubForm.codeRepository.trim()})`
+                      : "Same as the code repository"
+                  }
+                  list="github-repositories"
+                  autoComplete="off"
+                  {...githubFormApi.register("workflowRepository")}
+                />
+              </Field>
+              <Field
+                label="Workflow Branch / Ref"
+                optional
+                helper="The branch or tag the workflow runs from."
+              >
+                <input
+                  className={FIELD_CLASS}
+                  placeholder={
+                    githubForm.codeBranch.trim()
+                      ? `Same as the code branch (${githubForm.codeBranch.trim()})`
+                      : "Same as the code branch"
+                  }
+                  list="github-workflow-refs"
                   autoComplete="off"
                   {...githubFormApi.register("branch")}
                 />
-                <datalist id="github-refs">
-                  {discovery.refs.data?.branches.map((branch) => (
-                    <option key={`branch:${branch}`} value={branch}>
-                      {branch === discovery.refs.data?.default_branch ? "default branch" : "branch"}
-                    </option>
-                  ))}
-                  {discovery.refs.data?.tags.map((tag) => (
-                    <option key={`tag:${tag}`} value={tag}>
-                      tag
-                    </option>
-                  ))}
-                </datalist>
-                {discovery.refs.status === "error" && (
-                  <DiscoveryNote error>Could not list branches: {discovery.refs.error}</DiscoveryNote>
+                <RefSuggestions id="github-workflow-refs" refs={discovery.workflowRefs.data} />
+                {discovery.workflowRefs.status === "error" && (
+                  <DiscoveryNote error>
+                    Could not list branches: {discovery.workflowRefs.error}
+                  </DiscoveryNote>
                 )}
               </Field>
 
@@ -1196,7 +1243,7 @@ export default function RegisterApplicationModal({
                   {...githubFormApi.register("workflowFile")}
                 />
                 {discovery.workflows.status === "loading" && (
-                  <DiscoveryNote>Looking for workflow files on {discovery.branch}…</DiscoveryNote>
+                  <DiscoveryNote>Looking for workflow files on {discovery.workflowBranch}…</DiscoveryNote>
                 )}
                 {discovery.workflows.status === "error" && (
                   <DiscoveryNote error>
@@ -1204,12 +1251,12 @@ export default function RegisterApplicationModal({
                   </DiscoveryNote>
                 )}
                 {discovery.workflows.data?.items.length === 0 && (
-                  <DiscoveryNote>No workflow files in .github/workflows on {discovery.branch}.</DiscoveryNote>
+                  <DiscoveryNote>No workflow files in .github/workflows on {discovery.workflowBranch}.</DiscoveryNote>
                 )}
                 {!!discovery.workflows.data?.items.length && (
                   <div
                     role="group"
-                    aria-label={`Workflow files on ${discovery.branch}`}
+                    aria-label={`Workflow files on ${discovery.workflowBranch}`}
                     className="space-y-1"
                   >
                     {discovery.workflows.data.items.map((workflow) => {

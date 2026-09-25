@@ -68,6 +68,8 @@ def _request_body() -> dict:
             "repository": "amberd-ai/example-chatbot",
             "workflow_file_path": ".github/workflows/deploy.yml",
             "ref": "main",
+            "code_repository": "amberd-ai/example-chatbot",
+            "code_ref": "main",
         },
         "parameters": [
             {
@@ -134,6 +136,8 @@ def _persisted_version() -> RegisteredApplicationVersion:
     version.github_configuration = GitHubApplicationConfiguration(
         github_connection_id="github-app-1",
         trigger_method="workflow_dispatch",
+        code_repository="amberd-ai/example-chatbot",
+        code_ref="main",
         repository="amberd-ai/example-chatbot",
         workflow_file_path=".github/workflows/deploy.yml",
         ref="main",
@@ -308,6 +312,8 @@ def _upgradeable_github_instance() -> DeploymentInstance:
             "repository": "amberd-ai/example-chatbot",
             "workflow_file_path": ".github/workflows/deploy.yml",
             "ref": "main",
+            "code_repository": "amberd-ai/example-chatbot",
+            "code_ref": "main",
         },
     }
     return instance

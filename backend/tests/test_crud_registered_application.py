@@ -63,6 +63,7 @@ def _payload() -> GitHubRegisteredApplicationCreate:
                 "code_repository": "amberd-ai/application",
                 "workflow_file_path": ".github/workflows/deploy.yml",
                 "ref": "main",
+                "code_ref": "main",
             },
             "parameters": [
                 {

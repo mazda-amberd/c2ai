@@ -265,7 +265,11 @@ signed-in user may.
 | `PUT/DELETE` | `/api/github-connections/{id}` | Edit (a token left out is kept; a new URL or token is checked with GitHub) or delete; deleting one a template uses is refused |
 | `GET` | `/api/registered-applications/llm-models[/pricing]` | Model suggestions and pricing availability |
 
-**Registering.** Each GitHub Workflow parameter has a type (text, number,
+**Registering.** A GitHub Workflow application names its code repository and
+branch (`code_repository`, `code_ref`, both required: the branch is what deploys
+unless another version is chosen) and the workflow that deploys it
+(`repository`, `ref`, optional: left out, they are the code's, and are stored
+as such). Each GitHub Workflow parameter has a type (text, number,
 boolean, choice or key-value), an optional label and help text, whether it
 is required, a default, and optionally a value per tier (`tier_defaults`);
 the deploy form starts at the tier's value or the default, and a deploy that

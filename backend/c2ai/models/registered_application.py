@@ -200,8 +200,11 @@ class GitHubApplicationConfiguration(Base):
     )
     github_connection_id = Column(String(200), nullable=False)
     trigger_method = Column(String(32), nullable=False)
+    # The code deployed, and the branch deployed unless another version is chosen.
+    code_repository = Column(String(255), nullable=False)
+    code_ref = Column(String(255), nullable=False)
+    # Where the workflow that deploys it runs (the code's, unless given).
     repository = Column(String(255), nullable=False)
-    code_repository = Column(String(255), nullable=True)
     workflow_file_path = Column(String(512), nullable=False)
     ref = Column(String(255), nullable=False, default="main")
 

@@ -36,6 +36,7 @@ const adaDetail: registeredApplicationsApi.ApiGithubApplicationDetail = {
     trigger_method: "workflow_dispatch",
     repository: "amberd-ai/devops",
     code_repository: "amberd-ai/dealership_new",
+    code_ref: "main",
     workflow_file_path: ".github/workflows/ada-deploy.yaml",
     ref: "main",
   },

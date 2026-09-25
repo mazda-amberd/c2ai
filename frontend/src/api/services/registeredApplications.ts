@@ -88,8 +88,11 @@ export type ApiGithubWorkflowConfiguration = {
   /** Serialized under this name (the backend field is aliased). */
   github_connection: string;
   trigger_method: "workflow_dispatch" | "repository_dispatch";
+  /** The code deployed, and the branch deployed unless another version is chosen. */
+  code_repository: string;
+  code_ref: string;
+  /** Where the deploying workflow runs (the code's, unless it was given). */
   repository: string;
-  code_repository: string | null;
   workflow_file_path: string;
   ref: string;
 };
@@ -167,11 +170,13 @@ export type RegisterGithubApplicationPayload = {
   github: {
     github_connection: string;
     trigger_method: "workflow_dispatch" | "repository_dispatch";
-    repository: string;
-    /** Optional — omitted when the application has no separate source repo. */
-    code_repository?: string;
+    code_repository: string;
+    code_ref: string;
+    /** Left out: the code repository. */
+    repository?: string;
     workflow_file_path: string;
-    ref: string;
+    /** Left out: the code branch. */
+    ref?: string;
   };
   parameters: ApiGithubParameter[];
   llm: LlmConfigPayload;

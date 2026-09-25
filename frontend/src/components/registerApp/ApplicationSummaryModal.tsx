@@ -181,8 +181,9 @@ export default function ApplicationSummaryModal({
                     }
                   />
                   <Row label="Code Repository" value={shown.github.code_repository ?? ""} />
+                  <Row label="Code Branch / Ref" value={shown.github.code_ref ?? shown.github.ref} />
                   <Row label="Workflow Repository" value={shown.github.repository} />
-                  <Row label="Branch / Ref" value={shown.github.ref} />
+                  <Row label="Workflow Branch / Ref" value={shown.github.ref} />
                   <Row label="Workflow File" value={shown.github.workflow_file_path} />
                   <Row label="Trigger Method" value={shown.github.trigger_method} />
                 </Section>

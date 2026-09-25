@@ -58,20 +58,28 @@ describe("RegisterApplicationModal", () => {
     next(); // -> type
     next(); // -> workflow
 
-    expect(field("Branch / Ref").value).toBe("main");
+    expect(field("Code Branch / Ref").value).toBe("main");
+    expect(field("Workflow Branch / Ref").value).toBe("");
     await screen.findByRole("option", { name: "Devops" });
     fireEvent.change(field("GitHub Connection"), { target: { value: "c-1" } });
-    // The connection's repository fills in the Workflow Repository.
-    await waitFor(() => expect(field("Workflow Repository").value).toBe("amberd-ai/devops"));
+    // The connection's repository fills in the Code Repository.
+    await waitFor(() => expect(field("Code Repository").value).toBe("amberd-ai/devops"));
+    fireEvent.change(field("Code Repository"), { target: { value: "" } });
+    next();
+    expect(await screen.findByText("Code Repository is required.")).toBeTruthy();
+    fireEvent.change(field("Code Repository"), {
+      target: { value: "amberd-ai/dealership_new" },
+    });
     next();
     expect(await screen.findByText("Workflow File is required.")).toBeTruthy();
     fireEvent.change(field("Workflow File"), {
       target: { value: ".github/workflows/ada-deploy.yaml" },
     });
-    // Optional: blank means the code lives in the workflow repository.
-    fireEvent.change(field("Code Repository"), {
-      target: { value: "amberd-ai/dealership_new" },
-    });
+    // Optional: blank means the code's; here the workflow lives elsewhere.
+    expect((field("Workflow Branch / Ref") as HTMLInputElement).placeholder).toBe(
+      "Same as the code branch (main)",
+    );
+    fireEvent.change(field("Workflow Repository"), { target: { value: "amberd-ai/devops" } });
     next(); // -> params
     next(); // -> llm, the last step
     expect(field("LLM Endpoint").value).toBe("http://amberd-llm-gateway:8010");
@@ -84,7 +92,9 @@ describe("RegisterApplicationModal", () => {
       kind: "github",
       name: "amberd_demo",
       codeRepository: "amberd-ai/dealership_new",
-      branch: "main",
+      codeBranch: "main",
+      workflowRepository: "amberd-ai/devops",
+      branch: "",
       llmEndpoint: "http://amberd-llm-gateway:8010",
       llmApiToken: "EMPTY",
       llmModelName: "qwen3-coder-next",
@@ -192,6 +202,7 @@ describe("RegisterApplicationModal", () => {
         trigger_method: "workflow_dispatch",
         repository: "amberd-ai/devops",
         code_repository: "amberd-ai/dealership_new",
+        code_ref: "main",
         workflow_file_path: ".github/workflows/ada-deploy.yaml",
         ref: "main",
       },
@@ -232,7 +243,9 @@ describe("RegisterApplicationModal", () => {
     // Picking a saved connection and back again is possible.
     fireEvent.change(connection, { target: { value: "c-1" } });
     fireEvent.change(connection, { target: { value: "athena-environment" } });
-    fireEvent.change(field("Branch / Ref"), { target: { value: "release-2" } });
+    expect(field("Code Branch / Ref").value).toBe("main");
+    expect(field("Workflow Repository").value).toBe("amberd-ai/devops");
+    fireEvent.change(field("Workflow Branch / Ref"), { target: { value: "release-2" } });
     next(); // -> params
     next(); // -> llm
     expect(field("LLM Endpoint").value).toBe("http://amberd-llm-gateway:8010");
@@ -241,7 +254,13 @@ describe("RegisterApplicationModal", () => {
 
     await waitFor(() => expect(update).toHaveBeenCalledOnce());
     const payload = update.mock.calls[0][1] as registeredApplicationsApi.RegisterGithubApplicationPayload;
-    expect(payload.github).toMatchObject({ github_connection: "athena-environment", ref: "release-2" });
+    expect(payload.github).toMatchObject({
+      github_connection: "athena-environment",
+      code_repository: "amberd-ai/dealership_new",
+      code_ref: "main",
+      repository: "amberd-ai/devops",
+      ref: "release-2",
+    });
     expect(payload.llm).toEqual({
       endpoint: "http://amberd-llm-gateway:8010",
       api_token: "EMPTY",
@@ -301,11 +320,14 @@ describe("RegisterApplicationModal", () => {
 
     await waitFor(() => expect(register).toHaveBeenCalledOnce());
     const payload = register.mock.calls[0][0];
+    // The workflow is the code's: its repository and branch are left out.
     expect(payload.github).toMatchObject({
-      repository: "amberd-ai/devops",
+      code_repository: "amberd-ai/devops",
+      code_ref: "main",
       trigger_method: "repository_dispatch",
     });
-    expect(payload.github).not.toHaveProperty("code_repository");
+    expect(payload.github).not.toHaveProperty("repository");
+    expect(payload.github).not.toHaveProperty("ref");
     const base = { label: null, description: null, options: [], tier_defaults: {} };
     expect(payload.parameters).toEqual([
       { ...base, key: "customer_name", type: "text", description: "Who it is for", required: true, default: null },
@@ -540,15 +562,15 @@ describe("RegisterApplicationModal", () => {
 
     await waitFor(() => expect(repositories).toHaveBeenCalledWith("c-1"));
     expect(
-      await screen.findByText(/2 repositories to pick from here and in Code Repository/),
+      await screen.findByText(/2 repositories to pick from here and in Workflow Repository/),
     ).toBeTruthy();
     const offered = [...document.querySelectorAll("#github-repositories option")].map(
       (o) => (o as HTMLOptionElement).value,
     );
     expect(offered).toEqual(["amberd-ai/dealership_new", "amberd-ai/devops"]);
-    // The workflow repository (from the connection) starts at its default branch.
-    await waitFor(() => expect(field("Branch / Ref").value).toBe("develop"));
-    const refs = [...document.querySelectorAll("#github-refs option")].map(
+    // The code repository (from the connection) starts at its default branch.
+    await waitFor(() => expect(field("Code Branch / Ref").value).toBe("develop"));
+    const refs = [...document.querySelectorAll("#github-code-refs option")].map(
       (o) => `${(o as HTMLOptionElement).value} ${o.textContent}`,
     );
     expect(refs).toEqual(["develop default branch", "main branch", "v1.0.0 tag"]);
@@ -564,6 +586,14 @@ describe("RegisterApplicationModal", () => {
     expect(
       await screen.findByText("Trigger Method set to repository_dispatch, which the workflow listens for."),
     ).toBeTruthy();
+
+    // A workflow kept in another repository: its branches, and its files on the code branch.
+    const listRefs = vi.mocked(registeredApplicationsApi.listGithubRefs);
+    fireEvent.change(field("Workflow Repository"), { target: { value: "amberd-ai/dealership_new" } });
+    await waitFor(() =>
+      expect(workflows).toHaveBeenCalledWith("c-1", "amberd-ai/dealership_new", "develop"),
+    );
+    expect(listRefs).toHaveBeenCalledWith("c-1", "amberd-ai/dealership_new");
   });
 
   it("manages connections in their own dialog, choosing one just added", async () => {
@@ -594,7 +624,7 @@ describe("RegisterApplicationModal", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Done" }));
     await waitFor(() => expect(field("GitHub Connection").value).toBe("c-9"));
-    // Its repository fills in the Workflow Repository.
-    await waitFor(() => expect(field("Workflow Repository").value).toBe("amberd-ai/new-app"));
+    // Its repository fills in the Code Repository.
+    await waitFor(() => expect(field("Code Repository").value).toBe("amberd-ai/new-app"));
   });
 });

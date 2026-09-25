@@ -76,7 +76,8 @@ export function normalizeDetail(detail: ApiRegisteredApplicationDetail): Registe
       id: String(detail.id),
       type: "github",
       workflowFile: detail.github.workflow_file_path,
-      defaultVersion: detail.github.ref,
+      // The code branch deploys unless another version is picked.
+      defaultVersion: detail.github.code_ref ?? detail.github.ref,
       parameters: detail.parameters.map<ParameterDef>(fromApiParameter),
     };
   }

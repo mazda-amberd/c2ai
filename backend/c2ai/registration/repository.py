@@ -172,8 +172,9 @@ def _github_version(
     application_version.github_configuration = GitHubApplicationConfiguration(
         github_connection_id=payload.github.github_connection_id,
         trigger_method=payload.github.trigger_method.value,
-        repository=payload.github.repository,
         code_repository=payload.github.code_repository,
+        code_ref=payload.github.code_ref,
+        repository=payload.github.repository,
         workflow_file_path=payload.github.workflow_file_path,
         ref=payload.github.ref,
     )

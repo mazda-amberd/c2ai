@@ -122,10 +122,14 @@ export type GithubWorkflowRegistration = {
   name: string;
   description: string;
   connectionId: string;
+  /** Required: the code deployed, and the branch deployed by default. */
   codeRepository: string;
+  codeBranch: string;
+  /** Blank: the code repository. */
   workflowRepository: string;
   triggerMethod: TriggerMethod;
   workflowFile: string;
+  /** The workflow's branch; blank: the code branch. */
   branch: string;
   parameters: ParameterDef[];
   llmEndpoint: string;
@@ -362,11 +366,12 @@ function githubPayload(registration: GithubWorkflowRegistration): RegisterGithub
     github: {
       github_connection: registration.connectionId,
       trigger_method: registration.triggerMethod,
-      repository: registration.workflowRepository.trim(),
-      // Blank: the code lives in the workflow repository.
-      ...optional("code_repository", registration.codeRepository),
+      code_repository: registration.codeRepository.trim(),
+      code_ref: registration.codeBranch.trim(),
+      // Blank: the workflow is the code's, on the code branch.
+      ...optional("repository", registration.workflowRepository),
       workflow_file_path: registration.workflowFile.trim(),
-      ref: registration.branch.trim() || "main",
+      ...optional("ref", registration.branch),
     },
     parameters: registration.parameters.filter((p) => p.name.trim()).map(toApiParameter),
     llm: {
@@ -518,16 +523,21 @@ export function registrationFromDetail(detail: ApiRegisteredApplicationDetail): 
     llmModelName: detail.llm?.model_name ?? "",
   };
   if (detail.application_type === "github_workflow") {
+    const github = detail.github;
+    const codeRepository = github.code_repository ?? github.repository;
+    const codeBranch = github.code_ref ?? github.ref;
     return {
       kind: "github",
       name: detail.name,
       description: detail.description ?? "",
-      connectionId: detail.github.github_connection,
-      codeRepository: detail.github.code_repository ?? "",
-      workflowRepository: detail.github.repository,
-      triggerMethod: detail.github.trigger_method,
-      workflowFile: detail.github.workflow_file_path,
-      branch: detail.github.ref,
+      connectionId: github.github_connection,
+      codeRepository,
+      codeBranch,
+      // What matches the code is shown blank, as it was entered.
+      workflowRepository: github.repository === codeRepository ? "" : github.repository,
+      triggerMethod: github.trigger_method,
+      workflowFile: github.workflow_file_path,
+      branch: github.ref === codeBranch ? "" : github.ref,
       parameters: detail.parameters.map(fromApiParameter),
       ...llm,
     };
