@@ -30,6 +30,7 @@ from c2ai.core.exceptions import (
     InvalidToken,
     InvalidTokenExpirationFormat,
     MissingToken,
+    PasswordChangeRequired,
     TokenExpired,
 )
 from c2ai.crud.session import is_token_revoked
@@ -138,6 +139,7 @@ class AthenaTokenUser(BaseModel):
     # Filled from the database on every request, never from the token.
     user_id: UUID | None = Field(default=None, exclude=True)
     is_superuser: bool = Field(default=False, exclude=True)
+    first_name: str | None = Field(default=None, exclude=True)
 
     @property
     def is_admin(self) -> bool:
@@ -201,7 +203,9 @@ async def get_access_token(request: Request) -> str:
     return token
 
 
-async def _resolve_current_user(request: Request, db: AsyncSession) -> AthenaTokenUser:
+async def _resolve_current_user(
+    request: Request, db: AsyncSession, *, allow_temporary_password: bool = False
+) -> AthenaTokenUser:
     token = await get_access_token(request)
     claims = decode_jwt(token)
     user = await get_user_by_identifier(db, claims.identifier)
@@ -211,12 +215,17 @@ async def _resolve_current_user(request: Request, db: AsyncSession) -> AthenaTok
     # signs out every session issued before it; logout revokes one token.
     if claims.tv != (user.token_version or 0) or await is_token_revoked(db, claims.jti):
         raise InvalidToken("This session has been signed out")
+    # Somebody on a temporary password (new account, reset) can do exactly
+    # one thing until they replace it: replace it.
+    if not allow_temporary_password and (user.metadata_ or {}).get("needs_password_reset") is True:
+        raise PasswordChangeRequired()
     # Authorization decisions use the stored account, not the token snapshot.
     return claims.model_copy(
         update={
             "metadata": user.public_metadata,
             "user_id": user.id,
             "is_superuser": bool(user.is_superuser),
+            "first_name": user.first_name,
         }
     )
 
@@ -228,6 +237,17 @@ async def get_current_user_token(
     """Dependency: any authenticated, still-existing user."""
 
     return await _resolve_current_user(request, db)
+
+
+async def get_user_on_any_password(
+    request: Request,
+    db: AsyncSession = Depends(get_db_session),
+) -> AthenaTokenUser:
+    """Dependency: like ``get_current_user_token``, but also admits somebody
+    still on a temporary password - for whoami and choosing a password, the
+    two things they need to get off it."""
+
+    return await _resolve_current_user(request, db, allow_temporary_password=True)
 
 
 async def require_admin(

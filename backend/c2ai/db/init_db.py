@@ -6,22 +6,21 @@ Usage (from backend/):
 This DROPS the database named in DATABASE_URL. It is meant for local
 development only; use ``python -m c2ai.db.migrate`` everywhere else.
 
-The seeded administrator is ``admin`` with the password from
-``C2AI_ADMIN_PASSWORD`` (default ``admin``) and must change it on first login.
+The seeded administrator is ``admin@amberd.ai`` with the password
+``admin@amberd.ai`` - the same account the API creates at startup on any
+database that has no users (``crud.user.ensure_default_admin``).
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import sys
 
 import psycopg2
-from argon2 import PasswordHasher
 from psycopg2 import sql
-from psycopg2.extras import Json
 
-from c2ai.config import get_settings
 from c2ai.db.migrate import run_migrations
 from c2ai.db.url import psycopg2_connect_kwargs, sync_database_url
 
@@ -52,37 +51,21 @@ def recreate_database() -> None:
 
 
 def seed_admin_user() -> None:
-    """Insert the bootstrap administrator (no-op when it already exists)."""
+    """Insert the bootstrap administrator (no-op when any user exists)."""
 
-    password = get_settings().admin_password
-    conn = psycopg2.connect(**psycopg2_connect_kwargs(sync_database_url()))
-    try:
-        with conn, conn.cursor() as cursor:
-            cursor.execute(
-                """
-                INSERT INTO users
-                    (identifier, password, first_name, last_name, user_type,
-                     is_superuser, metadata, created_by)
-                VALUES (%s, %s, %s, %s, 'admin', true, %s, %s)
-                ON CONFLICT (identifier) DO NOTHING
-                """,
-                (
-                    "admin",
-                    PasswordHasher().hash(password),
-                    "Super",
-                    "Admin",
-                    Json(
-                        {
-                            "role": "Executive",
-                            "needs_password_reset": True,
-                        }
-                    ),
-                    "system",
-                ),
-            )
-        logger.info("Admin user seeded.")
-    finally:
-        conn.close()
+    async def seed() -> None:
+        from c2ai.crud.user import ensure_default_admin
+        from c2ai.db.session import AsyncSessionLocal, engine
+
+        try:
+            async with AsyncSessionLocal() as db:
+                await ensure_default_admin(db)
+                await db.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(seed())
+    logger.info("Admin user seeded.")
 
 
 def main() -> None:

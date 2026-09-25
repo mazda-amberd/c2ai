@@ -26,6 +26,7 @@ from c2ai.config import check_startup_settings, get_settings
 from c2ai.core.exception_handlers import attach_exception_handlers
 from c2ai.core.frontend import setup_frontend_serving
 from c2ai.core.observability import RequestContextMiddleware
+from c2ai.crud.user import ensure_default_admin
 from c2ai.db.migrate import schema_status
 from c2ai.db.session import AsyncSessionLocal
 from c2ai.jobs import Worker, get_job_store
@@ -51,10 +52,19 @@ async def _check_schema() -> None:
     raise RuntimeError(message)
 
 
+async def _ensure_default_admin() -> None:
+    """An empty deployment gets admin@amberd.ai, so there is a way in."""
+
+    async with AsyncSessionLocal() as db:
+        if await ensure_default_admin(db):
+            await db.commit()
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     check_startup_settings()
     await _check_schema()
+    await _ensure_default_admin()
     settings = get_settings()
     worker_task = None
     stop = asyncio.Event()

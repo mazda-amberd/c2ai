@@ -678,3 +678,15 @@ def AdminPrivilegesRequired(detail: str = "Admin privileges required") -> AppExc
     user out.
     """
     return ForbiddenError(detail=detail, code="AdminPrivilegesRequired")
+
+
+def PasswordChangeRequired(
+    detail: str = "Choose a password before using the interface.",
+) -> AppException:
+    """Factory for a 403 error: signed in with a temporary password.
+
+    Somebody who has not replaced the password they were given can do exactly
+    one thing until they do: replace it. 403, not 401, so the session survives
+    to make that change.
+    """
+    return ForbiddenError(detail=detail, code="PasswordChangeRequired")

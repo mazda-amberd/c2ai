@@ -16,7 +16,7 @@ from c2ai.auth.cookie import set_auth_cookie
 from c2ai.auth.jwt import (
     AthenaTokenUser,
     default_token_ttl_seconds,
-    get_current_user_token,
+    get_user_on_any_password,
     issue_session_token,
     require_admin,
 )
@@ -160,7 +160,7 @@ async def update_existing_user(
 async def update_user_password(
     payload: schemas_user.UpdatePasswordPayload,
     response: Response,
-    current_user: AthenaTokenUser = Depends(get_current_user_token),
+    current_user: AthenaTokenUser = Depends(get_user_on_any_password),
     db: AsyncSession = Depends(get_db_session),
 ):
     """Change the caller's own password and clear ``needs_password_reset``.

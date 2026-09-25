@@ -11,8 +11,13 @@ type AuthContextType = {
   isAuthenticated: boolean;
   checkingAuth: boolean;
   user: WhoAmIResponse | null;
-  login: (username: string, password: string) => Promise<boolean>;
+  /** Signed in with a temporary password: nothing else works until it is replaced. */
+  mustChoosePassword: boolean;
+  /** The signed-in user, or null when the credentials were refused. */
+  login: (username: string, password: string) => Promise<WhoAmIResponse | null>;
   logout: () => Promise<void>;
+  /** Re-read the signed-in user (after choosing a password). */
+  refreshUser: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -50,10 +55,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       setUser(me);
       setIsAuthenticated(true);
 
-      return true;
+      return me;
     } catch (error) {
       console.error("Login failed:", error);
-      return false;
+      return null;
     }
   };
 
@@ -73,8 +78,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
         isAuthenticated,
         checkingAuth,
         user,
+        mustChoosePassword: user?.metadata?.needs_password_reset === true,
         login,
         logout,
+        refreshUser: checkSession,
       }}
     >
       {children}

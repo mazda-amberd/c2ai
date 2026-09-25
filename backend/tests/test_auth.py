@@ -171,6 +171,18 @@ class TestAuthorization:
         assert body["identifier"] == "alice"
         assert body["metadata"]["user_type"] == "User"
 
+    def test_a_temporary_password_only_reaches_whoami_and_choosing_one(self, test_client):
+        user = _user()
+        user.metadata_ = {"needs_password_reset": True}
+        with patch(_LOOKUP, new_callable=AsyncMock, return_value=user):
+            blocked = test_client.get("/api/registered-applications", headers=_auth(_token()))
+            me = test_client.get("/auth/whoami", headers=_auth(_token()))
+        assert blocked.status_code == 403  # not 401: the session must survive
+        assert blocked.json()["code"] == "PasswordChangeRequired"
+        assert me.status_code == 200
+        assert me.json()["first_name"] == "Alice"
+        assert me.json()["metadata"]["needs_password_reset"] is True
+
     def test_legacy_metrics_endpoint_requires_authentication(self, test_client):
         assert test_client.get("/api/metrics").status_code == 401
 

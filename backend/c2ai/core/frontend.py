@@ -16,6 +16,10 @@ logger = logging.getLogger(__name__)
 # Unknown paths under these prefixes are API mistakes, not client-side routes,
 # so they get a JSON 404 instead of the SPA's index.html.
 _API_PREFIXES = ("api/", "auth/", "users/", "jobs/")
+# index.html names the current build's hashed bundles; a browser that reuses a
+# cached copy keeps running the previous release. (The bundles themselves are
+# content-hashed, so they may be cached.)
+_REVALIDATE = {"Cache-Control": "no-cache"}
 
 
 def _dist_dir() -> Path:
@@ -58,4 +62,4 @@ def setup_frontend_serving(app: FastAPI) -> None:
             and candidate.is_relative_to(static_dir)
         ):
             return FileResponse(candidate)
-        return FileResponse(index_html)
+        return FileResponse(index_html, headers=_REVALIDATE)

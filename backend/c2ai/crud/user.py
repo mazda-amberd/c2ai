@@ -12,6 +12,7 @@ from uuid import UUID
 
 from argon2 import PasswordHasher
 from sqlalchemy import false, or_, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from c2ai.models.user import ADMIN, USER, User, parse_user_type
@@ -19,6 +20,12 @@ from c2ai.models.user import ADMIN, USER, User, parse_user_type
 logger = logging.getLogger(__name__)
 
 _hasher = PasswordHasher()
+
+# The account an empty deployment starts with, so there is a way in before
+# anyone has been added. Its password is its address, which is fine only
+# because it is meant to be replaced by real accounts and then deleted.
+DEFAULT_ADMIN_IDENTIFIER = "admin@amberd.ai"
+DEFAULT_ADMIN_PASSWORD = "admin@amberd.ai"
 
 # Access is stored in columns; these keys are never kept in the metadata JSON.
 _COLUMN_METADATA_KEYS = frozenset({"user_type"})
@@ -117,6 +124,43 @@ async def create_user(db: AsyncSession, user_data: dict[str, Any]) -> User:
     await db.flush()
     await db.refresh(user)
     return user
+
+
+async def ensure_default_admin(db: AsyncSession) -> bool:
+    """Create the bootstrap administrator, but only when there are no users.
+
+    Never re-created: once anyone exists, a deployment that deleted this
+    account meant to. Deliberately not forced to change its password - it is
+    the way in for a deployment that has nobody, and a forced change on the
+    only account is a lock waiting to happen. Returns whether it was created.
+    """
+
+    if (await db.execute(select(User.id).limit(1))).first() is not None:
+        return False
+    result = await db.execute(
+        insert(User)
+        .values(
+            identifier=DEFAULT_ADMIN_IDENTIFIER,
+            password=_hasher.hash(DEFAULT_ADMIN_PASSWORD),
+            first_name="Amberd",
+            last_name="Admin",
+            user_type=ADMIN,
+            is_superuser=True,
+            metadata_={"needs_password_reset": False},
+            created_by="system",
+        )
+        # Two replicas starting on an empty database: one insert wins.
+        .on_conflict_do_nothing(index_elements=[User.identifier])
+        .returning(User.id)
+    )
+    created = result.first() is not None
+    if created:
+        logger.warning(
+            "No users existed, so the default administrator %s was created with a "
+            "password equal to its address. Add real accounts and delete it.",
+            DEFAULT_ADMIN_IDENTIFIER,
+        )
+    return created
 
 
 async def update_user(db: AsyncSession, user: User, updates: dict[str, Any]) -> User:

@@ -55,7 +55,6 @@ class Settings(BaseSettings):
 
     # --- Database --------------------------------------------------------
     database_url: str = Field("", validation_alias=_env("DATABASE_URL", "LOCAL_DATABASE_URL"))
-    admin_password: str = Field("admin", validation_alias="C2AI_ADMIN_PASSWORD")
 
     # --- Authentication --------------------------------------------------
     auth_secret: str = Field("", validation_alias=_env("ATHENA_AUTH_SECRET", "JWT_SECRET"))
@@ -84,6 +83,26 @@ class Settings(BaseSettings):
     )
     # Proxies whose X-Forwarded-For is trusted for the client address.
     forwarded_allow_ips: str = Field("127.0.0.1", validation_alias="C2AI_FORWARDED_ALLOW_IPS")
+    # Where password emails tell people to sign in; never taken from the
+    # request's Host header, which the sender of the request controls.
+    public_url: str = Field("", validation_alias="C2AI_PUBLIC_URL")
+
+    # --- Email (Postmark) -------------------------------------------------
+    # Forgot password sends nothing, and changes nothing, until both are set.
+    # The Amberd Agents names are accepted so one secret serves both.
+    postmark_server_token: str = Field("", validation_alias="POSTMARK_SERVER_TOKEN")
+    email_from: str = Field(
+        "", validation_alias=_env("C2AI_EMAIL_FROM", "AMBERD_REPORT_FROM_EMAIL")
+    )
+    email_reply_to: str = Field(
+        "", validation_alias=_env("C2AI_EMAIL_REPLY_TO", "AMBERD_REPORT_REPLY_TO")
+    )
+    postmark_message_stream: str = Field(
+        "outbound", validation_alias=_env("POSTMARK_MESSAGE_STREAM", "AMBERD_REPORT_MESSAGE_STREAM")
+    )
+    postmark_endpoint: str = Field(
+        "https://api.postmarkapp.com/email", validation_alias="POSTMARK_EMAIL_ENDPOINT"
+    )
 
     # --- Passwords and identifiers ----------------------------------------
     password_prefix: str = Field("", validation_alias="PASSWORD_PREFIX")
@@ -221,6 +240,10 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def email_enabled(self) -> bool:
+        return bool(self.postmark_server_token.strip() and self.email_from.strip())
 
     @property
     def cookie_is_secure(self) -> bool:

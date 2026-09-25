@@ -7,13 +7,17 @@ from datetime import timedelta
 from c2ai.config import get_settings
 from c2ai.crud import session as session_store
 from c2ai.jobs.worker import JobContext, Schedule, job_handler, register_schedule
+from c2ai.services.password_reset import RESET_COOLDOWN
 
 KIND = "jobs.purge"
 
 
 @job_handler(KIND)
 async def purge(ctx: JobContext) -> dict:
-    window = timedelta(seconds=get_settings().login_failure_window_seconds)
+    # login_failures also holds the forgot-password cooldowns.
+    window = max(
+        timedelta(seconds=get_settings().login_failure_window_seconds), RESET_COOLDOWN
+    )
     async with ctx.session_factory() as db:
         sessions = await session_store.purge_expired(db, failure_window=window)
         await db.commit()

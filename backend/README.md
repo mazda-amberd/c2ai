@@ -51,7 +51,7 @@ python -m c2ai.auth.generate_secret --write   # sets ATHENA_AUTH_SECRET in .env
 ### Database
 
 A fresh local database (drops and recreates the database in `DATABASE_URL`,
-applies every migration, seeds `admin` / `$C2AI_ADMIN_PASSWORD`):
+applies every migration, seeds `admin@amberd.ai` / `admin@amberd.ai`):
 
 ```bash
 python -m c2ai.db.init_db --yes
@@ -100,6 +100,7 @@ number of API replicas and workers can share one database.
 | `inventory.refresh` | every `C2AI_INVENTORY_REFRESH_SECONDS` (60) | Rewrites the per-tier cluster inventory from Grafana |
 | `financial.ingest` | every `ATHENA_FINANCIAL_POLL_SECONDS` | LLM gateway cost poll |
 | `credentials.reencrypt` | daily | Re-encrypts stored credentials under the current primary key |
+| `auth.password_reset` | `POST /auth/forgot-password` | Emails a temporary password (see below); kept 1 hour |
 | `jobs.purge` | every 10 minutes | Deletes finished jobs, expired revocations and old login failures |
 
 ### Test and lint
@@ -136,6 +137,8 @@ The ones that must be set in any real environment:
 | `GRAFANA_LOKI_DATASOURCE_UID` | Loki datasource for logs and troubleshooting |
 | `DEPLOYMENT_CALLBACK_TOKEN` | Secret behind the per-operation pipeline callback tokens |
 | `VLLM_ENDPOINT` | OpenAI-compatible endpoint for AI troubleshooting |
+| `POSTMARK_SERVER_TOKEN`, `C2AI_EMAIL_FROM` | Postmark, for forgot-password emails (Amberd Agents' `AMBERD_REPORT_FROM_EMAIL` also accepted) |
+| `C2AI_PUBLIC_URL` | The address password emails tell people to sign in at |
 
 ## Authentication and roles
 
@@ -154,14 +157,38 @@ demoted or deleted.
 
 | Method | Path | Access |
 |---|---|---|
-| `POST` | `/auth/login`, `/auth/logout` | public |
+| `POST` | `/auth/login`, `/auth/logout`, `/auth/forgot-password` | public |
 | `GET` | `/auth/whoami` | signed in |
 | `GET/POST/PATCH/DELETE` | `/users/` | admin |
 | `PATCH` | `/users/update_password` | signed in (own password) |
 | `POST` | `/users/reset_password/{user}` | admin |
 
-Superusers (`users.is_superuser`, the bootstrap `admin`) see every user;
+Superusers (`users.is_superuser`, the bootstrap account) see every user;
 other admins see the users they created (`users.created_by_id`).
+
+**The default account.** At startup, a database with no users gets
+`admin@amberd.ai` with the password `admin@amberd.ai` (a superuser, not made
+to change it: a forced change on the only account is a lockout waiting to
+happen). It is never re-created once anyone exists. Add real accounts, then
+delete it.
+
+**Temporary passwords.** New accounts, admin resets and forgot-password
+resets set `metadata.needs_password_reset`. Until the person replaces it,
+every endpoint except `/auth/whoami` and `/users/update_password` answers
+**403** `PasswordChangeRequired`, and the sign-in page asks for a new
+password straight after signing in.
+
+**Forgot password** (the link on the sign-in page, as in Amberd Agents) takes
+an address and emails a new temporary password to it; the old one and every
+session stop working at once. `POST /auth/forgot-password` **answers the same
+way whatever happens** - the reset runs afterwards in the `auth.password_reset`
+job, so neither the reply nor its timing says whether the address is known.
+What happened is logged. Nothing is sent, and nothing changes, when the
+address is unknown or not an email address, within five minutes of the last
+reset for it, when email (`POSTMARK_SERVER_TOKEN`, `C2AI_EMAIL_FROM`) is not
+configured, or when Postmark refuses the message - a reset that cannot be
+delivered would lock somebody out. `C2AI_PUBLIC_URL` is the address the email
+says to sign in at.
 
 **Sessions.** Logout revokes that token (`revoked_tokens`). Changing or
 resetting a password bumps `users.token_version`, which signs out every

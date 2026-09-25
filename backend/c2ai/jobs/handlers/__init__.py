@@ -6,5 +6,6 @@ from c2ai.jobs.handlers import (  # noqa: F401
     financial,
     inventory,
     maintenance,
+    password_reset,
     troubleshooting,
 )

@@ -7,13 +7,14 @@ export default function ProtectedRoute({
 }: {
   children: JSX.Element;
 }) {
-  const { isAuthenticated, checkingAuth } = useAuth();
+  const { isAuthenticated, checkingAuth, mustChoosePassword } = useAuth();
 
   if (checkingAuth) {
     return null;
   }
 
-  if (!isAuthenticated) {
+  // On a temporary password the only page is the one that replaces it.
+  if (!isAuthenticated || mustChoosePassword) {
     return <Navigate to="/login" replace />;
   }
 

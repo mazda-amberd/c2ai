@@ -35,7 +35,9 @@ npm ci
 npm run dev                                # UI on http://localhost:5173
 ```
 
-Sign in as `admin` with `C2AI_ADMIN_PASSWORD` (default `admin`) and change it.
+Sign in as `admin@amberd.ai` with the password `admin@amberd.ai`. The API
+creates that account on any database with no users; add real accounts, then
+delete it.
 
 For a single-process deployment, `npm run build` in `frontend/` and start the
 backend: it serves `frontend/dist` on the same origin as the API.

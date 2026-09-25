@@ -1,13 +1,14 @@
-"""Session endpoints: login, logout, and the current-user lookup the UI polls."""
+"""Session endpoints: login, logout, forgot password, and the current-user lookup."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Depends, Request, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,7 +22,7 @@ from c2ai.auth.jwt import (
     clamp_token_ttl,
     decode_jwt,
     default_token_ttl_seconds,
-    get_current_user_token,
+    get_user_on_any_password,
     issue_session_token,
 )
 from c2ai.config import get_settings
@@ -29,6 +30,12 @@ from c2ai.core.exceptions import AppException, InvalidCredentials, TooManyLoginA
 from c2ai.crud import session as session_store
 from c2ai.crud.user import get_user_by_identifier
 from c2ai.db.session import get_db_session
+from c2ai.jobs import JobStore, get_job_notifier, get_job_store
+from c2ai.jobs.handlers.password_reset import (
+    KIND as PASSWORD_RESET_JOB,
+    RETENTION as PASSWORD_RESET_RETENTION,
+)
+from c2ai.services.password_reset import ANSWER as FORGOT_PASSWORD_ANSWER
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +68,17 @@ class LogoutResponse(BaseModel):
 class WhoAmIResponse(BaseModel):
     identifier: str
     service: str | None = None
+    first_name: str | None = None
     metadata: dict = Field(default_factory=dict)
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str = Field("", max_length=320)
+
+
+class ForgotPasswordResponse(BaseModel):
+    ok: bool = True
+    detail: str = FORGOT_PASSWORD_ANSWER
 
 
 def _verify(password_hash: str, password: str) -> bool:
@@ -157,8 +174,50 @@ async def logout(
     return LogoutResponse()
 
 
-@router.get("/whoami", response_model=WhoAmIResponse)
-async def whoami(user: AthenaTokenUser = Depends(get_current_user_token)) -> WhoAmIResponse:
-    """The signed-in user with their current (database) metadata."""
+@router.post(
+    "/forgot-password",
+    response_model=ForgotPasswordResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def forgot_password(
+    payload: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    store: JobStore = Depends(get_job_store),
+    notify: Callable[[], object] = Depends(get_job_notifier),
+) -> ForgotPasswordResponse:
+    """Email a new temporary password to an address that is one of ours.
 
-    return WhoAmIResponse(identifier=user.identifier, service=user.service, metadata=user.metadata)
+    **Answers the same way whatever happens.** Whether the address is here,
+    inside the cooldown, or the send works - one reply, given before any of
+    it is looked at (the ``auth.password_reset`` job does the work). Any
+    difference would be a way to ask this deployment which addresses it
+    knows, from a form that needs no password.
+    """
+
+    address = payload.email.strip()
+    if address:
+        # One queued reset per address at a time; a second click is a no-op.
+        await store.enqueue(
+            PASSWORD_RESET_JOB,
+            {"address": address},
+            dedupe_key=f"password-reset:{address.lower()}",
+            retention=PASSWORD_RESET_RETENTION,
+        )
+        background_tasks.add_task(notify)
+    return ForgotPasswordResponse()
+
+
+@router.get("/whoami", response_model=WhoAmIResponse)
+async def whoami(user: AthenaTokenUser = Depends(get_user_on_any_password)) -> WhoAmIResponse:
+    """The signed-in user with their current (database) metadata.
+
+    Answers for somebody still on a temporary password too: the sign-in page
+    reads ``metadata.needs_password_reset`` from here to ask for a new one.
+    """
+
+    return WhoAmIResponse(
+        identifier=user.identifier,
+        service=user.service,
+        first_name=user.first_name,
+        metadata=user.metadata,
+    )
