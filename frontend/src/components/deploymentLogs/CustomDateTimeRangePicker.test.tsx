@@ -1,6 +1,13 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  calendarDay as day,
+  neighbouringDaysAreHidden,
+  nextMonth,
+  previousMonth,
+} from "@/test-utils/calendar";
+
 import { CustomDateTimeRangePicker } from "./CustomDateTimeRangePicker";
 
 const NOW = new Date(2026, 8, 15, 18, 30);
@@ -30,14 +37,32 @@ describe("CustomDateTimeRangePicker", () => {
     vi.useRealTimers();
   });
 
-  it("disables every day after today", () => {
+  // The same calendar behaviour as the total-spend picker (CostChip.test.tsx).
+  it("shows this month and the last, and disables every day after today", () => {
     renderPicker(new Date(2026, 8, 15, 17, 30), NOW);
-    const day = (date: string) =>
-      screen
-        .getAllByRole("button")
-        .find((el) => new RegExp(`(^|, )\\w+, ${date}( selected)?(,|$)`).test(el.getAttribute("aria-label") ?? ""))!;
+    expect(day("August 3, 2026").getAttribute("aria-disabled")).toBeNull();
     expect(day("September 15, 2026").getAttribute("aria-disabled")).toBeNull();
     expect(day("September 16, 2026").getAttribute("aria-disabled")).toBe("true");
+    expect(nextMonth().hasAttribute("disabled")).toBe(true);
+    expect(neighbouringDaysAreHidden()).toBe(true);
+  });
+
+  it("selects a range across months in two clicks, keeping the times", () => {
+    const { onFromChange, onToChange } = renderPicker(new Date(2026, 8, 15, 9, 0), NOW);
+    fireEvent.click(day("August 20, 2026"));
+    fireEvent.click(day("September 3, 2026"));
+    expect(onFromChange).toHaveBeenLastCalledWith(new Date(2026, 7, 20, 9, 0));
+    expect(onToChange).toHaveBeenLastCalledWith(new Date(2026, 8, 3, 18, 30));
+  });
+
+  it("reaches earlier months one at a time", () => {
+    const { onFromChange, onToChange } = renderPicker(new Date(2026, 8, 15, 9, 0), NOW);
+    fireEvent.click(previousMonth());
+    fireEvent.click(day("July 20, 2026"));
+    fireEvent.click(nextMonth());
+    fireEvent.click(day("September 3, 2026"));
+    expect(onFromChange).toHaveBeenLastCalledWith(new Date(2026, 6, 20, 9, 0));
+    expect(onToChange).toHaveBeenLastCalledWith(new Date(2026, 8, 3, 18, 30));
   });
 
   it("caps a time later today at now", () => {

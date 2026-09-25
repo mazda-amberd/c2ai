@@ -1,6 +1,12 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  calendarDay as day,
+  neighbouringDaysAreHidden,
+  nextMonth,
+  previousMonth,
+} from "@/test-utils/calendar";
 import { getFinanceFilter } from "@/utils/financeApi";
 
 import CostChip from "./CostChip";
@@ -11,22 +17,6 @@ const NOW = new Date(2026, 8, 15, 23, 30);
 function openCalendar() {
   render(<CostChip cost={1234} />);
   fireEvent.click(screen.getByRole("button", { name: "Select cost date range" }));
-}
-
-/** The calendar cell for one day ("September 15, 2026"), skipping the hidden
- *  copies of neighbouring months' days (jsdom applies no CSS). */
-function day(date: string): HTMLElement {
-  const own = new RegExp(`(^|, )\\w+, ${date}( selected)?(,|$)`);
-  const [cell] = screen
-    .getAllByRole("button")
-    .filter((el) => own.test(el.getAttribute("aria-label") ?? "") && !el.dataset.outsideMonth);
-  if (!cell) throw new Error(`No calendar cell for ${date}`);
-  return cell;
-}
-
-/** The calendar's own "next month" arrow (react-aria adds a hidden one too). */
-function nextMonth(): HTMLElement {
-  return screen.getAllByRole("button", { name: "Next" })[0];
 }
 
 describe("CostChip date range", () => {
@@ -48,6 +38,7 @@ describe("CostChip date range", () => {
     expect(day("September 30, 2026").getAttribute("aria-disabled")).toBe("true");
     // Nothing to pick in October, so the calendar doesn't page there.
     expect(nextMonth().hasAttribute("disabled")).toBe(true);
+    expect(neighbouringDaysAreHidden()).toBe(true);
   });
 
   it("selects a range across months in two clicks", () => {
@@ -60,7 +51,7 @@ describe("CostChip date range", () => {
 
   it("reaches earlier months one at a time", () => {
     openCalendar();
-    fireEvent.click(screen.getAllByRole("button", { name: "Previous" })[0]);
+    fireEvent.click(previousMonth());
     fireEvent.click(day("July 20, 2026"));
     fireEvent.click(nextMonth());
     fireEvent.click(day("September 3, 2026"));
