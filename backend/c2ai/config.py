@@ -172,6 +172,9 @@ class Settings(BaseSettings):
     excluded_deployments: str = Field("nginx", validation_alias="ATHENA_EXCLUDED_DEPLOYMENTS")
     cpu_cores_cap: float = Field(8.0, ge=1, validation_alias="ATHENA_CPU_CORES_CAP")
     memory_gb_cap: float = Field(80.0, ge=1, validation_alias="ATHENA_MEMORY_GB_CAP")
+    inventory_refresh_seconds: int = Field(
+        60, ge=10, validation_alias="C2AI_INVENTORY_REFRESH_SECONDS"
+    )
     scrape_interval_seconds: int = Field(
         60, ge=1, validation_alias="ATHENA_SCRAPE_INTERVAL_SECONDS"
     )

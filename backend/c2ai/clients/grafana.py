@@ -27,6 +27,7 @@ from c2ai.constants.prometheus import (
     get_gpu_per_app_query,
     get_grafana_prometheus_datasource,
 )
+from c2ai.core.exceptions import GrafanaFetchError
 from c2ai.schemas.grafana import (
     GrafanaField,
     GrafanaFrame,
@@ -994,3 +995,23 @@ class GrafanaClient:
             )
 
         return tiers, gpu_totals
+
+
+def grafana_client() -> GrafanaClient | None:
+    """FastAPI dependency: a Grafana client for the current settings, or None.
+
+    Cheap to build per request (connections come from the shared pool);
+    tests replace it through ``app.dependency_overrides``. It never raises —
+    FastAPI resolves dependencies before reporting request validation errors —
+    so routes call ``require_grafana`` once their inputs are valid.
+    """
+
+    if not get_settings().grafana_api_url.strip():
+        return None
+    return GrafanaClient()
+
+
+def require_grafana(client: GrafanaClient | None) -> GrafanaClient:
+    if client is None:
+        raise GrafanaFetchError("Grafana is not configured (set GRAFANA_API_URL).")
+    return client

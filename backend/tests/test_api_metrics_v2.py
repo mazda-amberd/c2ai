@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -9,9 +10,11 @@ import httpx
 import pytest
 
 from c2ai.app import app
+from c2ai.clients.grafana import grafana_client
 from c2ai.db.session import get_db_session
 from c2ai.services.instance_metadata import InstanceMetadata
 from c2ai.services.metrics import clear_cache
+from tests.helpers import override_dependency
 
 ENDPOINT = "/api/v2/metrics"
 APPLICATION_ENDPOINT = "/api/v2/metrics/application"
@@ -80,7 +83,7 @@ def metrics_client(deploy_auth_client):
 
 def _get(client, grafana, metadata=None, **params):
     with (
-        patch("c2ai.api.metrics.get_metrics_grafana_client", return_value=grafana),
+        _grafana(grafana),
         patch(
             "c2ai.api.metrics.load_instance_metadata_map",
             new_callable=AsyncMock,
@@ -92,7 +95,7 @@ def _get(client, grafana, metadata=None, **params):
 
 def _get_application(client, grafana, metadata=None, **params):
     with (
-        patch("c2ai.api.metrics.get_metrics_grafana_client", return_value=grafana),
+        _grafana(grafana),
         patch(
             "c2ai.api.metrics.load_instance_metadata_map",
             new_callable=AsyncMock,
@@ -431,3 +434,10 @@ class TestAuth:
     def test_requires_authentication(self, test_client):
         """No JWT override here — the endpoint must not be public."""
         assert test_client.get(ENDPOINT, params={"level": "cluster"}).status_code == 401
+
+
+@contextmanager
+def _grafana(client):
+    with override_dependency(grafana_client) as factory:
+        factory.return_value = client
+        yield factory

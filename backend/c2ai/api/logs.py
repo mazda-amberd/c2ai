@@ -10,7 +10,7 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token
-from c2ai.clients.grafana import GrafanaClient
+from c2ai.clients.grafana import GrafanaClient, grafana_client, require_grafana
 from c2ai.core.exceptions import GrafanaFetchError, ServiceUnavailableError
 from c2ai.schemas.deployment import DEPLOYMENT_LOG_NAME_RE, SUBDOMAIN_RE
 from c2ai.schemas.logs import DeploymentLogEntryOut, DeploymentLogsResponseOut
@@ -48,16 +48,6 @@ _DEPLOYMENT_QUERY = Annotated[
         description="Application / workload name (same as in the deployments list).",
     ),
 ]
-
-_grafana_client: GrafanaClient | None = None
-
-
-def get_logs_grafana_client() -> GrafanaClient:
-    global _grafana_client
-    if _grafana_client is None:
-        _grafana_client = GrafanaClient()
-    return _grafana_client
-
 
 def _parse_iso8601(value: str) -> datetime:
     v = value.strip()
@@ -208,6 +198,7 @@ async def get_deployment_logs(
         ),
     ] = False,
     _user: AthenaTokenUser = Depends(get_current_user_token),
+    client: GrafanaClient | None = Depends(grafana_client),
 ) -> DeploymentLogsResponseOut:
     client_time_bounds = bool(from_ts and to_ts)
     if not client_time_bounds:
@@ -231,7 +222,7 @@ async def get_deployment_logs(
     start_ms = int(from_dt.timestamp() * 1000)
     end_ms = int(to_dt.timestamp() * 1000)
 
-    client = get_logs_grafana_client()
+    client = require_grafana(client)
     paging = _paging_enabled(limit, cursor, search, client_time_bounds, tail)
 
     page_limit = _clamp_limit(limit, 500) if paging else 0

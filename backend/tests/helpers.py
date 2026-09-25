@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock
 
 
@@ -38,3 +39,21 @@ def mock_db() -> MagicMock:
     db.commit = AsyncMock()
     db.rollback = AsyncMock()
     return db
+
+
+@contextmanager
+def override_dependency(dependency):
+    """Replace a FastAPI dependency; yields the factory, like ``patch(...) as m``.
+
+    Set ``factory.return_value`` (or ``side_effect``) to what the route should
+    receive.
+    """
+
+    from c2ai.app import app
+
+    factory = MagicMock()
+    app.dependency_overrides[dependency] = lambda: factory()
+    try:
+        yield factory
+    finally:
+        app.dependency_overrides.pop(dependency, None)

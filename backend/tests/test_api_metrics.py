@@ -4,7 +4,9 @@ Tests for the metrics API endpoints.
 
 from unittest.mock import AsyncMock, patch
 
+from c2ai.clients.grafana import grafana_client
 from c2ai.schemas.grafana import Instance, Status
+from tests.helpers import override_dependency
 
 
 class TestHealthEndpoint:
@@ -42,9 +44,9 @@ class TestMetricsEndpoint:
         mock_gpu_totals = {"Tier 1": 8.9, "Tier 2": 0.0, "Tier 3": 0.0, "Tier 4": None}
 
         with (
-            patch("c2ai.api.grafana.get_grafana_client") as mock_get_client,
+            override_dependency(grafana_client) as mock_get_client,
             patch(
-                "c2ai.api.grafana.replace_application_instances_for_tiers",
+                "c2ai.crud.application_instance.replace_application_instances_for_tiers",
                 new_callable=AsyncMock,
             ) as mock_persist,
             patch(
@@ -59,7 +61,7 @@ class TestMetricsEndpoint:
 
             response = deploy_auth_client.get("/api/metrics")
 
-            mock_persist.assert_awaited_once()
+            mock_persist.assert_not_awaited()  # reads never write; inventory.refresh does
 
             assert response.status_code == 200
             data = response.json()
@@ -91,9 +93,9 @@ class TestMetricsEndpoint:
         mock_gpu_totals = {"Tier 2": 6.5}
 
         with (
-            patch("c2ai.api.grafana.get_grafana_client") as mock_get_client,
+            override_dependency(grafana_client) as mock_get_client,
             patch(
-                "c2ai.api.grafana.replace_application_instances_for_tiers",
+                "c2ai.crud.application_instance.replace_application_instances_for_tiers",
                 new_callable=AsyncMock,
             ),
             patch(
@@ -145,9 +147,9 @@ class TestMetricsEndpoint:
             return None
 
         with (
-            patch("c2ai.api.grafana.get_grafana_client") as mock_get_client,
+            override_dependency(grafana_client) as mock_get_client,
             patch(
-                "c2ai.api.grafana.replace_application_instances_for_tiers",
+                "c2ai.crud.application_instance.replace_application_instances_for_tiers",
                 new_callable=AsyncMock,
             ),
             patch(
@@ -185,9 +187,9 @@ class TestMetricsEndpoint:
     def test_get_metrics_error_handling(self, deploy_auth_client):
         """Test error handling when Grafana API fails."""
         with (
-            patch("c2ai.api.grafana.get_grafana_client") as mock_get_client,
+            override_dependency(grafana_client) as mock_get_client,
             patch(
-                "c2ai.api.grafana.replace_application_instances_for_tiers",
+                "c2ai.crud.application_instance.replace_application_instances_for_tiers",
                 new_callable=AsyncMock,
             ),
         ):
@@ -208,9 +210,9 @@ class TestMetricsEndpoint:
         mock_gpu_totals = {"Tier 1": 0.0, "Tier 2": 0.0, "Tier 3": 0.0, "Tier 4": None}
 
         with (
-            patch("c2ai.api.grafana.get_grafana_client") as mock_get_client,
+            override_dependency(grafana_client) as mock_get_client,
             patch(
-                "c2ai.api.grafana.replace_application_instances_for_tiers",
+                "c2ai.crud.application_instance.replace_application_instances_for_tiers",
                 new_callable=AsyncMock,
             ),
         ):

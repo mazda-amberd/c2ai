@@ -106,3 +106,40 @@ async def test_periodic_follow_up_is_written_with_the_finish(store):
             )
         ).all()
     assert [tuple(row) for row in rows] == [(SUCCEEDED, False), (QUEUED, True)]
+
+
+async def test_inventory_refresh_job_writes_the_cluster_snapshot(
+    store, session_factory, monkeypatch
+):
+    from c2ai.clients.grafana import GrafanaClient
+    from c2ai.jobs.worker import registered_handlers
+    from c2ai.schemas.grafana import Instance, Status
+
+    monkeypatch.setenv("GRAFANA_API_URL", "https://grafana.test/api/ds/query")
+
+    async def metrics(self, tier=None):
+        instance = Instance(
+            id=1, name="ada", nodename="amberd-acme-ada", cpu=1.0, memory=2.0, gpu=0.0,
+            status=Status.HEALTHY,
+        )
+        return {"Tier 1": [instance], "Tier 2": [], "Tier 3": [], "Tier 4": None}, {}
+
+    monkeypatch.setattr(GrafanaClient, "get_all_metrics", metrics)
+    async with session_factory() as db:
+        await db.execute(text("DELETE FROM application_instances"))
+        await db.commit()
+    handlers = registered_handlers()
+    worker = Worker(
+        store,
+        worker_id="w",
+        handlers={"inventory.refresh": handlers["inventory.refresh"]},
+        schedules=[],
+        session_factory=session_factory,
+    )
+    await store.enqueue("inventory.refresh")
+    assert await worker.run_once() == 1
+    async with session_factory() as db:
+        rows = (
+            await db.execute(text("SELECT tier_name, nodename FROM application_instances"))
+        ).all()
+    assert [tuple(row) for row in rows] == [("Tier 1", "amberd-acme-ada")]

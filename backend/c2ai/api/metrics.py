@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from c2ai.auth.jwt import AthenaTokenUser, get_current_user_token
-from c2ai.clients.grafana import GrafanaClient
+from c2ai.clients.grafana import GrafanaClient, grafana_client, require_grafana
 from c2ai.constants.time_ranges import (
     DEFAULT_RANGE,
     RANGE_PRESETS,
@@ -25,17 +25,6 @@ from c2ai.services.metrics import MetricsUnavailable, build_metrics
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["Metrics"])
-
-_grafana_client: GrafanaClient | None = None
-
-
-def get_metrics_grafana_client() -> GrafanaClient:
-    """Lazily construct the shared Grafana client."""
-    global _grafana_client
-    if _grafana_client is None:
-        _grafana_client = GrafanaClient()
-    return _grafana_client
-
 
 @router.get(
     "/api/v2/metrics",
@@ -59,6 +48,7 @@ async def get_metrics_v2(
     tier: int | None = Query(None, ge=1, le=3, description="Restrict to one tier."),
     _user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(get_db_session),
+    client: GrafanaClient | None = Depends(grafana_client),
 ) -> MetricsResponse:
     """Metrics for one level, averaged over the selected window.
 
@@ -80,7 +70,7 @@ async def get_metrics_v2(
 
     try:
         return await build_metrics(
-            client=get_metrics_grafana_client(),
+            client=require_grafana(client),
             level=level,
             window=window,
             tier=tier,
@@ -111,6 +101,7 @@ async def get_application_metrics_v2(
     to: datetime | None = Query(None),
     _user: AthenaTokenUser = Depends(get_current_user_token),
     db: AsyncSession = Depends(get_db_session),
+    client: GrafanaClient | None = Depends(grafana_client),
 ) -> MetricsResponse:
     """Return the application metrics envelope narrowed to one scope ID."""
     response = await get_metrics_v2(
@@ -121,6 +112,7 @@ async def get_application_metrics_v2(
         tier=None,
         _user=_user,
         db=db,
+        client=client,
     )
     return response.model_copy(
         update={"series": [item for item in response.series if item.scope.id == application]}
