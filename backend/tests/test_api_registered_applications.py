@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID
 
@@ -9,6 +10,14 @@ import httpx
 import pytest
 
 from c2ai.api.registered_applications import clients
+from c2ai.api.registered_applications.repositories import (
+    applications_repository,
+    credentials_repository,
+    deployments_repository,
+    github_connections_repository,
+    operations_repository,
+    secrets_repository,
+)
 from c2ai.app import app
 from c2ai.auth.jwt import AthenaTokenUser, require_admin
 from c2ai.clients.container_registry import (
@@ -304,6 +313,35 @@ def _upgradeable_github_instance() -> DeploymentInstance:
     return instance
 
 
+def _stand_in(dependency):
+    """A repository double: the real functions until a test patches one."""
+
+    module = dependency()
+    return SimpleNamespace(
+        **{name: value for name, value in vars(module).items() if callable(value)}
+    )
+
+
+@pytest.fixture(autouse=True)
+def repos():
+    """Repositories served to the routes; tests patch methods on these objects."""
+
+    fakes = {
+        applications_repository: "applications",
+        credentials_repository: "credentials",
+        secrets_repository: "secrets",
+        deployments_repository: "deployments",
+        operations_repository: "operations",
+        github_connections_repository: "github_connections",
+    }
+    stand_ins = SimpleNamespace(**{name: _stand_in(dep) for dep, name in fakes.items()})
+    for dependency, name in fakes.items():
+        app.dependency_overrides[dependency] = lambda name=name: getattr(stand_ins, name)
+    yield stand_ins
+    for dependency in fakes:
+        app.dependency_overrides.pop(dependency, None)
+
+
 @contextmanager
 def _override(dependency, value):
     """Serve ``value`` for a FastAPI dependency inside a ``with`` block."""
@@ -316,12 +354,10 @@ def _override(dependency, value):
 
 
 @pytest.fixture(autouse=True)
-def _no_managed_secrets():
+def _no_managed_secrets(repos):
     """Container deploys look up managed secrets; none exist unless a test says so."""
 
-    with patch(
-        "c2ai.registration.secrets."
-        "list_active_container_application_secrets",
+    with patch.object(repos.secrets, "list_active_container_application_secrets",
         new_callable=AsyncMock,
         return_value=[],
     ) as secrets_mock:
@@ -520,21 +556,17 @@ def test_container_secret_management_requires_authentication(test_client):
 
 
 def test_create_container_secret_writes_value_to_provider_but_never_returns_it(
-    container_secret_admin_client,
+    repos, container_secret_admin_client,
 ):
     client, provider = container_secret_admin_client
     secret = _managed_secret()
 
     with (
-        patch(
-            "c2ai.registration.secrets."
-            "prepare_container_application_secret_create",
+        patch.object(repos.secrets, "prepare_container_application_secret_create",
             new_callable=AsyncMock,
             return_value=secret,
         ) as prepare_mock,
-        patch(
-            "c2ai.registration.secrets."
-            "complete_container_application_secret_write",
+        patch.object(repos.secrets, "complete_container_application_secret_write",
             new_callable=AsyncMock,
             return_value=secret,
         ) as complete_mock,
@@ -560,14 +592,12 @@ def test_create_container_secret_writes_value_to_provider_but_never_returns_it(
 
 
 def test_list_update_and_delete_container_secret_metadata(
-    container_secret_admin_client,
+    repos, container_secret_admin_client,
 ):
     client, provider = container_secret_admin_client
     secret = _managed_secret()
     page = ContainerApplicationSecretPage(items=[secret], total=1)
-    with patch(
-        "c2ai.registration.secrets."
-        "list_container_application_secrets",
+    with patch.object(repos.secrets, "list_container_application_secrets",
         new_callable=AsyncMock,
         return_value=page,
     ):
@@ -584,15 +614,11 @@ def test_list_update_and_delete_container_secret_metadata(
     updated_secret.environment_variable = "ROTATED_API_KEY"
     updated_secret.secret_reference = "vault://athena/chat-service/rotated"
     with (
-        patch(
-            "c2ai.registration.secrets."
-            "prepare_container_application_secret_update",
+        patch.object(repos.secrets, "prepare_container_application_secret_update",
             new_callable=AsyncMock,
             return_value=updated_secret,
         ),
-        patch(
-            "c2ai.registration.secrets."
-            "complete_container_application_secret_write",
+        patch.object(repos.secrets, "complete_container_application_secret_write",
             new_callable=AsyncMock,
             return_value=updated_secret,
         ),
@@ -612,15 +638,11 @@ def test_list_update_and_delete_container_secret_metadata(
     assert provider.upsert_secret.await_args.kwargs["secret_value"] == "rotated-sensitive"
 
     with (
-        patch(
-            "c2ai.registration.secrets."
-            "prepare_container_application_secret_delete",
+        patch.object(repos.secrets, "prepare_container_application_secret_delete",
             new_callable=AsyncMock,
             return_value=updated_secret,
         ),
-        patch(
-            "c2ai.registration.secrets."
-            "complete_container_application_secret_delete",
+        patch.object(repos.secrets, "complete_container_application_secret_delete",
             new_callable=AsyncMock,
         ) as complete_delete,
     ):
@@ -638,12 +660,10 @@ def test_list_update_and_delete_container_secret_metadata(
 
 
 def test_github_application_rejects_managed_secret_endpoint(
-    container_secret_admin_client,
+    repos, container_secret_admin_client,
 ):
     client, provider = container_secret_admin_client
-    with patch(
-        "c2ai.registration.secrets."
-        "prepare_container_application_secret_create",
+    with patch.object(repos.secrets, "prepare_container_application_secret_create",
         new_callable=AsyncMock,
         side_effect=ContainerSecretsNotSupported(),
     ):
@@ -680,11 +700,9 @@ def test_container_secret_validation_never_echoes_submitted_value(
 
 
 def test_register_github_application_returns_created_template(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
-    with patch(
-        "c2ai.registration.repository."
-        "create_github_registered_application",
+    with patch.object(repos.applications, "create_github_registered_application",
         new_callable=AsyncMock,
         return_value=_persisted_version(),
     ) as create_mock:
@@ -710,7 +728,7 @@ def test_register_github_application_returns_created_template(
 
 
 def test_deploy_registered_container_rejects_an_unknown_registry_tag(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     version = _persisted_container_version()
     registry_client = MagicMock()
@@ -718,31 +736,23 @@ def test_deploy_registered_container_rejects_an_unknown_registry_tag(
         side_effect=ContainerImageTagNotFound("amberd/chat-service", "missing")
     )
     with (
-        patch(
-            "c2ai.registration.repository."
-            "get_current_registered_application_version",
+        patch.object(repos.applications, "get_current_registered_application_version",
             new_callable=AsyncMock,
             return_value=version,
         ),
-        patch(
-            "c2ai.registration.credentials."
-            "resolve_container_registry_credentials",
+        patch.object(repos.credentials, "resolve_container_registry_credentials",
             new_callable=AsyncMock,
             return_value=ContainerRegistryRuntime(
                 username="amberd",
                 password="write-only-registry-password",
             ),
         ),
-        patch(
-            "c2ai.registration.credentials."
-            "resolve_llm_api_token",
+        patch.object(repos.credentials, "resolve_llm_api_token",
             new_callable=AsyncMock,
             return_value="write-only-llm-token",
         ),
         _override(clients.container_registry_client, registry_client),
-        patch(
-            "c2ai.deployments.repository."
-            "create_registered_application_deployment",
+        patch.object(repos.deployments, "create_registered_application_deployment",
             new_callable=AsyncMock,
         ) as create_mock,
     ):
@@ -757,12 +767,10 @@ def test_deploy_registered_container_rejects_an_unknown_registry_tag(
 
 
 def test_container_deployment_endpoint_rejects_github_templates(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     version = _persisted_version()
-    with patch(
-        "c2ai.registration.repository."
-        "get_current_registered_application_version",
+    with patch.object(repos.applications, "get_current_registered_application_version",
         new_callable=AsyncMock,
         return_value=version,
     ):
@@ -776,12 +784,10 @@ def test_container_deployment_endpoint_rejects_github_templates(
 
 
 def test_generic_deployment_endpoint_rejects_container_templates(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     version = _persisted_container_version()
-    with patch(
-        "c2ai.registration.repository."
-        "get_current_registered_application_version",
+    with patch.object(repos.applications, "get_current_registered_application_version",
         new_callable=AsyncMock,
         return_value=version,
     ):
@@ -799,12 +805,10 @@ def test_generic_deployment_endpoint_rejects_container_templates(
 
 
 def test_list_and_get_registered_deployment_history(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     instance = _tracked_instance(_persisted_version())
-    with patch(
-        "c2ai.deployments.repository."
-        "list_registered_application_deployments",
+    with patch.object(repos.deployments, "list_registered_application_deployments",
         new_callable=AsyncMock,
         return_value=RegisteredApplicationDeploymentPage(
             items=[instance],
@@ -832,14 +836,11 @@ def test_list_and_get_registered_deployment_history(
     }
     run = MagicMock(progress=snapshot, ended_at=None, dispatch_state="dispatched")
     with (
-        patch(
-            "c2ai.deployments.repository."
-            "get_registered_application_deployment",
+        patch.object(repos.deployments, "get_registered_application_deployment",
             new_callable=AsyncMock,
             return_value=instance,
         ),
-        patch(
-            "c2ai.deployments.operations.latest_operation_for_instance",
+        patch.object(repos.operations, "latest_operation_for_instance",
             new_callable=AsyncMock,
             return_value=run,
         ),
@@ -856,7 +857,7 @@ def test_list_and_get_registered_deployment_history(
 
 
 def test_progress_callback_requires_shared_token_and_returns_updated_history(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     instance = _tracked_instance(_persisted_version())
     url = f"/api/registered-applications/deployments/{instance.id}/progress"
@@ -869,9 +870,7 @@ def test_progress_callback_requires_shared_token_and_returns_updated_history(
         response = registered_applications_admin_client.post(url, json=payload)
         assert response.status_code == 401
 
-        with patch(
-            "c2ai.deployments.repository."
-            "update_registered_application_deployment_progress",
+        with patch.object(repos.deployments, "update_registered_application_deployment_progress",
             new_callable=AsyncMock,
             return_value=instance,
         ) as update_mock:
@@ -887,7 +886,7 @@ def test_progress_callback_requires_shared_token_and_returns_updated_history(
 
 
 def test_upgrade_deployment_rejects_unsupported_type_and_active_state(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     unsupported_instance = _tracked_instance(
         _persisted_version(),
@@ -895,9 +894,7 @@ def test_upgrade_deployment_rejects_unsupported_type_and_active_state(
         current_step="completed",
     )
     unsupported_instance.application.application_type = "unsupported"
-    with patch(
-        "c2ai.deployments.repository."
-        "get_registered_application_deployment",
+    with patch.object(repos.deployments, "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=unsupported_instance,
     ):
@@ -910,9 +907,7 @@ def test_upgrade_deployment_rejects_unsupported_type_and_active_state(
 
     container_instance = _upgradeable_container_instance()
     container_instance.status = "updating"
-    with patch(
-        "c2ai.deployments.repository."
-        "get_registered_application_deployment",
+    with patch.object(repos.deployments, "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=container_instance,
     ):
@@ -925,7 +920,7 @@ def test_upgrade_deployment_rejects_unsupported_type_and_active_state(
 
 
 def test_terminate_deployment_rejects_unsupported_type_and_active_state(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     unsupported_instance = _tracked_instance(
         _persisted_version(),
@@ -933,9 +928,7 @@ def test_terminate_deployment_rejects_unsupported_type_and_active_state(
         current_step="completed",
     )
     unsupported_instance.application.application_type = "unsupported"
-    with patch(
-        "c2ai.deployments.repository."
-        "get_registered_application_deployment",
+    with patch.object(repos.deployments, "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=unsupported_instance,
     ):
@@ -948,9 +941,7 @@ def test_terminate_deployment_rejects_unsupported_type_and_active_state(
 
     container_instance = _upgradeable_container_instance()
     container_instance.status = "terminating"
-    with patch(
-        "c2ai.deployments.repository."
-        "get_registered_application_deployment",
+    with patch.object(repos.deployments, "get_registered_application_deployment",
         new_callable=AsyncMock,
         return_value=container_instance,
     ):
@@ -963,11 +954,9 @@ def test_terminate_deployment_rejects_unsupported_type_and_active_state(
 
 
 def test_register_github_application_returns_conflict_for_duplicate_name(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
-    with patch(
-        "c2ai.registration.repository."
-        "create_github_registered_application",
+    with patch.object(repos.applications, "create_github_registered_application",
         new_callable=AsyncMock,
         side_effect=DuplicateRegisteredApplication("example-chatbot"),
     ):
@@ -981,14 +970,12 @@ def test_register_github_application_returns_conflict_for_duplicate_name(
 
 
 def test_register_github_application_validates_before_persistence(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     invalid_body = _request_body()
     invalid_body["github"]["workflow_file_path"] = "deploy.yml"
 
-    with patch(
-        "c2ai.registration.repository."
-        "create_github_registered_application",
+    with patch.object(repos.applications, "create_github_registered_application",
         new_callable=AsyncMock,
     ) as create_mock:
         response = registered_applications_admin_client.post(
@@ -1001,11 +988,9 @@ def test_register_github_application_validates_before_persistence(
 
 
 def test_register_container_application_returns_created_template(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
-    with patch(
-        "c2ai.registration.repository."
-        "create_container_registered_application",
+    with patch.object(repos.applications, "create_container_registered_application",
         new_callable=AsyncMock,
         return_value=_persisted_container_version(),
     ) as create_mock:
@@ -1036,11 +1021,9 @@ def test_register_container_application_returns_created_template(
 
 
 def test_register_container_application_returns_conflict_for_duplicate_name(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
-    with patch(
-        "c2ai.registration.repository."
-        "create_container_registered_application",
+    with patch.object(repos.applications, "create_container_registered_application",
         new_callable=AsyncMock,
         side_effect=DuplicateRegisteredApplication("chat-service"),
     ):
@@ -1054,14 +1037,12 @@ def test_register_container_application_returns_conflict_for_duplicate_name(
 
 
 def test_register_container_application_validates_before_persistence(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     invalid_body = _container_request_body()
     invalid_body["container"]["port"] = 70000
 
-    with patch(
-        "c2ai.registration.repository."
-        "create_container_registered_application",
+    with patch.object(repos.applications, "create_container_registered_application",
         new_callable=AsyncMock,
     ) as create_mock:
         response = registered_applications_admin_client.post(
@@ -1076,14 +1057,14 @@ def test_register_container_application_validates_before_persistence(
 @pytest.mark.parametrize("code_repository", [None, "amberd-ai/code"])
 @pytest.mark.parametrize(("branches", "tags"), [([], []), (["main", "dev"], ["v2", "v1"]), (["v2"], ["v2", "v1"])])
 def test_github_tags_use_code_repository_or_workflow_fallback(
-    registered_applications_admin_client, code_repository, branches, tags,
+    repos, registered_applications_admin_client, code_repository, branches, tags,
 ):
     version = _persisted_version()
     version.github_configuration.code_repository = code_repository
     runtime = MagicMock(token="private-token", api_base_url="https://github.example/api/v3")
     with (
-        patch("c2ai.registration.repository.get_current_registered_application_version", new_callable=AsyncMock, return_value=version),
-        patch("c2ai.crud.github_connection.resolve_github_connection", new_callable=AsyncMock, return_value=runtime),
+        patch.object(repos.applications, "get_current_registered_application_version", new_callable=AsyncMock, return_value=version),
+        patch.object(repos.github_connections, "resolve_github_connection", new_callable=AsyncMock, return_value=runtime),
         patch("c2ai.api.registered_applications.catalog.GitHubActionsClient") as client_class,
     ):
         client_class.return_value.list_repository_branches = AsyncMock(return_value=branches)
@@ -1100,12 +1081,12 @@ def test_github_tags_use_code_repository_or_workflow_fallback(
     assert "private-token" not in response.text
 
 
-def test_github_tags_access_error_is_not_reported_as_empty_tags(registered_applications_admin_client):
+def test_github_tags_access_error_is_not_reported_as_empty_tags(repos, registered_applications_admin_client):
     version = _persisted_version()
     error = httpx.HTTPStatusError("private upstream detail", request=httpx.Request("GET", "https://api.github.com"), response=httpx.Response(404))
     with (
-        patch("c2ai.registration.repository.get_current_registered_application_version", new_callable=AsyncMock, return_value=version),
-        patch("c2ai.crud.github_connection.resolve_github_connection", new_callable=AsyncMock, return_value=None),
+        patch.object(repos.applications, "get_current_registered_application_version", new_callable=AsyncMock, return_value=version),
+        patch.object(repos.github_connections, "resolve_github_connection", new_callable=AsyncMock, return_value=None),
         patch("c2ai.api.registered_applications.catalog.GitHubActionsClient") as client_class,
     ):
         client_class.return_value.list_repository_branches = AsyncMock(side_effect=error)
@@ -1121,7 +1102,7 @@ def test_github_tags_requires_authentication(test_client):
 
 
 def test_list_container_image_tags_returns_deployment_ready_references(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     version = _persisted_container_version()
     registry_client = MagicMock()
@@ -1143,16 +1124,12 @@ def test_list_container_image_tags_returns_deployment_ready_references(
         )
     )
     with (
-        patch(
-            "c2ai.registration.repository."
-            "get_current_registered_application_version",
+        patch.object(repos.applications, "get_current_registered_application_version",
             new_callable=AsyncMock,
             return_value=version,
         ),
         _override(clients.container_registry_client, registry_client),
-        patch(
-            "c2ai.registration.credentials."
-            "resolve_container_registry_credentials",
+        patch.object(repos.credentials, "resolve_container_registry_credentials",
             new_callable=AsyncMock,
             return_value=ContainerRegistryRuntime(
                 username="amberd",
@@ -1192,12 +1169,10 @@ def test_list_container_image_tags_returns_deployment_ready_references(
 
 
 def test_list_container_image_tags_rejects_github_application(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     version = _persisted_version()
-    with patch(
-        "c2ai.registration.repository."
-        "get_current_registered_application_version",
+    with patch.object(repos.applications, "get_current_registered_application_version",
         new_callable=AsyncMock,
         return_value=version,
     ):
@@ -1210,12 +1185,10 @@ def test_list_container_image_tags_rejects_github_application(
 
 
 def test_list_container_image_tags_returns_not_found(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     application_id = "ffffffff-0000-0000-0000-000000000012"
-    with patch(
-        "c2ai.registration.repository."
-        "get_current_registered_application_version",
+    with patch.object(repos.applications, "get_current_registered_application_version",
         new_callable=AsyncMock,
         return_value=None,
     ):
@@ -1228,7 +1201,7 @@ def test_list_container_image_tags_returns_not_found(
 
 
 def test_list_registered_applications_returns_catalog_page(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     version = _persisted_container_version()
     page = RegisteredApplicationCatalogPage(
@@ -1242,9 +1215,7 @@ def test_list_registered_applications_returns_catalog_page(
         ],
         total=1,
     )
-    with patch(
-        "c2ai.registration.repository."
-        "list_registered_applications",
+    with patch.object(repos.applications, "list_registered_applications",
         new_callable=AsyncMock,
         return_value=page,
     ) as list_mock:
@@ -1279,11 +1250,9 @@ def test_list_registered_applications_returns_catalog_page(
 
 
 def test_list_registered_applications_validates_tier_before_query(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
-    with patch(
-        "c2ai.registration.repository."
-        "list_registered_applications",
+    with patch.object(repos.applications, "list_registered_applications",
         new_callable=AsyncMock,
     ) as list_mock:
         response = registered_applications_admin_client.get(
@@ -1296,12 +1265,10 @@ def test_list_registered_applications_validates_tier_before_query(
 
 
 def test_get_registered_application_returns_current_version(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     version = _persisted_version()
-    with patch(
-        "c2ai.registration.repository."
-        "get_current_registered_application_version",
+    with patch.object(repos.applications, "get_current_registered_application_version",
         new_callable=AsyncMock,
         return_value=version,
     ):
@@ -1315,12 +1282,10 @@ def test_get_registered_application_returns_current_version(
 
 
 def test_get_registered_application_returns_not_found(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     application_id = "ffffffff-0000-0000-0000-000000000010"
-    with patch(
-        "c2ai.registration.repository."
-        "get_current_registered_application_version",
+    with patch.object(repos.applications, "get_current_registered_application_version",
         new_callable=AsyncMock,
         return_value=None,
     ):
@@ -1333,12 +1298,10 @@ def test_get_registered_application_returns_not_found(
 
 
 def test_delete_registered_application_returns_no_content(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     application_id = "aaaaaaaa-0000-0000-0000-000000000020"
-    with patch(
-        "c2ai.registration.repository."
-        "delete_registered_application",
+    with patch.object(repos.applications, "delete_registered_application",
         new_callable=AsyncMock,
     ) as delete_mock:
         response = registered_applications_admin_client.delete(
@@ -1351,12 +1314,10 @@ def test_delete_registered_application_returns_no_content(
 
 
 def test_delete_registered_application_returns_conflict_for_active_instances(
-    registered_applications_admin_client,
+    repos, registered_applications_admin_client,
 ):
     application_id = "bbbbbbbb-0000-0000-0000-000000000020"
-    with patch(
-        "c2ai.registration.repository."
-        "delete_registered_application",
+    with patch.object(repos.applications, "delete_registered_application",
         new_callable=AsyncMock,
         side_effect=RegisteredApplicationHasRunningInstances("chat-service", 2),
     ):
@@ -1368,10 +1329,8 @@ def test_delete_registered_application_returns_conflict_for_active_instances(
     assert response.json()["code"] == "RegisteredApplicationHasRunningInstances"
 
 
-def test_catalog_accepts_the_frontend_sort_key(registered_applications_admin_client):
-    with patch(
-        "c2ai.registration.repository."
-        "list_registered_applications",
+def test_catalog_accepts_the_frontend_sort_key(repos, registered_applications_admin_client):
+    with patch.object(repos.applications, "list_registered_applications",
         new_callable=AsyncMock,
         return_value=MagicMock(items=[], total=0),
     ) as list_mock:
@@ -1414,15 +1373,14 @@ class TestPerOperationCallbackTokens:
         assert response.status_code == 401
         assert response.json()["code"] == "InvalidDeploymentCallbackToken"
 
-    def test_token_for_the_open_operation_is_accepted(self, test_client, monkeypatch):
+    def test_token_for_the_open_operation_is_accepted(self, repos, test_client, monkeypatch):
         from c2ai.deployments.callbacks import callback_token
 
         monkeypatch.setenv("DEPLOYMENT_CALLBACK_TOKEN", "shared-secret")
         token = callback_token(self.DEPLOYMENT, "current-operation")
         with (
             self._open_operation("current-operation"),
-            patch(
-                "c2ai.deployments.repository.update_registered_application_deployment_progress",
+            patch.object(repos.deployments, "update_registered_application_deployment_progress",
                 new_callable=AsyncMock,
                 side_effect=RuntimeError("authenticated"),
             ),

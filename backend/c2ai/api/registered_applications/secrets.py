@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from types import ModuleType
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Response, status
@@ -10,13 +11,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from c2ai.api.registered_applications import clients
 from c2ai.api.registered_applications.clients import PREFIX, TAGS
+from c2ai.api.registered_applications.repositories import (
+    secrets_repository,
+)
 from c2ai.auth.jwt import AthenaTokenUser, require_admin
 from c2ai.clients.container_secret_provider import ContainerSecretProviderClient
 from c2ai.core.exceptions import (
     ServiceUnavailableError,
 )
 from c2ai.db.session import get_db_session as db_session
-from c2ai.registration import secrets as secret_store
 from c2ai.schemas.registered_application import (
     ContainerApplicationSecretCreate,
     ContainerApplicationSecretList,
@@ -59,6 +62,7 @@ async def list_container_application_secrets(
     limit: int = Query(default=50, ge=1, le=200),
     _current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    secret_store: ModuleType = Depends(secrets_repository),
 ) -> ContainerApplicationSecretList:
     """List safe secret metadata; values remain exclusively in the provider."""
 
@@ -88,6 +92,7 @@ async def create_container_application_secret(
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
     provider: ContainerSecretProviderClient = Depends(clients.container_secret_provider),
+    secret_store: ModuleType = Depends(secrets_repository),
 ) -> ContainerApplicationSecretOut:
     """Write secret material to the provider and persist only its reference."""
 
@@ -133,6 +138,7 @@ async def update_container_application_secret(
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
     provider: ContainerSecretProviderClient = Depends(clients.container_secret_provider),
+    secret_store: ModuleType = Depends(secrets_repository),
 ) -> ContainerApplicationSecretOut:
     """Update metadata and optionally replace the provider-held value."""
 
@@ -181,6 +187,7 @@ async def delete_container_application_secret(
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
     provider: ContainerSecretProviderClient = Depends(clients.container_secret_provider),
+    secret_store: ModuleType = Depends(secrets_repository),
 ) -> Response:
     """Delete provider material before soft-deleting Athena metadata."""
 

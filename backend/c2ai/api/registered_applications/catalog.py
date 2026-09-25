@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from types import ModuleType
 from typing import Literal
 from uuid import UUID
 
@@ -12,6 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from c2ai.api.registered_applications import clients
 from c2ai.api.registered_applications.clients import PREFIX, TAGS
+from c2ai.api.registered_applications.repositories import (
+    applications_repository,
+    credentials_repository,
+    github_connections_repository,
+)
 from c2ai.auth.jwt import AthenaTokenUser, require_admin
 from c2ai.clients.container_registry import (
     ContainerRegistryClient,
@@ -28,12 +34,9 @@ from c2ai.core.exceptions import (
     ServiceUnavailableError,
     UnprocessableEntityError,
 )
-from c2ai.crud import (
-    github_connection as crud_github_connection,
-)
 from c2ai.db.session import get_db_session as db_session
 from c2ai.models.registered_application import RegisteredApplicationVersion
-from c2ai.registration import credentials, repository as applications
+from c2ai.registration.repository import RegisteredApplicationCatalogRecord
 from c2ai.schemas.registered_application import (
     ContainerConfigurationOut,
     ContainerImageTagList,
@@ -171,7 +174,7 @@ def _container_registration_detail(
 
 
 def _catalog_item(
-    record: applications.RegisteredApplicationCatalogRecord,
+    record: RegisteredApplicationCatalogRecord,
 ) -> RegisteredApplicationCatalogItem:
     """Map one catalog database aggregate to its public contract."""
 
@@ -213,6 +216,7 @@ async def list_registered_applications(
     limit: int = Query(default=50, ge=1, le=200),
     _current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    applications: ModuleType = Depends(applications_repository),
 ) -> RegisteredApplicationCatalogResponse:
     """Search, filter, sort, and paginate the global application catalog."""
 
@@ -245,6 +249,7 @@ async def register_github_application(
     payload: GitHubRegisteredApplicationCreate,
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    applications: ModuleType = Depends(applications_repository),
 ) -> GitHubRegisteredApplicationDetail:
     """Create a global GitHub Workflow template at version 1."""
 
@@ -272,6 +277,7 @@ async def register_container_application(
     payload: ContainerRegisteredApplicationCreate,
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    applications: ModuleType = Depends(applications_repository),
 ) -> ContainerRegisteredApplicationDetail:
     """Create a global Containerized application template at version 1."""
 
@@ -361,6 +367,8 @@ async def list_container_application_image_tags(
     _current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
     registry_client: ContainerRegistryClient = Depends(clients.container_registry_client),
+    applications: ModuleType = Depends(applications_repository),
+    credentials: ModuleType = Depends(credentials_repository),
 ) -> ContainerImageTagList:
     """Resolve the current registry configuration and return safe tag metadata."""
 
@@ -430,6 +438,8 @@ async def list_github_application_tags(
     limit: int = Query(default=200, ge=1, le=200),
     _current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    applications: ModuleType = Depends(applications_repository),
+    crud_github_connection: ModuleType = Depends(github_connections_repository),
 ) -> GitHubRepositoryTagList:
     version = await applications.get_current_registered_application_version(
         db, application_id
@@ -483,6 +493,7 @@ async def get_registered_application(
     application_id: UUID,
     _current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    applications: ModuleType = Depends(applications_repository),
 ) -> RegisteredApplicationDetail:
     """Return the current deployable version of a registered application."""
 
@@ -512,6 +523,7 @@ async def delete_registered_application(
     application_id: UUID,
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    applications: ModuleType = Depends(applications_repository),
 ) -> Response:
     """Delete a template only when it has no active deployment instances."""
 

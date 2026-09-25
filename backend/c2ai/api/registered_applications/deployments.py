@@ -4,6 +4,7 @@ terminate, progress callbacks, and history."""
 from __future__ import annotations
 
 import logging
+from types import ModuleType
 from typing import Annotated
 from uuid import UUID
 
@@ -12,6 +13,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from c2ai.api.registered_applications import clients
 from c2ai.api.registered_applications.clients import PREFIX, TAGS
+from c2ai.api.registered_applications.repositories import (
+    applications_repository,
+    credentials_repository,
+    deployments_repository,
+    operations_repository,
+    secrets_repository,
+)
 from c2ai.auth.jwt import AthenaTokenUser, require_admin
 from c2ai.clients.container_registry import ContainerRegistryClient
 from c2ai.constants.registered_application import (
@@ -32,7 +40,7 @@ from c2ai.core.exceptions import (
     UnprocessableEntityError,
 )
 from c2ai.db.session import get_db_session as db_session
-from c2ai.deployments import operations, repository as instances, service
+from c2ai.deployments import service
 from c2ai.deployments.callbacks import verify_callback
 from c2ai.deployments.configuration import (
     build_container_deployment_configuration,
@@ -41,7 +49,6 @@ from c2ai.deployments.configuration import (
     resolve_github_deployment_instance_name,
 )
 from c2ai.jobs import JobStore, get_job_store
-from c2ai.registration import credentials, repository as applications, secrets as secret_store
 from c2ai.schemas.registered_application import (
     ContainerRegisteredApplicationDeploymentCreate,
     RegisteredApplicationDeploymentCreate,
@@ -158,6 +165,7 @@ async def list_registered_application_deployments(
     limit: int = Query(default=50, ge=1, le=200),
     _current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    instances: ModuleType = Depends(deployments_repository),
 ) -> RegisteredApplicationDeploymentList:
     """Return durable deployment history, optionally scoped to one Tier."""
 
@@ -190,6 +198,8 @@ async def get_registered_application_deployment(
     deployment_id: UUID,
     _current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
+    instances: ModuleType = Depends(deployments_repository),
+    operations: ModuleType = Depends(operations_repository),
 ) -> RegisteredApplicationDeploymentDetail:
     """Return current progress, immutable configuration, and lifecycle events."""
 
@@ -226,6 +236,7 @@ async def report_registered_application_deployment_progress(
     deployment_id: UUID,
     payload: RegisteredApplicationDeploymentProgressUpdate,
     db: AsyncSession = Depends(db_session),
+    instances: ModuleType = Depends(deployments_repository),
 ) -> RegisteredApplicationDeploymentDetail:
     """Accept an authenticated, idempotent lifecycle update from the pipeline."""
 
@@ -285,6 +296,8 @@ async def upgrade_registered_application_deployment(
     db: AsyncSession = Depends(db_session),
     registry_client: ContainerRegistryClient = Depends(clients.container_registry_client),
     store: JobStore = Depends(get_job_store),
+    credentials: ModuleType = Depends(credentials_repository),
+    instances: ModuleType = Depends(deployments_repository),
 ) -> RegisteredApplicationDeploymentDetail:
     """Validate one version and dispatch the type-specific upgrade workflow."""
 
@@ -371,6 +384,7 @@ async def terminate_registered_application_deployment(
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
     store: JobStore = Depends(get_job_store),
+    instances: ModuleType = Depends(deployments_repository),
 ) -> RegisteredApplicationDeploymentDetail:
     """Confirm and dispatch the type-specific termination workflow."""
 
@@ -420,6 +434,9 @@ async def deploy_registered_container_application(
     db: AsyncSession = Depends(db_session),
     registry_client: ContainerRegistryClient = Depends(clients.container_registry_client),
     store: JobStore = Depends(get_job_store),
+    applications: ModuleType = Depends(applications_repository),
+    credentials: ModuleType = Depends(credentials_repository),
+    secret_store: ModuleType = Depends(secrets_repository),
 ) -> RegisteredApplicationDeploymentOut:
     """Validate a tag and deploy the stored container template into the path Tier."""
 
@@ -499,6 +516,7 @@ async def deploy_registered_application(
     current_user: AthenaTokenUser = Depends(require_admin),
     db: AsyncSession = Depends(db_session),
     store: JobStore = Depends(get_job_store),
+    applications: ModuleType = Depends(applications_repository),
 ) -> RegisteredApplicationDeploymentOut:
     """Validate, persist, and dispatch a deployment from the current template version."""
 

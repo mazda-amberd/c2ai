@@ -63,3 +63,25 @@ def test_every_setting_is_read_through_config():
         if path.name != "config.py" and "getenv" in _calls(path)
     ]
     assert offenders == []
+
+
+@pytest.mark.parametrize("module", ["catalog.py", "secrets.py", "deployments.py"])
+def test_registered_application_routes_receive_repositories_by_injection(module):
+    """Routes get repositories through Depends (repositories.py), never by import."""
+
+    tree = ast.parse((ROOT / "api/registered_applications" / module).read_text())
+    repository_modules = {
+        ("c2ai.registration", "repository"),
+        ("c2ai.registration", "secrets"),
+        ("c2ai.registration", "credentials"),
+        ("c2ai.deployments", "repository"),
+        ("c2ai.deployments", "operations"),
+        ("c2ai.crud", "github_connection"),
+    }
+    imported_modules = {
+        (node.module, alias.name)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        for alias in node.names
+    }
+    assert not repository_modules & imported_modules
