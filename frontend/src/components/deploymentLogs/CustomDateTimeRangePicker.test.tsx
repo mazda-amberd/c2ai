@@ -32,9 +32,12 @@ describe("CustomDateTimeRangePicker", () => {
 
   it("disables every day after today", () => {
     renderPicker(new Date(2026, 8, 15, 17, 30), NOW);
-    const day = (label: RegExp) => screen.getByRole("button", { name: label });
-    expect(day(/September 15, 2026/).getAttribute("aria-disabled")).toBeNull();
-    expect(day(/September 16, 2026/).getAttribute("aria-disabled")).toBe("true");
+    const day = (date: string) =>
+      screen
+        .getAllByRole("button")
+        .find((el) => new RegExp(`(^|, )\\w+, ${date}( selected)?(,|$)`).test(el.getAttribute("aria-label") ?? ""))!;
+    expect(day("September 15, 2026").getAttribute("aria-disabled")).toBeNull();
+    expect(day("September 16, 2026").getAttribute("aria-disabled")).toBe("true");
   });
 
   it("caps a time later today at now", () => {

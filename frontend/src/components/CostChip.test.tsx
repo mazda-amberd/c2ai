@@ -13,8 +13,15 @@ function openCalendar() {
   fireEvent.click(screen.getByRole("button", { name: "Select cost date range" }));
 }
 
-function day(label: RegExp): HTMLElement {
-  return screen.getByRole("button", { name: label });
+/** The calendar cell for one day ("September 15, 2026"), skipping the hidden
+ *  copies of neighbouring months' days (jsdom applies no CSS). */
+function day(date: string): HTMLElement {
+  const own = new RegExp(`(^|, )\\w+, ${date}( selected)?(,|$)`);
+  const [cell] = screen
+    .getAllByRole("button")
+    .filter((el) => own.test(el.getAttribute("aria-label") ?? "") && !el.dataset.outsideMonth);
+  if (!cell) throw new Error(`No calendar cell for ${date}`);
+  return cell;
 }
 
 /** The calendar's own "next month" arrow (react-aria adds a hidden one too). */
@@ -33,15 +40,32 @@ describe("CostChip date range", () => {
     vi.useRealTimers();
   });
 
-  it("disables every day after today", () => {
+  it("shows this month and the last, and disables every day after today", () => {
     openCalendar();
-    // Opens on the month the range starts in (August); September holds today.
-    fireEvent.click(nextMonth());
-    expect(day(/September 15, 2026/).getAttribute("aria-disabled")).toBeNull();
-    expect(day(/September 16, 2026/).getAttribute("aria-disabled")).toBe("true");
-    expect(day(/September 30, 2026/).getAttribute("aria-disabled")).toBe("true");
+    expect(day("August 17, 2026").getAttribute("aria-disabled")).toBeNull();
+    expect(day("September 15, 2026").getAttribute("aria-disabled")).toBeNull();
+    expect(day("September 16, 2026").getAttribute("aria-disabled")).toBe("true");
+    expect(day("September 30, 2026").getAttribute("aria-disabled")).toBe("true");
     // Nothing to pick in October, so the calendar doesn't page there.
     expect(nextMonth().hasAttribute("disabled")).toBe(true);
+  });
+
+  it("selects a range across months in two clicks", () => {
+    openCalendar();
+    fireEvent.click(day("August 20, 2026"));
+    fireEvent.click(day("September 3, 2026"));
+    expect((screen.getByLabelText("Start date") as HTMLInputElement).value).toBe("2026-08-20");
+    expect((screen.getByLabelText("End date") as HTMLInputElement).value).toBe("2026-09-03");
+  });
+
+  it("reaches earlier months one at a time", () => {
+    openCalendar();
+    fireEvent.click(screen.getAllByRole("button", { name: "Previous" })[0]);
+    fireEvent.click(day("July 20, 2026"));
+    fireEvent.click(nextMonth());
+    fireEvent.click(day("September 3, 2026"));
+    expect((screen.getByLabelText("Start date") as HTMLInputElement).value).toBe("2026-07-20");
+    expect((screen.getByLabelText("End date") as HTMLInputElement).value).toBe("2026-09-03");
   });
 
   it("caps the typed dates at today", () => {
